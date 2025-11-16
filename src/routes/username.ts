@@ -10,7 +10,6 @@ import {
   getUsernameByPubkey,
   claimUsername
 } from '../db/queries'
-import { bech32 } from '@scure/base'
 
 type Bindings = {
   DB: D1Database
@@ -18,27 +17,22 @@ type Bindings = {
 
 const username = new Hono<{ Bindings: Bindings }>()
 
-function hexToNpub(hex: string): string {
-  const data = new Uint8Array(32)
-  for (let i = 0; i < 32; i++) {
-    data[i] = parseInt(hex.substr(i * 2, 2), 16)
-  }
-  const words = bech32.toWords(data)
-  return bech32.encode('npub', words)
-}
-
 username.post('/claim', async (c) => {
   try {
-    // Verify NIP-98 authentication
+    // Read raw body text first (needed for NIP-98 payload verification)
+    const bodyText = await c.req.text()
+
+    // Verify NIP-98 authentication with payload
     const url = new URL(c.req.url)
     const pubkey = await verifyNip98Event(
       c.req.raw.headers,
       'POST',
-      url.toString()
+      url.toString(),
+      bodyText
     )
 
     // Parse request body
-    const body = await c.req.json<{ name: string; relays?: string[] }>()
+    const body = JSON.parse(bodyText) as { name: string; relays?: string[] }
     const { name, relays = null } = body
 
     // Validate username format
