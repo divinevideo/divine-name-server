@@ -3,6 +3,7 @@
 
 import { Hono } from 'hono'
 import username from './routes/username'
+import nip05 from './routes/nip05'
 
 type Bindings = {
   DB: D1Database
@@ -19,5 +20,8 @@ app.get('/', (c) => {
 
 // Username API
 app.route('/api/username', username)
+
+// NIP-05
+app.route('', nip05)
 
 export default app
