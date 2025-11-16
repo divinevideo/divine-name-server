@@ -3,7 +3,7 @@
 
 import { Hono } from 'hono'
 import { reserveUsername, revokeUsername, assignUsername, getUsernameByName } from '../db/queries'
-import { validateUsername } from '../utils/validation'
+import { validateUsername, UsernameValidationError } from '../utils/validation'
 
 type Bindings = {
   DB: D1Database
@@ -23,7 +23,14 @@ admin.post('/reserve', async (c) => {
       return c.json({ ok: false, error: 'Name is required' }, 400)
     }
 
-    validateUsername(name)
+    try {
+      validateUsername(name)
+    } catch (error) {
+      if (error instanceof UsernameValidationError) {
+        return c.json({ ok: false, error: error.message }, 400)
+      }
+      throw error
+    }
 
     await reserveUsername(c.env.DB, name, reason)
 
@@ -41,6 +48,15 @@ admin.post('/revoke', async (c) => {
 
     if (!name) {
       return c.json({ ok: false, error: 'Name is required' }, 400)
+    }
+
+    try {
+      validateUsername(name)
+    } catch (error) {
+      if (error instanceof UsernameValidationError) {
+        return c.json({ ok: false, error: error.message }, 400)
+      }
+      throw error
     }
 
     const existing = await getUsernameByName(c.env.DB, name)
@@ -71,7 +87,14 @@ admin.post('/assign', async (c) => {
       return c.json({ ok: false, error: 'Name and pubkey are required' }, 400)
     }
 
-    validateUsername(name)
+    try {
+      validateUsername(name)
+    } catch (error) {
+      if (error instanceof UsernameValidationError) {
+        return c.json({ ok: false, error: error.message }, 400)
+      }
+      throw error
+    }
 
     if (pubkey.length !== 64 || !/^[0-9a-f]+$/.test(pubkey)) {
       return c.json({ ok: false, error: 'Invalid pubkey format' }, 400)
