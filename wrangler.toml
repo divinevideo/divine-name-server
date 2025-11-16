@@ -1,0 +1,8 @@
+name = "divine-name-server"
+main = "src/index.ts"
+compatibility_date = "2024-11-15"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "divine-name-server-db"
+database_id = "REPLACE_WITH_ACTUAL_ID"
