@@ -4,6 +4,7 @@
 import { Hono } from 'hono'
 import { getUsernameByName } from '../db/queries'
 import { bech32 } from '@scure/base'
+import { getSubdomain } from '../utils/subdomain'
 
 type Bindings = {
   DB: D1Database
@@ -11,18 +12,20 @@ type Bindings = {
 
 const subdomain = new Hono<{ Bindings: Bindings }>()
 
-function getSubdomain(hostname: string): string | null {
-  const parts = hostname.split('.')
-  if (parts.length >= 3 && parts[parts.length - 2] === 'divine' && parts[parts.length - 1] === 'video') {
-    return parts[0]
-  }
-  return null
-}
-
 function hexToNpub(hex: string): string {
+  // Validate hex string length
+  if (hex.length !== 64) {
+    throw new Error(`Invalid hex string length: expected 64 characters, got ${hex.length}`)
+  }
+
+  // Validate hex string contains only valid hex characters
+  if (!/^[0-9a-fA-F]+$/.test(hex)) {
+    throw new Error('Invalid hex string: contains non-hexadecimal characters')
+  }
+
   const data = new Uint8Array(32)
   for (let i = 0; i < 32; i++) {
-    data[i] = parseInt(hex.substr(i * 2, 2), 16)
+    data[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16)
   }
   const words = bech32.toWords(data)
   return bech32.encode('npub', words)

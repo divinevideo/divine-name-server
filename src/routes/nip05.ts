@@ -3,21 +3,13 @@
 
 import { Hono } from 'hono'
 import { getUsernameByName, getAllActiveUsernames } from '../db/queries'
+import { getSubdomain } from '../utils/subdomain'
 
 type Bindings = {
   DB: D1Database
 }
 
 const nip05 = new Hono<{ Bindings: Bindings }>()
-
-// Extract subdomain from hostname
-function getSubdomain(hostname: string): string | null {
-  const parts = hostname.split('.')
-  if (parts.length >= 3 && parts[parts.length - 2] === 'divine' && parts[parts.length - 1] === 'video') {
-    return parts[0]
-  }
-  return null
-}
 
 nip05.get('/.well-known/nostr.json', async (c) => {
   try {
