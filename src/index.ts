@@ -4,12 +4,16 @@
 import { Hono } from 'hono'
 import username from './routes/username'
 import nip05 from './routes/nip05'
+import subdomain from './routes/subdomain'
 
 type Bindings = {
   DB: D1Database
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
+
+// Subdomain profile routing (must be first to catch subdomains)
+app.route('', subdomain)
 
 app.get('/', (c) => {
   return c.json({
