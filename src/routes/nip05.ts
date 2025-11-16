@@ -51,7 +51,8 @@ nip05.get('/.well-known/nostr.json', async (c) => {
       }
 
       return c.json(response, 200, {
-        'Cache-Control': 'public, max-age=60'
+        'Cache-Control': 'public, max-age=60',
+        'Access-Control-Allow-Origin': '*'
       })
 
     } else {
@@ -82,7 +83,8 @@ nip05.get('/.well-known/nostr.json', async (c) => {
       }
 
       return c.json(response, 200, {
-        'Cache-Control': 'public, max-age=60'
+        'Cache-Control': 'public, max-age=60',
+        'Access-Control-Allow-Origin': '*'
       })
     }
 
