@@ -5,6 +5,7 @@ import { Hono } from 'hono'
 import username from './routes/username'
 import nip05 from './routes/nip05'
 import subdomain from './routes/subdomain'
+import admin from './routes/admin'
 
 type Bindings = {
   DB: D1Database
@@ -24,6 +25,9 @@ app.get('/', (c) => {
 
 // Username API
 app.route('/api/username', username)
+
+// Admin API (protected by Cloudflare Access)
+app.route('/api/admin/username', admin)
 
 // NIP-05
 app.route('', nip05)
