@@ -2,6 +2,7 @@
 // ABOUTME: Handles username claiming, subdomain routing, and NIP-05 endpoints
 
 import { Hono } from 'hono'
+import username from './routes/username'
 
 type Bindings = {
   DB: D1Database
@@ -15,5 +16,8 @@ app.get('/', (c) => {
     version: '0.1.0'
   })
 })
+
+// Username API
+app.route('/api/username', username)
 
 export default app

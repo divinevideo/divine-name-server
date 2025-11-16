@@ -2,7 +2,12 @@
 // ABOUTME: Validates Nostr event signatures for API authentication
 
 import { schnorr } from '@noble/secp256k1'
-import { bytesToHex } from '@noble/secp256k1'
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('')
+}
 
 export class Nip98Error extends Error {
   constructor(message: string) {
