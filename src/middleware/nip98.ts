@@ -2,7 +2,7 @@
 // ABOUTME: Validates Nostr event signatures for API authentication
 
 import { schnorr } from '@noble/secp256k1'
-import { bytesToHex, hexToBytes } from '@noble/secp256k1'
+import { bytesToHex } from '@noble/secp256k1'
 
 export class Nip98Error extends Error {
   constructor(message: string) {
@@ -41,7 +41,8 @@ async function calculateEventId(event: NostrEvent): Promise<string> {
 export async function verifyNip98Event(
   headers: Headers,
   method: string,
-  url: string
+  url: string,
+  body?: string
 ): Promise<string> {
   const authHeader = headers.get('Authorization')
 
@@ -67,6 +68,11 @@ export async function verifyNip98Event(
     throw new Nip98Error('Invalid event kind, expected 27235 for NIP-98')
   }
 
+  // Verify content is empty (NIP-98 spec says content SHOULD be empty)
+  if (event.content !== '') {
+    throw new Nip98Error('Event content must be empty for NIP-98')
+  }
+
   // Verify event ID
   const calculatedId = await calculateEventId(event)
   if (calculatedId !== event.id) {
@@ -84,7 +90,11 @@ export async function verifyNip98Event(
       throw new Nip98Error('Invalid signature')
     }
   } catch (error) {
-    throw new Nip98Error(`Signature verification failed: ${error}`)
+    // Don't leak crypto library internals
+    if (error instanceof Nip98Error) {
+      throw error
+    }
+    throw new Nip98Error('Signature verification failed')
   }
 
   // Verify timestamp (within 60 seconds)
@@ -103,6 +113,22 @@ export async function verifyNip98Event(
   const urlTag = event.tags.find(tag => tag[0] === 'u')
   if (!urlTag || urlTag[1] !== url) {
     throw new Nip98Error('URL tag mismatch')
+  }
+
+  // Verify payload hash for POST/PUT/PATCH methods if payload tag is present
+  const payloadTag = event.tags.find(tag => tag[0] === 'payload')
+  if (payloadTag) {
+    if (!body) {
+      throw new Nip98Error('Payload tag present but no request body provided')
+    }
+    const bodyHash = await sha256(new TextEncoder().encode(body))
+    const bodyHashHex = bytesToHex(bodyHash)
+    if (payloadTag[1] !== bodyHashHex) {
+      throw new Nip98Error('Payload hash mismatch')
+    }
+  } else if (body && (method === 'POST' || method === 'PUT' || method === 'PATCH')) {
+    // If there's a body for POST/PUT/PATCH but no payload tag, that's suspicious
+    // but NIP-98 says payload tag is optional, so we'll allow it
   }
 
   return event.pubkey

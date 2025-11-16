@@ -18,6 +18,14 @@ describe('verifyNip98Event', () => {
       .rejects.toThrow('Invalid Authorization scheme')
   })
 
+  it('should accept optional body parameter for POST requests', async () => {
+    const headers = new Headers()
+    headers.set('Authorization', 'Nostr invalidbase64')
+    // This will fail on JSON parsing, but it shows the signature accepts body parameter
+    await expect(verifyNip98Event(headers, 'POST', 'https://example.com/api', '{"test":"data"}'))
+      .rejects.toThrow('Invalid base64 or JSON')
+  })
+
   // More comprehensive tests would require generating valid Nostr events
   // For now, we verify the basic structure works
 })
