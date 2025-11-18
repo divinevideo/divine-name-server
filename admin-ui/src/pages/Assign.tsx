@@ -1,3 +1,5 @@
+// ABOUTME: Assign username form component for admin interface
+// ABOUTME: Allows admins to directly assign usernames to specific pubkeys (VIP onboarding)
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { assignUsername } from '../api/client'

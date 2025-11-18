@@ -1,3 +1,5 @@
+// ABOUTME: Reserve username form component for admin interface
+// ABOUTME: Allows admins to reserve usernames for brand protection with reason tracking
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { reserveUsername } from '../api/client'

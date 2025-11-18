@@ -1,3 +1,5 @@
+// ABOUTME: Revoke/burn username form component for admin interface
+// ABOUTME: Allows admins to revoke usernames (recyclable) or permanently burn them
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { revokeUsername } from '../api/client'
