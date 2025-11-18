@@ -2,7 +2,7 @@
 // ABOUTME: Protected by Cloudflare Access, handles reserve/revoke/burn/assign
 
 import { Hono } from 'hono'
-import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames } from '../db/queries'
+import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords } from '../db/queries'
 import { validateUsername, UsernameValidationError } from '../utils/validation'
 
 type Bindings = {
@@ -59,6 +59,16 @@ admin.get('/usernames/search', async (c) => {
     })
   } catch (error) {
     console.error('Search error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.get('/reserved-words', async (c) => {
+  try {
+    const words = await getReservedWords(c.env.DB)
+    return c.json({ ok: true, words })
+  } catch (error) {
+    console.error('Reserved words error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
   }
 })

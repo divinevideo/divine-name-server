@@ -221,3 +221,20 @@ export async function searchUsernames(
     }
   }
 }
+
+export interface ReservedWord {
+  word: string
+  category: string
+  reason: string | null
+  created_at: number
+}
+
+export async function getReservedWords(
+  db: D1Database
+): Promise<ReservedWord[]> {
+  const result = await db.prepare(
+    'SELECT * FROM reserved_words ORDER BY category, word'
+  ).all<ReservedWord>()
+
+  return result.results
+}
