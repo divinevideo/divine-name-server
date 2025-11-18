@@ -32,11 +32,7 @@ app.route('/api/admin', admin)
 // NIP-05
 app.route('', nip05)
 
-// Serve admin UI (must be after API routes to not interfere)
-app.get('/admin/*', async (c) => {
-  // For now, just return a placeholder
-  // Will add proper static serving after build process is set up
-  return c.json({ message: 'Admin UI coming soon' })
-})
+// Admin UI static files are served automatically via [assets] config in wrangler.toml
+// The assets middleware handles all static file serving including SPA routing
 
 export default app

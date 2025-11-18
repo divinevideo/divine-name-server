@@ -6,3 +6,7 @@ compatibility_date = "2024-11-15"
 binding = "DB"
 database_name = "divine-name-server-db"
 database_id = "e7e081c4-830d-449c-9de5-d93eaacefb34"
+
+# Admin UI static assets
+[assets]
+directory = "./admin-ui/dist"
