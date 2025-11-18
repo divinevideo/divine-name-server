@@ -1,3 +1,6 @@
+// ABOUTME: Pagination component for navigating through paginated search results
+// ABOUTME: Provides responsive Previous/Next controls with current page display
+
 interface PaginationProps {
   currentPage: number
   totalPages: number

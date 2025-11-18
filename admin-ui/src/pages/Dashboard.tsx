@@ -1,4 +1,7 @@
-import { useState, useEffect } from 'react'
+// ABOUTME: Main admin dashboard page for searching and viewing usernames
+// ABOUTME: Supports search by username/pubkey/email with status filtering and pagination
+
+import { useState, useEffect, useCallback } from 'react'
 import { searchUsernames } from '../api/client'
 import type { Username } from '../types'
 import StatusBadge from '../components/StatusBadge'
@@ -14,17 +17,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (query.length >= 2) {
-      performSearch()
-    } else {
-      setResults([])
-      setTotalPages(0)
-      setTotal(0)
-    }
-  }, [query, status, currentPage])
-
-  const performSearch = async () => {
+  const performSearch = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
@@ -38,7 +31,17 @@ export default function Dashboard() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [query, status, currentPage])
+
+  useEffect(() => {
+    if (query.length >= 2) {
+      performSearch()
+    } else {
+      setResults([])
+      setTotalPages(0)
+      setTotal(0)
+    }
+  }, [query, status, currentPage, performSearch])
 
   const truncate = (str: string | null, len: number) => {
     if (!str) return '-'
