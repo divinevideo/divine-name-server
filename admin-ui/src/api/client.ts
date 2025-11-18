@@ -85,7 +85,6 @@ export async function revokeUsername(
 }
 
 export async function getReservedWords(): Promise<ReservedWord[]> {
-  // Note: This endpoint doesn't exist yet, will need to add it
   const response = await fetch(`${API_BASE}/reserved-words`)
 
   if (!response.ok) {

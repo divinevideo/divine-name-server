@@ -1,3 +1,5 @@
+// ABOUTME: Admin page displaying all reserved words that cannot be claimed as usernames
+// ABOUTME: Groups words by category (system, brand, protocol) in organized tables
 import { useState, useEffect } from 'react'
 import { getReservedWords } from '../api/client'
 import type { ReservedWord } from '../types'
