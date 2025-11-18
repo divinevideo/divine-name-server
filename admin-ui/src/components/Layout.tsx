@@ -1,3 +1,5 @@
+// ABOUTME: Main layout component providing navigation bar and routing container for admin UI
+// ABOUTME: Uses React Router Outlet to render child pages (Search, Reserve, Assign, Revoke, Reserved Words)
 import { Link, Outlet, useLocation } from 'react-router-dom'
 
 export default function Layout() {

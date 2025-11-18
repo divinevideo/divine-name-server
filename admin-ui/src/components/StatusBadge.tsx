@@ -1,3 +1,5 @@
+// ABOUTME: Displays color-coded status badges for username states (active, reserved, revoked, burned)
+// ABOUTME: Provides visual distinction between different username lifecycle states using Tailwind classes
 interface StatusBadgeProps {
   status: 'active' | 'reserved' | 'revoked' | 'burned'
 }
