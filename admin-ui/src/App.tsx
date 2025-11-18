@@ -1,13 +1,24 @@
+import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import Layout from './components/Layout'
+import Dashboard from './pages/Dashboard'
+import Reserve from './pages/Reserve'
+import Assign from './pages/Assign'
+import Revoke from './pages/Revoke'
+import ReservedWords from './pages/ReservedWords'
+
 function App() {
   return (
-    <div className="min-h-screen bg-gray-100">
-      <div className="container mx-auto px-4 py-8">
-        <h1 className="text-3xl font-bold text-gray-900">
-          Divine Name Server - Admin
-        </h1>
-        <p className="mt-4 text-gray-600">Admin interface loading...</p>
-      </div>
-    </div>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<Layout />}>
+          <Route index element={<Dashboard />} />
+          <Route path="reserve" element={<Reserve />} />
+          <Route path="assign" element={<Assign />} />
+          <Route path="revoke" element={<Revoke />} />
+          <Route path="reserved-words" element={<ReservedWords />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
   )
 }
 
