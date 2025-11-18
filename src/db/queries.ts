@@ -5,6 +5,7 @@ export interface Username {
   id: number
   name: string
   pubkey: string | null
+  email: string | null
   relays: string | null
   status: 'active' | 'reserved' | 'revoked' | 'burned'
   recyclable: number
@@ -14,6 +15,23 @@ export interface Username {
   revoked_at: number | null
   reserved_reason: string | null
   admin_notes: string | null
+}
+
+export interface SearchParams {
+  query: string
+  status?: 'active' | 'reserved' | 'revoked' | 'burned'
+  page?: number
+  limit?: number
+}
+
+export interface SearchResult {
+  results: Username[]
+  pagination: {
+    page: number
+    limit: number
+    total: number
+    total_pages: number
+  }
 }
 
 export async function isReservedWord(
@@ -152,4 +170,48 @@ export async function assignUsername(
        updated_at = excluded.updated_at,
        claimed_at = excluded.claimed_at`
   ).bind(name, pubkey, now, now, now).run()
+}
+
+export async function searchUsernames(
+  db: D1Database,
+  params: SearchParams
+): Promise<SearchResult> {
+  const { query, status, page = 1, limit = 50 } = params
+  const offset = (page - 1) * limit
+  const searchPattern = `%${query}%`
+
+  // Build WHERE clause
+  let whereClause = `(name LIKE ? OR pubkey LIKE ? OR email LIKE ?)`
+  const queryParams: any[] = [searchPattern, searchPattern, searchPattern]
+
+  if (status) {
+    whereClause += ` AND status = ?`
+    queryParams.push(status)
+  }
+
+  // Get total count
+  const countResult = await db.prepare(
+    `SELECT COUNT(*) as count FROM usernames WHERE ${whereClause}`
+  ).bind(...queryParams).first<{ count: number }>()
+
+  const total = countResult?.count || 0
+  const totalPages = Math.ceil(total / limit)
+
+  // Get paginated results
+  const results = await db.prepare(
+    `SELECT * FROM usernames
+     WHERE ${whereClause}
+     ORDER BY created_at DESC
+     LIMIT ? OFFSET ?`
+  ).bind(...queryParams, limit, offset).all<Username>()
+
+  return {
+    results: results.results,
+    pagination: {
+      page,
+      limit,
+      total,
+      total_pages: totalPages
+    }
+  }
 }

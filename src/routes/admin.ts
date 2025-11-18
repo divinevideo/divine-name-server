@@ -2,7 +2,7 @@
 // ABOUTME: Protected by Cloudflare Access, handles reserve/revoke/burn/assign
 
 import { Hono } from 'hono'
-import { reserveUsername, revokeUsername, assignUsername, getUsernameByName } from '../db/queries'
+import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames } from '../db/queries'
 import { validateUsername, UsernameValidationError } from '../utils/validation'
 
 type Bindings = {
@@ -14,7 +14,30 @@ const admin = new Hono<{ Bindings: Bindings }>()
 // Note: These routes are protected by Cloudflare Access at the edge
 // No additional auth needed in worker code
 
-admin.post('/reserve', async (c) => {
+admin.get('/usernames/search', async (c) => {
+  try {
+    const query = c.req.query('q')
+    const status = c.req.query('status') as 'active' | 'reserved' | 'revoked' | 'burned' | undefined
+    const page = parseInt(c.req.query('page') || '1')
+    const limit = Math.min(parseInt(c.req.query('limit') || '50'), 100)
+
+    if (!query) {
+      return c.json({ ok: false, error: 'Query parameter "q" is required' }, 400)
+    }
+
+    const result = await searchUsernames(c.env.DB, { query, status, page, limit })
+
+    return c.json({
+      ok: true,
+      ...result
+    })
+  } catch (error) {
+    console.error('Search error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.post('/username/reserve', async (c) => {
   try {
     const body = await c.req.json<{ name: string; reason?: string }>()
     const { name, reason = 'Reserved by admin' } = body
@@ -41,7 +64,7 @@ admin.post('/reserve', async (c) => {
   }
 })
 
-admin.post('/revoke', async (c) => {
+admin.post('/username/revoke', async (c) => {
   try {
     const body = await c.req.json<{ name: string; burn?: boolean }>()
     const { name, burn = false } = body
@@ -78,7 +101,7 @@ admin.post('/revoke', async (c) => {
   }
 })
 
-admin.post('/assign', async (c) => {
+admin.post('/username/assign', async (c) => {
   try {
     const body = await c.req.json<{ name: string; pubkey: string }>()
     const { name, pubkey } = body

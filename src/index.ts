@@ -27,7 +27,7 @@ app.get('/', (c) => {
 app.route('/api/username', username)
 
 // Admin API (protected by Cloudflare Access)
-app.route('/api/admin/username', admin)
+app.route('/api/admin', admin)
 
 // NIP-05
 app.route('', nip05)
