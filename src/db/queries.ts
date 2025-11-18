@@ -172,13 +172,19 @@ export async function assignUsername(
   ).bind(name, pubkey, now, now, now).run()
 }
 
+function escapeLikePattern(str: string): string {
+  // Escape special LIKE characters (% and _) to prevent injection
+  return str.replace(/[%_]/g, '\\$&')
+}
+
 export async function searchUsernames(
   db: D1Database,
   params: SearchParams
 ): Promise<SearchResult> {
   const { query, status, page = 1, limit = 50 } = params
   const offset = (page - 1) * limit
-  const searchPattern = `%${query}%`
+  const escapedQuery = escapeLikePattern(query)
+  const searchPattern = `%${escapedQuery}%`
 
   // Build WHERE clause
   let whereClause = `(name LIKE ? OR pubkey LIKE ? OR email LIKE ?)`

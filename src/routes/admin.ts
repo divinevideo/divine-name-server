@@ -18,14 +18,40 @@ admin.get('/usernames/search', async (c) => {
   try {
     const query = c.req.query('q')
     const status = c.req.query('status') as 'active' | 'reserved' | 'revoked' | 'burned' | undefined
-    const page = parseInt(c.req.query('page') || '1')
-    const limit = Math.min(parseInt(c.req.query('limit') || '50'), 100)
+    const pageStr = c.req.query('page') || '1'
+    const limitStr = c.req.query('limit') || '50'
 
-    if (!query) {
+    // Validate query parameter
+    if (!query || query.length < 1) {
       return c.json({ ok: false, error: 'Query parameter "q" is required' }, 400)
     }
 
-    const result = await searchUsernames(c.env.DB, { query, status, page, limit })
+    if (query.length > 100) {
+      return c.json({ ok: false, error: 'Query must be between 1 and 100 characters' }, 400)
+    }
+
+    // Validate status parameter
+    const validStatuses = ['active', 'reserved', 'revoked', 'burned']
+    if (status && !validStatuses.includes(status)) {
+      return c.json({ ok: false, error: 'Invalid status parameter' }, 400)
+    }
+
+    // Validate page parameter
+    const page = parseInt(pageStr)
+    if (isNaN(page) || page < 1) {
+      return c.json({ ok: false, error: 'Page must be a positive integer' }, 400)
+    }
+
+    // Validate limit parameter
+    const limit = parseInt(limitStr)
+    if (isNaN(limit) || limit < 1) {
+      return c.json({ ok: false, error: 'Limit must be a positive integer' }, 400)
+    }
+
+    // Cap limit at 100
+    const cappedLimit = Math.min(limit, 100)
+
+    const result = await searchUsernames(c.env.DB, { query, status, page, limit: cappedLimit })
 
     return c.json({
       ok: true,
