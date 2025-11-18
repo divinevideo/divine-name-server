@@ -1,3 +1,5 @@
+// ABOUTME: Root application component configuring React Router for the admin UI
+// ABOUTME: Sets up nested routes with Layout wrapper and all admin pages (Dashboard, Reserve, Assign, Revoke, Reserved Words)
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
