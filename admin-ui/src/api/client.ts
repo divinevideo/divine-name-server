@@ -43,6 +43,10 @@ export async function reserveUsername(
     body: JSON.stringify({ name, reason })
   })
 
+  if (!response.ok) {
+    throw new Error(`Reserve failed: ${response.statusText}`)
+  }
+
   return response.json()
 }
 
@@ -56,6 +60,10 @@ export async function assignUsername(
     body: JSON.stringify({ name, pubkey })
   })
 
+  if (!response.ok) {
+    throw new Error(`Assign failed: ${response.statusText}`)
+  }
+
   return response.json()
 }
 
@@ -68,6 +76,10 @@ export async function revokeUsername(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, burn })
   })
+
+  if (!response.ok) {
+    throw new Error(`Revoke failed: ${response.statusText}`)
+  }
 
   return response.json()
 }

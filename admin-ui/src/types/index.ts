@@ -50,6 +50,6 @@ export interface RevokeResponse extends ApiResponse {
 export interface ReservedWord {
   word: string
   category: string
-  reason: string
+  reason: string | null
   created_at: number
 }
