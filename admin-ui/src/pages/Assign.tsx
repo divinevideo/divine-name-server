@@ -1,0 +1,122 @@
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { assignUsername } from '../api/client'
+
+export default function Assign() {
+  const navigate = useNavigate()
+  const [name, setName] = useState('')
+  const [pubkey, setPubkey] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState(false)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setLoading(true)
+    setError(null)
+    setSuccess(false)
+
+    try {
+      const result = await assignUsername(name, pubkey)
+
+      if (result.ok) {
+        setSuccess(true)
+        setTimeout(() => navigate('/'), 2000)
+      } else {
+        setError(result.error || 'Failed to assign username')
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Request failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="max-w-2xl">
+      <div className="mb-6">
+        <h2 className="text-2xl font-bold text-gray-900">Assign Username</h2>
+        <p className="mt-1 text-sm text-gray-600">
+          Directly assign a username to a specific pubkey (VIP onboarding)
+        </p>
+      </div>
+
+      <div className="bg-white shadow rounded-lg p-6">
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <div>
+            <label htmlFor="name" className="block text-sm font-medium text-gray-700">
+              Username
+            </label>
+            <input
+              type="text"
+              id="name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              minLength={3}
+              maxLength={20}
+              pattern="[a-z0-9]+"
+              placeholder="alice"
+              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2 border"
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              3-20 characters, lowercase letters and numbers only
+            </p>
+          </div>
+
+          <div>
+            <label htmlFor="pubkey" className="block text-sm font-medium text-gray-700">
+              Pubkey (hex)
+            </label>
+            <input
+              type="text"
+              id="pubkey"
+              value={pubkey}
+              onChange={(e) => setPubkey(e.target.value)}
+              required
+              minLength={64}
+              maxLength={64}
+              pattern="[0-9a-f]{64}"
+              placeholder="3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d"
+              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2 border font-mono text-xs"
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              64-character hex pubkey
+            </p>
+          </div>
+
+          {error && (
+            <div className="rounded-md bg-red-50 p-4">
+              <p className="text-sm text-red-800">{error}</p>
+            </div>
+          )}
+
+          {success && (
+            <div className="rounded-md bg-green-50 p-4">
+              <p className="text-sm text-green-800">
+                Username assigned successfully! Redirecting...
+              </p>
+            </div>
+          )}
+
+          <div className="flex gap-3">
+            <button
+              type="submit"
+              disabled={loading}
+              className="inline-flex justify-center rounded-md border border-transparent bg-blue-600 py-2 px-4 text-sm font-medium text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {loading ? 'Assigning...' : 'Assign Username'}
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/')}
+              className="inline-flex justify-center rounded-md border border-gray-300 bg-white py-2 px-4 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
