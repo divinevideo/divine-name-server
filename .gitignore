@@ -4,3 +4,7 @@ dist/
 .dev.vars
 *.log
 .DS_Store
+
+# Admin UI build output
+admin-ui/dist/
+admin-ui/node_modules/

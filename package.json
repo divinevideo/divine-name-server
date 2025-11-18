@@ -8,7 +8,10 @@
   },
   "scripts": {
     "test": "vitest",
-    "test:once": "vitest run"
+    "test:once": "vitest run",
+    "build:admin": "cd admin-ui && npm run build",
+    "dev": "wrangler dev",
+    "deploy": "npm run build:admin && wrangler deploy"
   },
   "keywords": [],
   "author": "",
