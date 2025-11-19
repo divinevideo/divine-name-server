@@ -2,7 +2,7 @@
 // ABOUTME: Serves .well-known/nostr.json for root and subdomains
 
 import { Hono } from 'hono'
-import { getUsernameByName, getAllActiveUsernames } from '../db/queries'
+import { getUsernameByName } from '../db/queries'
 import { getSubdomain } from '../utils/subdomain'
 
 type Bindings = {
@@ -48,30 +48,41 @@ nip05.get('/.well-known/nostr.json', async (c) => {
       })
 
     } else {
-      // Root domain NIP-05: return all active users
-      const usernames = await getAllActiveUsernames(c.env.DB)
+      // Root domain NIP-05: require name parameter for scalability
+      const name = c.req.query('name')
 
-      const names: Record<string, string> = {}
-      const relays: Record<string, string[]> = {}
+      if (!name) {
+        return c.json({ error: 'Name is required.' }, 400, {
+          'Access-Control-Allow-Origin': '*'
+        })
+      }
 
-      for (const username of usernames) {
-        if (username.pubkey) {
-          names[username.name] = username.pubkey
+      // Query specific user by name
+      const username = await getUsernameByName(c.env.DB, name)
 
-          if (username.relays) {
-            try {
-              const relayList = JSON.parse(username.relays)
-              relays[username.pubkey] = relayList
-            } catch {
-              // Ignore invalid JSON
-            }
-          }
+      if (!username || username.status !== 'active' || !username.pubkey) {
+        return c.json({ names: {} }, 200, {
+          'Cache-Control': 'public, max-age=60',
+          'Access-Control-Allow-Origin': '*'
+        })
+      }
+
+      const response: any = {
+        names: {
+          [username.name]: username.pubkey
         }
       }
 
-      const response: any = { names }
-      if (Object.keys(relays).length > 0) {
-        response.relays = relays
+      // Add relays if present
+      if (username.relays) {
+        try {
+          const relays = JSON.parse(username.relays)
+          response.relays = {
+            [username.pubkey]: relays
+          }
+        } catch {
+          // Ignore invalid JSON
+        }
       }
 
       return c.json(response, 200, {
