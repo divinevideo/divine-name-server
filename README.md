@@ -16,6 +16,8 @@ Cloudflare Worker that enables username-based Nostr identities at Divine.Video w
 
 - **Hono**: Lightweight web framework optimized for Cloudflare Workers
 - **Cloudflare D1**: SQLite-based edge database for username registry
+- **Cloudflare Workers Assets**: Static file serving for admin UI
+- **React + Vite**: Admin UI for username management
 - **NIP-98**: HTTP authentication via Nostr event signatures using `@noble/secp256k1`
 - **TypeScript**: Type-safe implementation with Cloudflare Workers types
 
@@ -40,11 +42,20 @@ npx wrangler d1 migrations apply divine-name-server-db --local
 ### Local Development
 
 ```bash
+# Install admin UI dependencies (first time only)
+cd admin-ui && npm install && cd ..
+
+# Build admin UI
+npm run build:admin
+
 # Start development server
-npx wrangler dev
+npm run dev
 
 # Server runs at http://localhost:8787
+# Admin UI accessible at http://localhost:8787/admin (no authentication required locally)
 ```
+
+**Note**: Rebuild the admin UI (`npm run build:admin`) after making changes to `admin-ui/` code.
 
 ### Testing
 
@@ -184,6 +195,21 @@ Subdomain profile routing. Proxies to the main Divine.Video application's profil
 ### Admin Endpoints (Protected by Cloudflare Access)
 
 All admin endpoints require Cloudflare Access authentication configured at the edge.
+
+#### Admin UI Access
+
+The admin interface is available at `/admin` and provides a web UI for username management.
+
+**Local Development**: Access directly at `http://localhost:8787/admin` (no authentication)
+
+**Production**: Protected by Cloudflare Access. To add authorized emails:
+1. Go to Cloudflare Dashboard → Zero Trust → Access → Applications
+2. Find the application protecting your admin routes
+3. Edit the policy → Add include → Select "Emails"
+4. Enter email addresses to authorize
+5. Save application
+
+Authorized users receive a one-time code via email when accessing the admin UI.
 
 #### POST /api/admin/username/reserve
 
@@ -409,6 +435,32 @@ Nostr Client → /.well-known/nostr.json → Worker
 - **Proxy Pattern**: Subdomain routing proxies to existing profile pages, avoiding duplication
 - **Reserved Words**: Pre-seeded list protects system routes and brand names
 - **Status State Machine**: Clear state transitions (active → revoked → recyclable)
+
+### Worker + Admin UI Architecture
+
+The Divine Name Server is a **single Cloudflare Worker** that serves both the Hono API and a React-based admin UI:
+
+**How It Works:**
+- The Worker handles API routes via Hono (`/api/username`, `/api/admin`, etc.)
+- Static admin UI files are served automatically via Cloudflare Workers Assets
+- Configuration in `wrangler.toml` specifies the assets directory:
+  ```toml
+  [assets]
+  directory = "./admin-ui/dist"
+  ```
+
+**Routing Priority:**
+1. **Hono routes match first** - API endpoints and custom routes
+2. **Static files** - If no route matches, serve from `admin-ui/dist/`
+3. **SPA fallback** - For client-side routing, falls back to `index.html`
+
+**Request Examples:**
+- `GET /` → Hono route → Returns JSON service info
+- `GET /api/username/claim` → Hono route → API endpoint
+- `GET /admin` → Static assets → Serves React SPA
+- `GET /admin/settings` → Static assets → Serves React SPA (client-side routing)
+
+This architecture allows deploying the entire system (API + admin UI) as a single Worker with no separate static hosting needed.
 
 ## NIP-05 Compatibility
 

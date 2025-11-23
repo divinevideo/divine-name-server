@@ -2,6 +2,12 @@ name = "divine-name-server"
 main = "src/index.ts"
 compatibility_date = "2024-11-15"
 
+# Routes
+routes = [
+  { pattern = "divine.video/.well-known/*", zone_name = "divine.video" },
+  { pattern = "admin.divine.video/*", zone_name = "divine.video" }
+]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "divine-name-server-db"
