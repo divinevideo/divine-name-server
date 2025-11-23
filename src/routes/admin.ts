@@ -100,6 +100,68 @@ admin.post('/username/reserve', async (c) => {
   }
 })
 
+admin.post('/username/reserve-bulk', async (c) => {
+  try {
+    const body = await c.req.json<{ names: string | string[]; reason?: string }>()
+    const { names, reason = 'Reserved by admin' } = body
+
+    if (!names) {
+      return c.json({ ok: false, error: 'Names are required' }, 400)
+    }
+
+    // Parse names - accept string (comma/space separated) or array
+    let nameList: string[]
+    if (typeof names === 'string') {
+      // Split by comma or space, filter empty strings, strip @ symbols
+      nameList = names
+        .split(/[,\s]+/)
+        .map(n => n.trim().replace(/^@+/, '')) // Strip leading @ symbols
+        .filter(n => n.length > 0)
+    } else if (Array.isArray(names)) {
+      nameList = names
+        .map(n => String(n).trim().replace(/^@+/, '')) // Strip leading @ symbols
+        .filter(n => n.length > 0)
+    } else {
+      return c.json({ ok: false, error: 'Names must be a string or array' }, 400)
+    }
+
+    if (nameList.length === 0) {
+      return c.json({ ok: false, error: 'No valid names provided' }, 400)
+    }
+
+    if (nameList.length > 1000) {
+      return c.json({ ok: false, error: 'Maximum 1000 names per request' }, 400)
+    }
+
+    // Process each name
+    const results = []
+    for (const name of nameList) {
+      try {
+        validateUsername(name)
+        await reserveUsername(c.env.DB, name, reason)
+        results.push({ name, status: 'reserved', success: true })
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+        results.push({ name, status: 'failed', success: false, error: errorMessage })
+      }
+    }
+
+    const successCount = results.filter(r => r.success).length
+    const failureCount = results.filter(r => !r.success).length
+
+    return c.json({
+      ok: true,
+      total: nameList.length,
+      successful: successCount,
+      failed: failureCount,
+      results
+    })
+  } catch (error) {
+    console.error('Bulk reserve error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
 admin.post('/username/revoke', async (c) => {
   try {
     const body = await c.req.json<{ name: string; burn?: boolean }>()
