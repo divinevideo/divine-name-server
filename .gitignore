@@ -8,3 +8,9 @@ dist/
 # Admin UI build output
 admin-ui/dist/
 admin-ui/node_modules/
+
+# Auto-generated type definitions
+worker-configuration.d.ts
+
+# Private journal
+.private-journal/
