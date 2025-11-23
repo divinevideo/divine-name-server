@@ -53,3 +53,17 @@ export interface ReservedWord {
   reason: string | null
   created_at: number
 }
+
+export interface BulkReserveResult {
+  name: string
+  status: string
+  success: boolean
+  error?: string
+}
+
+export interface BulkReserveResponse extends ApiResponse {
+  total?: number
+  successful?: number
+  failed?: number
+  results?: BulkReserveResult[]
+}

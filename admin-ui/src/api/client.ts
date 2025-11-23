@@ -3,7 +3,8 @@ import type {
   ReserveResponse,
   AssignResponse,
   RevokeResponse,
-  ReservedWord
+  ReservedWord,
+  BulkReserveResponse
 } from '../types'
 
 const API_BASE = '/api/admin'
@@ -45,6 +46,23 @@ export async function reserveUsername(
 
   if (!response.ok) {
     throw new Error(`Reserve failed: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+export async function bulkReserveUsernames(
+  names: string,
+  reason: string
+): Promise<BulkReserveResponse> {
+  const response = await fetch(`${API_BASE}/username/reserve-bulk`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ names, reason })
+  })
+
+  if (!response.ok) {
+    throw new Error(`Bulk reserve failed: ${response.statusText}`)
   }
 
   return response.json()
