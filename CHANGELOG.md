@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Support for npub (bech32-encoded) public key format in admin assign endpoint
+  - Accepts both 64-character hex pubkeys and npub1... format
+  - Automatically normalizes to hex for storage
+  - Comprehensive validation with 10 test cases
+
 ### Fixed
 - TypeScript compilation errors in NIP-98 middleware and admin tests
   - Added hexToBytes helper function to convert hex strings to Uint8Arrays for @noble/secp256k1 v3.x API compatibility
