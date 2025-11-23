@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Bulk username reserve endpoint `/admin/username/reserve-bulk`
+  - Accepts comma or space-separated username lists
+  - Supports both string and array input formats
+  - Automatically strips @ symbols from usernames
+  - Returns detailed success/failure results for each username
+  - Limit of 1000 usernames per request
+  - 10 comprehensive tests
 - Support for npub (bech32-encoded) public key format in admin assign endpoint
   - Accepts both 64-character hex pubkeys and npub1... format
   - Automatically normalizes to hex for storage
