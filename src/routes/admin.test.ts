@@ -60,7 +60,7 @@ describe('Admin Search Endpoint', () => {
     const res = await app.request(req, { env: { DB: createMockDB() } } as any)
 
     expect(res.status).toBe(400)
-    const json = await res.json()
+    const json = await res.json() as any
     expect(json.ok).toBe(false)
     expect(json.error).toContain('required')
   })
@@ -72,7 +72,7 @@ describe('Admin Search Endpoint', () => {
     const res = await app.request(req, { env: { DB: createMockDB() } } as any)
 
     expect(res.status).toBe(400)
-    const json = await res.json()
+    const json = await res.json() as any
     expect(json.ok).toBe(false)
     expect(json.error).toContain('required')
   })
@@ -85,7 +85,7 @@ describe('Admin Search Endpoint', () => {
     const res = await app.request(req, { env: { DB: createMockDB() } } as any)
 
     expect(res.status).toBe(400)
-    const json = await res.json()
+    const json = await res.json() as any
     expect(json.ok).toBe(false)
     expect(json.error).toContain('between 1 and 100 characters')
   })
@@ -97,7 +97,7 @@ describe('Admin Search Endpoint', () => {
     const res = await app.request(req, { env: { DB: createMockDB() } } as any)
 
     expect(res.status).toBe(400)
-    const json = await res.json()
+    const json = await res.json() as any
     expect(json.ok).toBe(false)
     expect(json.error).toContain('Invalid status parameter')
   })
@@ -109,7 +109,7 @@ describe('Admin Search Endpoint', () => {
     const res = await app.request(req, { env: { DB: createMockDB() } } as any)
 
     expect(res.status).toBe(400)
-    const json = await res.json()
+    const json = await res.json() as any
     expect(json.ok).toBe(false)
     expect(json.error).toContain('Page must be a positive integer')
   })
@@ -121,7 +121,7 @@ describe('Admin Search Endpoint', () => {
     const res = await app.request(req, { env: { DB: createMockDB() } } as any)
 
     expect(res.status).toBe(400)
-    const json = await res.json()
+    const json = await res.json() as any
     expect(json.ok).toBe(false)
     expect(json.error).toContain('Page must be a positive integer')
   })
@@ -133,7 +133,7 @@ describe('Admin Search Endpoint', () => {
     const res = await app.request(req, { env: { DB: createMockDB() } } as any)
 
     expect(res.status).toBe(400)
-    const json = await res.json()
+    const json = await res.json() as any
     expect(json.ok).toBe(false)
     expect(json.error).toContain('Page must be a positive integer')
   })
@@ -145,7 +145,7 @@ describe('Admin Search Endpoint', () => {
     const res = await app.request(req, { env: { DB: createMockDB() } } as any)
 
     expect(res.status).toBe(400)
-    const json = await res.json()
+    const json = await res.json() as any
     expect(json.ok).toBe(false)
     expect(json.error).toContain('Limit must be a positive integer')
   })
@@ -157,7 +157,7 @@ describe('Admin Search Endpoint', () => {
     const res = await app.request(req, { env: { DB: createMockDB() } } as any)
 
     expect(res.status).toBe(400)
-    const json = await res.json()
+    const json = await res.json() as any
     expect(json.ok).toBe(false)
     expect(json.error).toContain('Limit must be a positive integer')
   })
@@ -169,7 +169,7 @@ describe('Admin Search Endpoint', () => {
     const res = await app.request(req, { env: { DB: createMockDB() } } as any)
 
     expect(res.status).toBe(400)
-    const json = await res.json()
+    const json = await res.json() as any
     expect(json.ok).toBe(false)
     expect(json.error).toContain('Limit must be a positive integer')
   })

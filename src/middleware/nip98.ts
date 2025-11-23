@@ -9,6 +9,14 @@ function bytesToHex(bytes: Uint8Array): string {
     .join('')
 }
 
+function hexToBytes(hex: string): Uint8Array {
+  const bytes = new Uint8Array(hex.length / 2)
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes[i / 2] = parseInt(hex.substr(i, 2), 16)
+  }
+  return bytes
+}
+
 export class Nip98Error extends Error {
   constructor(message: string) {
     super(message)
@@ -87,9 +95,9 @@ export async function verifyNip98Event(
   // Verify signature
   try {
     const isValid = await schnorr.verify(
-      event.sig,
-      event.id,
-      event.pubkey
+      hexToBytes(event.sig),
+      hexToBytes(event.id),
+      hexToBytes(event.pubkey)
     )
     if (!isValid) {
       throw new Nip98Error('Invalid signature')
