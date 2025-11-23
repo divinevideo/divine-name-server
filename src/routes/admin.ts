@@ -3,7 +3,7 @@
 
 import { Hono } from 'hono'
 import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords } from '../db/queries'
-import { validateUsername, UsernameValidationError } from '../utils/validation'
+import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
 
 type Bindings = {
   DB: D1Database
@@ -155,13 +155,20 @@ admin.post('/username/assign', async (c) => {
       throw error
     }
 
-    if (pubkey.length !== 64 || !/^[0-9a-f]+$/.test(pubkey)) {
-      return c.json({ ok: false, error: 'Invalid pubkey format' }, 400)
+    // Validate and normalize pubkey (accepts both hex and npub formats)
+    let normalizedPubkey: string
+    try {
+      normalizedPubkey = validateAndNormalizePubkey(pubkey)
+    } catch (error) {
+      if (error instanceof PubkeyValidationError) {
+        return c.json({ ok: false, error: error.message }, 400)
+      }
+      throw error
     }
 
-    await assignUsername(c.env.DB, name, pubkey)
+    await assignUsername(c.env.DB, name, normalizedPubkey)
 
-    return c.json({ ok: true, name, pubkey, status: 'active' })
+    return c.json({ ok: true, name, pubkey: normalizedPubkey, status: 'active' })
   } catch (error) {
     console.error('Assign error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
