@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Returns detailed success/failure results for each username
   - Limit of 1000 usernames per request
   - 10 comprehensive tests
+- Unified Reserve page in admin UI with tabbed Single/Bulk interface
+  - Single mode for reserving one username at a time
+  - Bulk mode with textarea for pasting multiple usernames
+  - Detailed results table showing success/failure for each username
+  - Better UX than separate pages
 - Support for npub (bech32-encoded) public key format in admin assign endpoint
   - Accepts both 64-character hex pubkeys and npub1... format
   - Automatically normalizes to hex for storage
