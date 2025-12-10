@@ -9,9 +9,19 @@ import admin from './routes/admin'
 
 type Bindings = {
   DB: D1Database
+  ASSETS: Fetcher
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
+
+// Pass through app deep linking files to static assets (served by Pages)
+// These files are not handled by this worker - let them fall through to origin
+app.get('/.well-known/assetlinks.json', (c) => {
+  return fetch(c.req.raw)
+})
+app.get('/.well-known/apple-app-site-association', (c) => {
+  return fetch(c.req.raw)
+})
 
 // Subdomain profile routing (must be first to catch subdomains)
 app.route('', subdomain)
