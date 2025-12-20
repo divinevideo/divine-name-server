@@ -68,16 +68,29 @@ describe('Admin Search Endpoint', () => {
     expect(json.error).toContain('required')
   })
 
-  it('should return 400 if query is too short', async () => {
+  it('should allow empty query string to return all results', async () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=')
     const res = await app.request(req, { env: { DB: createMockDB() } } as any)
 
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(200)
     const json = await res.json() as any
-    expect(json.ok).toBe(false)
-    expect(json.error).toContain('required')
+    expect(json.ok).toBe(true)
+    expect(json.results).toBeDefined()
+    expect(json.pagination).toBeDefined()
+  })
+
+  it('should allow empty query with status filter', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/admin/usernames/search?q=&status=active')
+    const res = await app.request(req, { env: { DB: createMockDB() } } as any)
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.results).toBeDefined()
   })
 
   it('should return 400 if query is too long', async () => {
@@ -90,7 +103,22 @@ describe('Admin Search Endpoint', () => {
     expect(res.status).toBe(400)
     const json = await res.json() as any
     expect(json.ok).toBe(false)
-    expect(json.error).toContain('between 1 and 100 characters')
+    expect(json.error).toContain('100 characters or less')
+  })
+
+  it('should return successful search with valid query', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/admin/usernames/search?q=test')
+    const res = await app.request(req, { env: { DB: createMockDB() } } as any)
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.results).toBeDefined()
+    expect(json.pagination).toBeDefined()
+    expect(json.pagination.page).toBe(1)
+    expect(json.pagination.limit).toBe(50)
   })
 
   it('should return 400 if status parameter is invalid', async () => {
@@ -175,6 +203,57 @@ describe('Admin Search Endpoint', () => {
     const json = await res.json() as any
     expect(json.ok).toBe(false)
     expect(json.error).toContain('Limit must be a positive integer')
+  })
+
+  it('should return all results with empty query and no status filter', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/admin/usernames/search?q=')
+    const res = await app.request(req, { env: { DB: createMockDB() } } as any)
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.results).toBeDefined()
+    expect(json.pagination).toBeDefined()
+    expect(json.pagination.total).toBe(5) // Mock returns count of 5
+  })
+
+  it('should return filtered results with empty query and status filter', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/admin/usernames/search?q=&status=active')
+    const res = await app.request(req, { env: { DB: createMockDB() } } as any)
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.results).toBeDefined()
+  })
+
+  it('should handle empty query with pagination', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/admin/usernames/search?q=&page=1&limit=10')
+    const res = await app.request(req, { env: { DB: createMockDB() } } as any)
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.pagination.page).toBe(1)
+    expect(json.pagination.limit).toBe(10)
+  })
+
+  it('should handle single character query (no minimum requirement)', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/admin/usernames/search?q=a')
+    const res = await app.request(req, { env: { DB: createMockDB() } } as any)
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.results).toBeDefined()
   })
 })
 

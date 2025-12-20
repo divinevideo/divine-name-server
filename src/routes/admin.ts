@@ -21,13 +21,13 @@ admin.get('/usernames/search', async (c) => {
     const pageStr = c.req.query('page') || '1'
     const limitStr = c.req.query('limit') || '50'
 
-    // Validate query parameter
-    if (!query || query.length < 1) {
+    // Validate query parameter (allow empty string for "show all" searches)
+    if (query === undefined || query === null) {
       return c.json({ ok: false, error: 'Query parameter "q" is required' }, 400)
     }
 
     if (query.length > 100) {
-      return c.json({ ok: false, error: 'Query must be between 1 and 100 characters' }, 400)
+      return c.json({ ok: false, error: 'Query must be 100 characters or less' }, 400)
     }
 
     // Validate status parameter
