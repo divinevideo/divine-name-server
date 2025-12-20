@@ -67,20 +67,39 @@ function createMockDB() {
               if (sql.includes('COUNT(*)')) {
                 // Filter based on bound params
                 let filtered = [...mockResults]
-                const searchPattern = boundParams[0]
-
-                if (searchPattern) {
-                  const searchTerm = searchPattern.replace(/%/g, '').replace(/\\/g, '')
-                  filtered = mockResults.filter(u =>
-                    u.name.includes(searchTerm) ||
-                    (u.pubkey && u.pubkey.includes(searchTerm)) ||
-                    (u.email && u.email.includes(searchTerm))
-                  )
-                }
-
-                // Apply status filter if present
-                if (boundParams.length > 3 && boundParams[3]) {
-                  filtered = filtered.filter(u => u.status === boundParams[3])
+                
+                // Check if WHERE clause uses LIKE patterns (has search query)
+                // If WHERE clause is "1=1", there's no search pattern
+                const hasSearchPattern = sql.includes('LIKE')
+                
+                if (hasSearchPattern) {
+                  // When there's a LIKE pattern, first 3 params are search patterns (all same value)
+                  const searchPattern = boundParams[0]
+                  if (searchPattern && typeof searchPattern === 'string') {
+                    // Remove LIKE wildcards and escape characters to get the actual search term
+                    const searchTerm = searchPattern.replace(/%/g, '').replace(/\\/g, '')
+                    if (searchTerm.length > 0) {
+                      filtered = mockResults.filter(u =>
+                        (u.name && u.name.includes(searchTerm)) ||
+                        (u.pubkey && u.pubkey.includes(searchTerm)) ||
+                        (u.email && u.email.includes(searchTerm))
+                      )
+                    }
+                  }
+                  
+                  // Status is at index 3 if search pattern exists (but only if it's not limit/offset)
+                  // Limit and offset are always the last 2 params, so status would be at index 3
+                  // only if boundParams.length > 5 (pattern, pattern, pattern, status, limit, offset)
+                  if (boundParams.length > 5 && typeof boundParams[3] === 'string') {
+                    filtered = filtered.filter(u => u.status === boundParams[3])
+                  }
+                } else {
+                  // No search pattern - check for status filter
+                  // If WHERE is "1=1", no params. If WHERE is "status = ?", param is at index 0
+                  if (sql.includes('status = ?') && boundParams.length > 0 && boundParams[0]) {
+                    filtered = filtered.filter(u => u.status === boundParams[0])
+                  }
+                  // If WHERE is "1=1", no filtering needed - return all
                 }
 
                 return { count: filtered.length }
@@ -90,23 +109,43 @@ function createMockDB() {
             all: async () => {
               // Mock search query
               let filtered = [...mockResults]
-              const searchPattern = boundParams[0]
-
-              if (searchPattern) {
-                const searchTerm = searchPattern.replace(/%/g, '').replace(/\\/g, '')
-                filtered = mockResults.filter(u =>
-                  u.name.includes(searchTerm) ||
-                  (u.pubkey && u.pubkey.includes(searchTerm)) ||
-                  (u.email && u.email.includes(searchTerm))
-                )
-              }
-
-              // Apply status filter if present
-              if (boundParams.length > 5 && boundParams[3]) {
-                filtered = filtered.filter(u => u.status === boundParams[3])
+              
+              // Check if WHERE clause uses LIKE patterns (has search query)
+              const hasSearchPattern = sql.includes('LIKE')
+              
+              if (hasSearchPattern) {
+                // When there's a LIKE pattern, first 3 params are search patterns (all same value)
+                // But limit and offset are always last two, so we need to exclude them
+                const searchPattern = boundParams[0]
+                if (searchPattern && typeof searchPattern === 'string') {
+                  // Remove LIKE wildcards and escape characters to get the actual search term
+                  const searchTerm = searchPattern.replace(/%/g, '').replace(/\\/g, '')
+                  if (searchTerm.length > 0) {
+                    filtered = mockResults.filter(u =>
+                      (u.name && u.name.includes(searchTerm)) ||
+                      (u.pubkey && u.pubkey.includes(searchTerm)) ||
+                      (u.email && u.email.includes(searchTerm))
+                    )
+                  }
+                }
+                
+                // Status is at index 3 if search pattern exists (but only if it's not limit/offset)
+                // Limit and offset are always the last 2 params, so status would be at index 3
+                // only if boundParams.length > 5 (pattern, pattern, pattern, status, limit, offset)
+                if (boundParams.length > 5 && typeof boundParams[3] === 'string') {
+                  filtered = filtered.filter(u => u.status === boundParams[3])
+                }
+              } else {
+                // No search pattern - check for status filter
+                // If WHERE is "1=1", no params. If WHERE is "status = ?", param is at index 0
+                if (sql.includes('status = ?') && boundParams.length > 0 && boundParams[0]) {
+                  filtered = filtered.filter(u => u.status === boundParams[0])
+                }
+                // If WHERE is "1=1", no filtering needed - return all
               }
 
               // Apply pagination
+              // Limit and offset are always the last two params
               const limit = boundParams[boundParams.length - 2] || 50
               const offset = boundParams[boundParams.length - 1] || 0
 
@@ -221,13 +260,61 @@ describe('searchUsernames', () => {
     expect(result.pagination.total_pages).toBe(0)
   })
 
-  it('should handle empty query string', async () => {
+  it('should handle empty query string and return all results', async () => {
     const db = createMockDB()
     const params: SearchParams = { query: '' }
 
     const result = await searchUsernames(db, params)
 
-    expect(result.results.length).toBeGreaterThan(0)
+    expect(result.results.length).toBe(3) // All 3 mock results
+    expect(result.pagination.total).toBe(3)
+  })
+
+  it('should handle empty query with status filter', async () => {
+    const db = createMockDB()
+    const params: SearchParams = { query: '', status: 'active' }
+
+    const result = await searchUsernames(db, params)
+
+    expect(result.results.every(u => u.status === 'active')).toBe(true)
+    expect(result.results.length).toBe(2) // alice and charlie are active
+    expect(result.pagination.total).toBe(2)
+  })
+
+  it('should handle empty query with reserved status filter', async () => {
+    const db = createMockDB()
+    const params: SearchParams = { query: '', status: 'reserved' }
+
+    const result = await searchUsernames(db, params)
+
+    expect(result.results.every(u => u.status === 'reserved')).toBe(true)
+    expect(result.results.length).toBe(1) // Only bob is reserved
+    expect(result.pagination.total).toBe(1)
+  })
+
+  it('should handle empty query with pagination', async () => {
+    const db = createMockDB()
+    const params: SearchParams = { query: '', page: 1, limit: 2 }
+
+    const result = await searchUsernames(db, params)
+
+    expect(result.results.length).toBe(2)
+    expect(result.pagination.total).toBe(3)
+    expect(result.pagination.total_pages).toBe(2)
+    expect(result.pagination.page).toBe(1)
+    expect(result.pagination.limit).toBe(2)
+  })
+
+  it('should handle empty query with pagination page 2', async () => {
+    const db = createMockDB()
+    const params: SearchParams = { query: '', page: 2, limit: 2 }
+
+    const result = await searchUsernames(db, params)
+
+    expect(result.results.length).toBe(1) // Only 1 result on page 2
+    expect(result.pagination.total).toBe(3)
+    expect(result.pagination.total_pages).toBe(2)
+    expect(result.pagination.page).toBe(2)
   })
 
   it('should combine query and status filters', async () => {

@@ -183,16 +183,32 @@ export async function searchUsernames(
 ): Promise<SearchResult> {
   const { query, status, page = 1, limit = 50 } = params
   const offset = (page - 1) * limit
-  const escapedQuery = escapeLikePattern(query)
-  const searchPattern = `%${escapedQuery}%`
 
   // Build WHERE clause
-  let whereClause = `(name LIKE ? OR pubkey LIKE ? OR email LIKE ?)`
-  const queryParams: any[] = [searchPattern, searchPattern, searchPattern]
+  let whereClause = ''
+  const queryParams: any[] = []
 
+  // If query is empty, don't filter by name/pubkey/email
+  if (query && query.length > 0) {
+    const escapedQuery = escapeLikePattern(query)
+    const searchPattern = `%${escapedQuery}%`
+    whereClause = `(name LIKE ? OR pubkey LIKE ? OR email LIKE ?)`
+    queryParams.push(searchPattern, searchPattern, searchPattern)
+  }
+
+  // Add status filter if provided
   if (status) {
-    whereClause += ` AND status = ?`
+    if (whereClause) {
+      whereClause += ` AND status = ?`
+    } else {
+      whereClause = `status = ?`
+    }
     queryParams.push(status)
+  }
+
+  // If no filters, use WHERE 1=1 to get all results
+  if (!whereClause) {
+    whereClause = '1=1'
   }
 
   // Get total count

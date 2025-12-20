@@ -34,13 +34,7 @@ export default function Dashboard() {
   }, [query, status, currentPage])
 
   useEffect(() => {
-    if (query.length >= 2) {
-      performSearch()
-    } else {
-      setResults([])
-      setTotalPages(0)
-      setTotal(0)
-    }
+    performSearch()
   }, [query, status, currentPage, performSearch])
 
   const truncate = (str: string | null, len: number) => {
@@ -115,7 +109,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {!loading && query.length >= 2 && (
+      {!loading && (
         <div className="bg-white shadow rounded-lg overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-200">
             <p className="text-sm text-gray-700">
@@ -183,12 +177,6 @@ export default function Dashboard() {
               )}
             </>
           )}
-        </div>
-      )}
-
-      {query.length < 2 && !loading && (
-        <div className="text-center py-8 text-gray-500">
-          <p>Enter at least 2 characters to search</p>
         </div>
       )}
     </div>
