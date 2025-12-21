@@ -1,0 +1,40 @@
+# ABOUTME: GitHub Actions workflow that auto-deploys to Cloudflare Workers
+# ABOUTME: Triggers on push to main, builds admin-ui, and deploys via wrangler
+
+name: Deploy to Cloudflare
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install admin-ui dependencies
+        run: npm ci
+        working-directory: admin-ui
+
+      - name: Build admin-ui
+        run: npm run build
+        working-directory: admin-ui
+
+      - name: Deploy to Cloudflare
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
