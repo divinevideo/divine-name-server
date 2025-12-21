@@ -46,6 +46,34 @@ export default function Dashboard() {
     return new Date(timestamp * 1000).toLocaleDateString()
   }
 
+  const downloadSearchResultsCSV = () => {
+    if (results.length === 0) return
+
+    const headers = ['Username', 'Pubkey', 'Email', 'Status', 'Created']
+    const rows = results.map((username: Username) => [
+      username.name,
+      username.pubkey || '',
+      username.email || '',
+      username.status,
+      formatDate(username.created_at)
+    ])
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map((row: (string | number)[]) => row.map((cell: string | number) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+    ].join('\n')
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    const link = document.createElement('a')
+    const url = URL.createObjectURL(blob)
+    link.setAttribute('href', url)
+    link.setAttribute('download', `search-results-${new Date().toISOString().split('T')[0]}.csv`)
+    link.style.visibility = 'hidden'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -111,10 +139,22 @@ export default function Dashboard() {
 
       {!loading && (
         <div className="bg-white shadow rounded-lg overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-200">
+          <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
             <p className="text-sm text-gray-700">
               Found <span className="font-medium">{total}</span> results
             </p>
+            {results.length > 0 && (
+              <button
+                type="button"
+                onClick={downloadSearchResultsCSV}
+                className="inline-flex items-center rounded-md border border-gray-300 bg-white py-2 px-4 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+              >
+                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                Download Search Results CSV
+              </button>
+            )}
           </div>
 
           {results.length === 0 ? (
