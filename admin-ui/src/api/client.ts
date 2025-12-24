@@ -4,7 +4,8 @@ import type {
   AssignResponse,
   RevokeResponse,
   ReservedWord,
-  BulkReserveResponse
+  BulkReserveResponse,
+  ApiResponse
 } from '../types'
 
 const API_BASE = '/api/admin'
@@ -36,12 +37,13 @@ export async function searchUsernames(
 
 export async function reserveUsername(
   name: string,
-  reason: string
+  reason: string,
+  overrideReason?: string
 ): Promise<ReserveResponse> {
   const response = await fetch(`${API_BASE}/username/reserve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, reason })
+    body: JSON.stringify({ name, reason, overrideReason })
   })
 
   if (!response.ok) {
@@ -70,12 +72,13 @@ export async function bulkReserveUsernames(
 
 export async function assignUsername(
   name: string,
-  pubkey: string
+  pubkey: string,
+  overrideReason?: string
 ): Promise<AssignResponse> {
   const response = await fetch(`${API_BASE}/username/assign`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, pubkey })
+    body: JSON.stringify({ name, pubkey, overrideReason })
   })
 
   if (!response.ok) {
@@ -111,4 +114,34 @@ export async function getReservedWords(): Promise<ReservedWord[]> {
 
   const data = await response.json()
   return data.words || []
+}
+
+export async function addReservedWord(
+  word: string,
+  category: string,
+  reason?: string
+): Promise<ApiResponse & { word?: string }> {
+  const response = await fetch(`${API_BASE}/reserved-words`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ word, category, reason })
+  })
+
+  if (!response.ok) {
+    throw new Error(`Failed to add reserved word: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+export async function deleteReservedWord(word: string): Promise<ApiResponse> {
+  const response = await fetch(`${API_BASE}/reserved-words/${encodeURIComponent(word)}`, {
+    method: 'DELETE'
+  })
+
+  if (!response.ok) {
+    throw new Error(`Failed to delete reserved word: ${response.statusText}`)
+  }
+
+  return response.json()
 }

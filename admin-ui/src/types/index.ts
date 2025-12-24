@@ -33,12 +33,14 @@ export interface ApiResponse {
 export interface ReserveResponse extends ApiResponse {
   name?: string
   status?: string
+  requiresOverride?: boolean
 }
 
 export interface AssignResponse extends ApiResponse {
   name?: string
   pubkey?: string
   status?: string
+  requiresOverride?: boolean
 }
 
 export interface RevokeResponse extends ApiResponse {

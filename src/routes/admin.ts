@@ -2,7 +2,7 @@
 // ABOUTME: Protected by Cloudflare Access, handles reserve/revoke/burn/assign
 
 import { Hono } from 'hono'
-import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords } from '../db/queries'
+import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus } from '../db/queries'
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
 
 type Bindings = {
@@ -73,10 +73,55 @@ admin.get('/reserved-words', async (c) => {
   }
 })
 
+admin.post('/reserved-words', async (c) => {
+  try {
+    const body = await c.req.json<{ word: string; category: string; reason?: string }>()
+    const { word, category, reason } = body
+
+    if (!word || !category) {
+      return c.json({ ok: false, error: 'Word and category are required' }, 400)
+    }
+
+    // Validate word format (same as username: lowercase alphanumeric)
+    const validPattern = /^[a-z0-9]+$/
+    if (!validPattern.test(word.toLowerCase())) {
+      return c.json({ ok: false, error: 'Word must be lowercase alphanumeric' }, 400)
+    }
+
+    if (word.length > 50) {
+      return c.json({ ok: false, error: 'Word must be 50 characters or less' }, 400)
+    }
+
+    await addReservedWord(c.env.DB, word, category, reason || null)
+
+    return c.json({ ok: true, word: word.toLowerCase(), category, reason })
+  } catch (error) {
+    console.error('Add reserved word error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.delete('/reserved-words/:word', async (c) => {
+  try {
+    const word = c.req.param('word')
+
+    if (!word) {
+      return c.json({ ok: false, error: 'Word is required' }, 400)
+    }
+
+    await deleteReservedWord(c.env.DB, word)
+
+    return c.json({ ok: true, deleted: word.toLowerCase() })
+  } catch (error) {
+    console.error('Delete reserved word error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
 admin.post('/username/reserve', async (c) => {
   try {
-    const body = await c.req.json<{ name: string; reason?: string }>()
-    const { name, reason = 'Reserved by admin' } = body
+    const body = await c.req.json<{ name: string; reason?: string; overrideReason?: string }>()
+    const { name, reason = 'Reserved by admin', overrideReason } = body
 
     if (!name) {
       return c.json({ ok: false, error: 'Name is required' }, 400)
@@ -92,13 +137,29 @@ admin.post('/username/reserve', async (c) => {
       throw error
     }
 
+    // Short names (1-2 chars) require override confirmation
+    const isShortName = usernameData.canonical.length < 3
+    if (isShortName && !overrideReason) {
+      return c.json({
+        ok: false,
+        error: 'Short names (1-2 characters) require override confirmation',
+        requiresOverride: true
+      }, 400)
+    }
+
     // Check if already exists
     const existing = await getUsernameByName(c.env.DB, usernameData.canonical)
     if (existing) {
       return c.json({ ok: false, error: 'That username is already reserved' }, 409)
     }
 
-    await reserveUsername(c.env.DB, usernameData.display, usernameData.canonical, reason)
+    // Include override reason in the reserved_reason if provided
+    const finalReason = overrideReason ? `${reason} [Override: ${overrideReason}]` : reason
+    await reserveUsername(c.env.DB, usernameData.display, usernameData.canonical, finalReason)
+
+    if (overrideReason) {
+      console.log(`Admin override: reserved short name "${name}". Reason: ${overrideReason}`)
+    }
 
     return c.json({ ok: true, name, status: 'reserved' })
   } catch (error) {
@@ -215,8 +276,8 @@ admin.post('/username/revoke', async (c) => {
 
 admin.post('/username/assign', async (c) => {
   try {
-    const body = await c.req.json<{ name: string; pubkey: string }>()
-    const { name, pubkey } = body
+    const body = await c.req.json<{ name: string; pubkey: string; overrideReason?: string }>()
+    const { name, pubkey, overrideReason } = body
 
     if (!name || !pubkey) {
       return c.json({ ok: false, error: 'Name and pubkey are required' }, 400)
@@ -232,6 +293,16 @@ admin.post('/username/assign', async (c) => {
       throw error
     }
 
+    // Short names (1-2 chars) require override confirmation
+    const isShortName = usernameData.canonical.length < 3
+    if (isShortName && !overrideReason) {
+      return c.json({
+        ok: false,
+        error: 'Short names (1-2 characters) require override confirmation',
+        requiresOverride: true
+      }, 400)
+    }
+
     // Validate and normalize pubkey (accepts both hex and npub formats)
     let normalizedPubkey: string
     try {
@@ -245,9 +316,64 @@ admin.post('/username/assign', async (c) => {
 
     await assignUsername(c.env.DB, usernameData.display, usernameData.canonical, normalizedPubkey)
 
+    if (overrideReason) {
+      console.log(`Admin override: assigned short name "${name}" to ${normalizedPubkey.slice(0, 8)}... Reason: ${overrideReason}`)
+    }
+
     return c.json({ ok: true, name, pubkey: normalizedPubkey, status: 'active' })
   } catch (error) {
     console.error('Assign error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.get('/export/csv', async (c) => {
+  try {
+    const status = c.req.query('status') as 'active' | 'reserved' | 'revoked' | 'burned' | undefined
+
+    // Validate status parameter
+    const validStatuses = ['active', 'reserved', 'revoked', 'burned']
+    if (status && !validStatuses.includes(status)) {
+      return c.json({ ok: false, error: 'Invalid status parameter' }, 400)
+    }
+
+    const usernames = await exportUsernamesByStatus(c.env.DB, status)
+
+    // Build CSV content
+    const headers = ['name', 'pubkey', 'status', 'created_at', 'claimed_at', 'revoked_at', 'reserved_reason']
+    const csvRows = [headers.join(',')]
+
+    for (const u of usernames) {
+      const row = [
+        u.name,
+        u.pubkey || '',
+        u.status,
+        u.created_at ? new Date(u.created_at * 1000).toISOString() : '',
+        u.claimed_at ? new Date(u.claimed_at * 1000).toISOString() : '',
+        u.revoked_at ? new Date(u.revoked_at * 1000).toISOString() : '',
+        (u.reserved_reason || '').replace(/"/g, '""')
+      ]
+      // Escape fields that might contain commas or quotes
+      const escapedRow = row.map(field => {
+        if (field.includes(',') || field.includes('"') || field.includes('\n')) {
+          return `"${field}"`
+        }
+        return field
+      })
+      csvRows.push(escapedRow.join(','))
+    }
+
+    const csv = csvRows.join('\n')
+    const filename = status ? `usernames-${status}.csv` : 'usernames-all.csv'
+
+    return new Response(csv, {
+      headers: {
+        'Content-Type': 'text/csv',
+        'Content-Disposition': `attachment; filename="${filename}"`
+      }
+    })
+  } catch (error) {
+    console.error('Export error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
   }
 })

@@ -42,7 +42,34 @@ app.route('/api/admin', admin)
 // NIP-05
 app.route('', nip05)
 
-// Admin UI static files are served automatically via [assets] config in wrangler.toml
-// The assets middleware handles all static file serving including SPA routing
+// Admin UI SPA fallback - serve index.html for non-API routes on admin subdomain
+app.get('*', async (c) => {
+  const url = new URL(c.req.url)
+
+  // Only handle admin subdomain SPA routes
+  if (url.hostname === 'names.admin.divine.video') {
+    // Don't intercept API routes
+    if (url.pathname.startsWith('/api/')) {
+      return c.notFound()
+    }
+
+    // Try to serve static asset first
+    try {
+      const assetUrl = new URL(c.req.url)
+      const response = await c.env.ASSETS.fetch(assetUrl)
+      if (response.status !== 404) {
+        return response
+      }
+    } catch {
+      // Asset not found, fall through to index.html
+    }
+
+    // SPA fallback - serve index.html for client-side routing
+    const indexUrl = new URL('/', c.req.url)
+    return c.env.ASSETS.fetch(indexUrl)
+  }
+
+  return c.notFound()
+})
 
 export default app

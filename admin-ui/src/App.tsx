@@ -7,6 +7,7 @@ import Reserve from './pages/Reserve'
 import Assign from './pages/Assign'
 import Revoke from './pages/Revoke'
 import ReservedWords from './pages/ReservedWords'
+import UsernameDetail from './pages/UsernameDetail'
 
 function App() {
   return (
@@ -14,6 +15,7 @@ function App() {
       <Routes>
         <Route path="/" element={<Layout />}>
           <Route index element={<Dashboard />} />
+          <Route path="username/:name" element={<UsernameDetail />} />
           <Route path="reserve" element={<Reserve />} />
           <Route path="assign" element={<Assign />} />
           <Route path="revoke" element={<Revoke />} />

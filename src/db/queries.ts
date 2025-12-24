@@ -268,3 +268,46 @@ export async function getReservedWords(
 
   return result.results
 }
+
+export async function addReservedWord(
+  db: D1Database,
+  word: string,
+  category: string,
+  reason: string | null
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000)
+
+  await db.prepare(
+    `INSERT INTO reserved_words (word, category, reason, created_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(word) DO UPDATE SET
+       category = excluded.category,
+       reason = excluded.reason`
+  ).bind(word.toLowerCase(), category, reason, now).run()
+}
+
+export async function deleteReservedWord(
+  db: D1Database,
+  word: string
+): Promise<void> {
+  await db.prepare(
+    'DELETE FROM reserved_words WHERE word = ?'
+  ).bind(word.toLowerCase()).run()
+}
+
+export async function exportUsernamesByStatus(
+  db: D1Database,
+  status?: 'active' | 'reserved' | 'revoked' | 'burned'
+): Promise<Username[]> {
+  if (status) {
+    const result = await db.prepare(
+      'SELECT * FROM usernames WHERE status = ? ORDER BY name'
+    ).bind(status).all<Username>()
+    return result.results
+  }
+
+  const result = await db.prepare(
+    'SELECT * FROM usernames ORDER BY status, name'
+  ).all<Username>()
+  return result.results
+}
