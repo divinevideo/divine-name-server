@@ -18,7 +18,9 @@ nip05.get('/.well-known/nostr.json', async (c) => {
 
     if (subdomain) {
       // Subdomain NIP-05: return single user with "_" name
-      const username = await getUsernameByName(c.env.DB, subdomain)
+      // Normalize subdomain to lowercase for canonical lookup
+      const canonicalSubdomain = subdomain.toLowerCase()
+      const username = await getUsernameByName(c.env.DB, canonicalSubdomain)
 
       if (!username || username.status !== 'active' || !username.pubkey) {
         return c.notFound()
@@ -57,8 +59,9 @@ nip05.get('/.well-known/nostr.json', async (c) => {
         })
       }
 
-      // Query specific user by name
-      const username = await getUsernameByName(c.env.DB, name)
+      // Query specific user by name (normalize to lowercase for canonical lookup)
+      const canonicalName = name.toLowerCase()
+      const username = await getUsernameByName(c.env.DB, canonicalName)
 
       if (!username || username.status !== 'active' || !username.pubkey) {
         return c.json({ names: {} }, 200, {
@@ -67,9 +70,11 @@ nip05.get('/.well-known/nostr.json', async (c) => {
         })
       }
 
+      // Use display name if available, otherwise fall back to canonical/name
+      const displayName = username.username_display || username.name || canonicalName
       const response: any = {
         names: {
-          [username.name]: username.pubkey
+          [displayName]: username.pubkey
         }
       }
 

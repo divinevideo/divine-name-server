@@ -41,8 +41,9 @@ subdomain.get('/', async (c) => {
   }
 
   try {
-    // Look up username
-    const username = await getUsernameByName(c.env.DB, subdomainName)
+    // Look up username (normalize to lowercase for canonical lookup)
+    const canonicalSubdomain = subdomainName.toLowerCase()
+    const username = await getUsernameByName(c.env.DB, canonicalSubdomain)
 
     if (!username || username.status !== 'active' || !username.pubkey) {
       return c.html(`

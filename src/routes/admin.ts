@@ -82,8 +82,9 @@ admin.post('/username/reserve', async (c) => {
       return c.json({ ok: false, error: 'Name is required' }, 400)
     }
 
+    let usernameData: { display: string; canonical: string }
     try {
-      validateUsername(name)
+      usernameData = validateUsername(name)
     } catch (error) {
       if (error instanceof UsernameValidationError) {
         return c.json({ ok: false, error: error.message }, 400)
@@ -91,7 +92,13 @@ admin.post('/username/reserve', async (c) => {
       throw error
     }
 
-    await reserveUsername(c.env.DB, name, reason)
+    // Check if already exists
+    const existing = await getUsernameByName(c.env.DB, usernameData.canonical)
+    if (existing) {
+      return c.json({ ok: false, error: 'That username is already reserved' }, 409)
+    }
+
+    await reserveUsername(c.env.DB, usernameData.display, usernameData.canonical, reason)
 
     return c.json({ ok: true, name, status: 'reserved' })
   } catch (error) {
@@ -137,8 +144,14 @@ admin.post('/username/reserve-bulk', async (c) => {
     const results = []
     for (const name of nameList) {
       try {
-        validateUsername(name)
-        await reserveUsername(c.env.DB, name, reason)
+        const usernameData = validateUsername(name)
+        // Check if already exists
+        const existing = await getUsernameByName(c.env.DB, usernameData.canonical)
+        if (existing) {
+          results.push({ name, status: 'failed', success: false, error: 'That username is already reserved' })
+          continue
+        }
+        await reserveUsername(c.env.DB, usernameData.display, usernameData.canonical, reason)
         results.push({ name, status: 'reserved', success: true })
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error'
@@ -171,8 +184,9 @@ admin.post('/username/revoke', async (c) => {
       return c.json({ ok: false, error: 'Name is required' }, 400)
     }
 
+    let usernameData: { display: string; canonical: string }
     try {
-      validateUsername(name)
+      usernameData = validateUsername(name)
     } catch (error) {
       if (error instanceof UsernameValidationError) {
         return c.json({ ok: false, error: error.message }, 400)
@@ -180,12 +194,12 @@ admin.post('/username/revoke', async (c) => {
       throw error
     }
 
-    const existing = await getUsernameByName(c.env.DB, name)
+    const existing = await getUsernameByName(c.env.DB, usernameData.canonical)
     if (!existing) {
       return c.json({ ok: false, error: 'Username not found' }, 404)
     }
 
-    await revokeUsername(c.env.DB, name, burn)
+    await revokeUsername(c.env.DB, usernameData.canonical, burn)
 
     return c.json({
       ok: true,
@@ -208,8 +222,9 @@ admin.post('/username/assign', async (c) => {
       return c.json({ ok: false, error: 'Name and pubkey are required' }, 400)
     }
 
+    let usernameData: { display: string; canonical: string }
     try {
-      validateUsername(name)
+      usernameData = validateUsername(name)
     } catch (error) {
       if (error instanceof UsernameValidationError) {
         return c.json({ ok: false, error: error.message }, 400)
@@ -228,7 +243,7 @@ admin.post('/username/assign', async (c) => {
       throw error
     }
 
-    await assignUsername(c.env.DB, name, normalizedPubkey)
+    await assignUsername(c.env.DB, usernameData.display, usernameData.canonical, normalizedPubkey)
 
     return c.json({ ok: true, name, pubkey: normalizedPubkey, status: 'active' })
   } catch (error) {

@@ -35,15 +35,18 @@ username.post('/claim', async (c) => {
     const body = JSON.parse(bodyText) as { name: string; relays?: string[] }
     const { name, relays = null } = body
 
-    // Validate username format
+    // Validate username format and get canonical version
+    let usernameData: { display: string; canonical: string }
     try {
-      validateUsername(name)
+      usernameData = validateUsername(name)
     } catch (error) {
       if (error instanceof UsernameValidationError) {
         return c.json({ ok: false, error: error.message }, 400)
       }
       throw error
     }
+
+    const { display: nameDisplay, canonical: nameCanonical } = usernameData
 
     // Validate relays if provided
     if (relays !== null) {
@@ -57,17 +60,17 @@ username.post('/claim', async (c) => {
       }
     }
 
-    // Check if name is reserved
-    const reserved = await isReservedWord(c.env.DB, name)
+    // Check if name is reserved (check canonical)
+    const reserved = await isReservedWord(c.env.DB, nameCanonical)
     if (reserved) {
       return c.json({ ok: false, error: 'Username is reserved' }, 403)
     }
 
-    // Check if name exists
-    const existing = await getUsernameByName(c.env.DB, name)
+    // Check if name exists (using canonical for lookup)
+    const existing = await getUsernameByName(c.env.DB, nameCanonical)
     if (existing) {
       if (existing.status === 'active' && existing.pubkey !== pubkey) {
-        return c.json({ ok: false, error: 'Username already claimed' }, 409)
+        return c.json({ ok: false, error: 'That username is already reserved' }, 409)
       }
       if (existing.status === 'reserved') {
         return c.json({ ok: false, error: 'Username is reserved' }, 403)
@@ -80,23 +83,26 @@ username.post('/claim', async (c) => {
 
     // Check if pubkey already has an active username
     const currentUsername = await getUsernameByPubkey(c.env.DB, pubkey)
-    if (currentUsername && currentUsername.name !== name) {
-      // User is claiming a new username, old one will be auto-revoked
+    if (currentUsername) {
+      const currentCanonical = currentUsername.username_canonical || currentUsername.name?.toLowerCase()
+      if (currentCanonical !== nameCanonical) {
+        // User is claiming a new username, old one will be auto-revoked
+      }
     }
 
     // Claim the username
-    await claimUsername(c.env.DB, name, pubkey, relays)
+    await claimUsername(c.env.DB, nameDisplay, nameCanonical, pubkey, relays)
 
-    // Return success response
+    // Return success response (use display name for URLs)
     return c.json({
       ok: true,
-      name,
+      name: nameDisplay,
       pubkey,
-      profile_url: `https://${name}.divine.video/`,
+      profile_url: `https://${nameCanonical}.divine.video/`,
       nip05: {
-        main_domain: `${name}@divine.video`,
-        underscore_subdomain: `_@${name}.divine.video`,
-        host_style: `@${name}.divine.video`
+        main_domain: `${nameCanonical}@divine.video`,
+        underscore_subdomain: `_@${nameCanonical}.divine.video`,
+        host_style: `@${nameCanonical}.divine.video`
       }
     })
 

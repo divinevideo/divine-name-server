@@ -10,6 +10,8 @@ function createMockDB() {
     {
       id: 1,
       name: 'alice',
+      username_display: 'alice',
+      username_canonical: 'alice',
       pubkey: 'abc123',
       email: 'alice@example.com',
       relays: null,
@@ -25,6 +27,8 @@ function createMockDB() {
     {
       id: 2,
       name: 'bob',
+      username_display: 'bob',
+      username_canonical: 'bob',
       pubkey: 'def456',
       email: 'bob@example.com',
       relays: null,
@@ -40,6 +44,8 @@ function createMockDB() {
     {
       id: 3,
       name: 'charlie',
+      username_display: 'charlie',
+      username_canonical: 'charlie',
       pubkey: 'ghi789',
       email: 'charlie@example.com',
       relays: null,
@@ -73,7 +79,8 @@ function createMockDB() {
                 const hasSearchPattern = sql.includes('LIKE')
                 
                 if (hasSearchPattern) {
-                  // When there's a LIKE pattern, first 3 params are search patterns (all same value)
+                  // When there's a LIKE pattern, first 5 params are search patterns (all same value)
+                  // name, username_display, username_canonical, pubkey, email
                   const searchPattern = boundParams[0]
                   if (searchPattern && typeof searchPattern === 'string') {
                     // Remove LIKE wildcards and escape characters to get the actual search term
@@ -81,17 +88,19 @@ function createMockDB() {
                     if (searchTerm.length > 0) {
                       filtered = mockResults.filter(u =>
                         (u.name && u.name.includes(searchTerm)) ||
+                        (u.username_display && u.username_display.includes(searchTerm)) ||
+                        (u.username_canonical && u.username_canonical.includes(searchTerm)) ||
                         (u.pubkey && u.pubkey.includes(searchTerm)) ||
                         (u.email && u.email.includes(searchTerm))
                       )
                     }
                   }
                   
-                  // Status is at index 3 if search pattern exists (but only if it's not limit/offset)
-                  // Limit and offset are always the last 2 params, so status would be at index 3
-                  // only if boundParams.length > 5 (pattern, pattern, pattern, status, limit, offset)
-                  if (boundParams.length > 5 && typeof boundParams[3] === 'string') {
-                    filtered = filtered.filter(u => u.status === boundParams[3])
+                  // Status is at index 5 if search pattern exists (but only if it's not limit/offset)
+                  // Limit and offset are always the last 2 params, so status would be at index 5
+                  // only if boundParams.length > 7 (5 patterns, status, limit, offset)
+                  if (boundParams.length > 7 && typeof boundParams[5] === 'string') {
+                    filtered = filtered.filter(u => u.status === boundParams[5])
                   }
                 } else {
                   // No search pattern - check for status filter
@@ -114,7 +123,8 @@ function createMockDB() {
               const hasSearchPattern = sql.includes('LIKE')
               
               if (hasSearchPattern) {
-                // When there's a LIKE pattern, first 3 params are search patterns (all same value)
+                // When there's a LIKE pattern, first 5 params are search patterns (all same value)
+                // name, username_display, username_canonical, pubkey, email
                 // But limit and offset are always last two, so we need to exclude them
                 const searchPattern = boundParams[0]
                 if (searchPattern && typeof searchPattern === 'string') {
@@ -123,17 +133,19 @@ function createMockDB() {
                   if (searchTerm.length > 0) {
                     filtered = mockResults.filter(u =>
                       (u.name && u.name.includes(searchTerm)) ||
+                      (u.username_display && u.username_display.includes(searchTerm)) ||
+                      (u.username_canonical && u.username_canonical.includes(searchTerm)) ||
                       (u.pubkey && u.pubkey.includes(searchTerm)) ||
                       (u.email && u.email.includes(searchTerm))
                     )
                   }
                 }
                 
-                // Status is at index 3 if search pattern exists (but only if it's not limit/offset)
-                // Limit and offset are always the last 2 params, so status would be at index 3
-                // only if boundParams.length > 5 (pattern, pattern, pattern, status, limit, offset)
-                if (boundParams.length > 5 && typeof boundParams[3] === 'string') {
-                  filtered = filtered.filter(u => u.status === boundParams[3])
+                // Status is at index 5 if search pattern exists (but only if it's not limit/offset)
+                // Limit and offset are always the last 2 params, so status would be at index 5
+                // only if boundParams.length > 7 (5 patterns, status, limit, offset)
+                if (boundParams.length > 7 && typeof boundParams[5] === 'string') {
+                  filtered = filtered.filter(u => u.status === boundParams[5])
                 }
               } else {
                 // No search pattern - check for status filter

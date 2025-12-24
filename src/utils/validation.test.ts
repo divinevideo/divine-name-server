@@ -5,35 +5,140 @@ import { describe, it, expect } from 'vitest'
 import { validateUsername, UsernameValidationError, validateRelays, RelayValidationError, validateAndNormalizePubkey, PubkeyValidationError } from './validation'
 
 describe('validateUsername', () => {
-  it('should accept valid lowercase alphanumeric usernames', () => {
-    expect(() => validateUsername('alice')).not.toThrow()
-    expect(() => validateUsername('bob123')).not.toThrow()
-    expect(() => validateUsername('user2024')).not.toThrow()
+  describe('valid usernames', () => {
+    it('should accept single character', () => {
+      const result = validateUsername('a')
+      expect(result.display).toBe('a')
+      expect(result.canonical).toBe('a')
+    })
+
+    it('should accept single uppercase character', () => {
+      const result = validateUsername('A')
+      expect(result.display).toBe('A')
+      expect(result.canonical).toBe('a')
+    })
+
+    it('should accept lowercase usernames', () => {
+      const result = validateUsername('alice')
+      expect(result.display).toBe('alice')
+      expect(result.canonical).toBe('alice')
+    })
+
+    it('should accept mixed case usernames', () => {
+      const result = validateUsername('MrBeast')
+      expect(result.display).toBe('MrBeast')
+      expect(result.canonical).toBe('mrbeast')
+    })
+
+    it('should accept usernames with numbers', () => {
+      const result = validateUsername('bob123')
+      expect(result.display).toBe('bob123')
+      expect(result.canonical).toBe('bob123')
+    })
+
+    it('should accept usernames with hyphens', () => {
+      const result = validateUsername('m-r-beast-123')
+      expect(result.display).toBe('m-r-beast-123')
+      expect(result.canonical).toBe('m-r-beast-123')
+    })
+
+    it('should accept single digit', () => {
+      const result = validateUsername('0')
+      expect(result.display).toBe('0')
+      expect(result.canonical).toBe('0')
+    })
+
+    it('should accept 63 character username (DNS limit)', () => {
+      const longName = 'a'.repeat(63)
+      const result = validateUsername(longName)
+      expect(result.display).toBe(longName)
+      expect(result.canonical).toBe(longName)
+    })
+
+    it('should trim whitespace', () => {
+      const result = validateUsername('  alice  ')
+      expect(result.display).toBe('alice')
+      expect(result.canonical).toBe('alice')
+    })
   })
 
-  it('should reject usernames shorter than 3 characters', () => {
-    expect(() => validateUsername('ab')).toThrow(UsernameValidationError)
-    expect(() => validateUsername('ab')).toThrow('must be 3-20 characters')
+  describe('invalid usernames', () => {
+    it('should reject empty string', () => {
+      expect(() => validateUsername('')).toThrow(UsernameValidationError)
+      expect(() => validateUsername('')).toThrow('Username is required')
+    })
+
+    it('should reject whitespace only', () => {
+      expect(() => validateUsername('   ')).toThrow(UsernameValidationError)
+      expect(() => validateUsername('   ')).toThrow('Username is required')
+    })
+
+    it('should reject usernames longer than 63 characters', () => {
+      const longName = 'a'.repeat(64)
+      expect(() => validateUsername(longName)).toThrow(UsernameValidationError)
+      expect(() => validateUsername(longName)).toThrow('1–63 characters')
+    })
+
+    it('should reject usernames with underscores', () => {
+      expect(() => validateUsername('ab_')).toThrow(UsernameValidationError)
+      expect(() => validateUsername('ab_')).toThrow('letters, numbers, and hyphens')
+    })
+
+    it('should reject usernames with dots', () => {
+      expect(() => validateUsername('ab.cd')).toThrow(UsernameValidationError)
+      expect(() => validateUsername('ab.cd')).toThrow('letters, numbers, and hyphens')
+    })
+
+    it('should reject usernames starting with hyphen', () => {
+      expect(() => validateUsername('-abc')).toThrow(UsernameValidationError)
+      expect(() => validateUsername('-abc')).toThrow("can't start or end with a hyphen")
+    })
+
+    it('should reject usernames ending with hyphen', () => {
+      expect(() => validateUsername('abc-')).toThrow(UsernameValidationError)
+      expect(() => validateUsername('abc-')).toThrow("can't start or end with a hyphen")
+    })
+
+    it('should reject usernames with spaces', () => {
+      expect(() => validateUsername('a b')).toThrow(UsernameValidationError)
+      expect(() => validateUsername('a b')).toThrow('letters, numbers, and hyphens')
+    })
+
+    it('should reject usernames with unicode characters', () => {
+      expect(() => validateUsername('äbc')).toThrow(UsernameValidationError)
+      expect(() => validateUsername('äbc')).toThrow('letters, numbers, and hyphens')
+    })
+
+    it('should reject usernames with emojis', () => {
+      expect(() => validateUsername('abc😀')).toThrow(UsernameValidationError)
+      expect(() => validateUsername('abc😀')).toThrow('letters, numbers, and hyphens')
+    })
+
+    it('should allow multiple consecutive hyphens in middle', () => {
+      const result = validateUsername('a--b')
+      expect(result.display).toBe('a--b')
+      expect(result.canonical).toBe('a--b')
+    })
   })
 
-  it('should reject usernames longer than 20 characters', () => {
-    expect(() => validateUsername('a'.repeat(21))).toThrow(UsernameValidationError)
-    expect(() => validateUsername('a'.repeat(21))).toThrow('must be 3-20 characters')
-  })
+  describe('canonicalization', () => {
+    it('should preserve case in display but lowercase canonical', () => {
+      const result = validateUsername('MrBeast')
+      expect(result.display).toBe('MrBeast')
+      expect(result.canonical).toBe('mrbeast')
+    })
 
-  it('should reject usernames with uppercase letters', () => {
-    expect(() => validateUsername('Alice')).toThrow(UsernameValidationError)
-    expect(() => validateUsername('Alice')).toThrow('lowercase alphanumeric')
-  })
+    it('should handle all uppercase', () => {
+      const result = validateUsername('ALICE')
+      expect(result.display).toBe('ALICE')
+      expect(result.canonical).toBe('alice')
+    })
 
-  it('should reject usernames with special characters', () => {
-    expect(() => validateUsername('alice_123')).toThrow(UsernameValidationError)
-    expect(() => validateUsername('alice-bob')).toThrow(UsernameValidationError)
-    expect(() => validateUsername('alice.bob')).toThrow(UsernameValidationError)
-  })
-
-  it('should reject empty usernames', () => {
-    expect(() => validateUsername('')).toThrow(UsernameValidationError)
+    it('should handle mixed case with hyphens', () => {
+      const result = validateUsername('Mr-Beast-123')
+      expect(result.display).toBe('Mr-Beast-123')
+      expect(result.canonical).toBe('mr-beast-123')
+    })
   })
 })
 

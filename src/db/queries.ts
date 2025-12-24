@@ -3,7 +3,9 @@
 
 export interface Username {
   id: number
-  name: string
+  name: string // Legacy field, kept for backward compatibility
+  username_display: string | null
+  username_canonical: string | null
   pubkey: string | null
   email: string | null
   relays: string | null
@@ -49,9 +51,11 @@ export async function getUsernameByName(
   db: D1Database,
   name: string
 ): Promise<Username | null> {
+  // Normalize to lowercase for canonical lookup
+  const canonical = name.toLowerCase()
   const result = await db.prepare(
-    'SELECT * FROM usernames WHERE name = ?'
-  ).bind(name).first<Username>()
+    'SELECT * FROM usernames WHERE username_canonical = ? OR name = ?'
+  ).bind(canonical, name).first<Username>()
 
   return result
 }
@@ -69,7 +73,8 @@ export async function getUsernameByPubkey(
 
 export async function claimUsername(
   db: D1Database,
-  name: string,
+  nameDisplay: string,
+  nameCanonical: string,
   pubkey: string,
   relays: string[] | null
 ): Promise<void> {
@@ -85,17 +90,19 @@ export async function claimUsername(
      WHERE pubkey = ? AND status = 'active'`
   ).bind(now, now, pubkey).run()
 
-  // Then insert or update the new username
+  // Then insert or update the new username using canonical for uniqueness
   await db.prepare(
-    `INSERT INTO usernames (name, pubkey, relays, status, created_at, updated_at, claimed_at)
-     VALUES (?, ?, ?, 'active', ?, ?, ?)
-     ON CONFLICT(name) DO UPDATE SET
+    `INSERT INTO usernames (name, username_display, username_canonical, pubkey, relays, status, created_at, updated_at, claimed_at)
+     VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
+     ON CONFLICT(username_canonical) DO UPDATE SET
+       name = excluded.name,
+       username_display = excluded.username_display,
        pubkey = excluded.pubkey,
        relays = excluded.relays,
        status = 'active',
        updated_at = excluded.updated_at,
        claimed_at = excluded.claimed_at`
-  ).bind(name, pubkey, relaysJson, now, now, now).run()
+  ).bind(nameCanonical, nameDisplay, nameCanonical, pubkey, relaysJson, now, now, now).run()
 }
 
 export async function getAllActiveUsernames(
@@ -110,19 +117,22 @@ export async function getAllActiveUsernames(
 
 export async function reserveUsername(
   db: D1Database,
-  name: string,
+  nameDisplay: string,
+  nameCanonical: string,
   reason: string
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000)
 
   await db.prepare(
-    `INSERT INTO usernames (name, status, reserved_reason, created_at, updated_at)
-     VALUES (?, 'reserved', ?, ?, ?)
-     ON CONFLICT(name) DO UPDATE SET
+    `INSERT INTO usernames (name, username_display, username_canonical, status, reserved_reason, created_at, updated_at)
+     VALUES (?, ?, ?, 'reserved', ?, ?, ?)
+     ON CONFLICT(username_canonical) DO UPDATE SET
+       name = excluded.name,
+       username_display = excluded.username_display,
        status = 'reserved',
        reserved_reason = excluded.reserved_reason,
        updated_at = excluded.updated_at`
-  ).bind(name, reason, now, now).run()
+  ).bind(nameCanonical, nameDisplay, nameCanonical, reason, now, now).run()
 }
 
 export async function revokeUsername(
@@ -133,6 +143,7 @@ export async function revokeUsername(
   const now = Math.floor(Date.now() / 1000)
   const status = burn ? 'burned' : 'revoked'
   const recyclable = burn ? 0 : 1
+  const canonical = name.toLowerCase()
 
   await db.prepare(
     `UPDATE usernames
@@ -140,13 +151,14 @@ export async function revokeUsername(
          recyclable = ?,
          revoked_at = ?,
          updated_at = ?
-     WHERE name = ?`
-  ).bind(status, recyclable, now, now, name).run()
+     WHERE username_canonical = ? OR name = ?`
+  ).bind(status, recyclable, now, now, canonical, name).run()
 }
 
 export async function assignUsername(
   db: D1Database,
-  name: string,
+  nameDisplay: string,
+  nameCanonical: string,
   pubkey: string
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000)
@@ -160,16 +172,18 @@ export async function assignUsername(
      WHERE pubkey = ? AND status = 'active'`
   ).bind(now, now, pubkey).run()
 
-  // Assign username
+  // Assign username using canonical for uniqueness
   await db.prepare(
-    `INSERT INTO usernames (name, pubkey, status, created_at, updated_at, claimed_at)
-     VALUES (?, ?, 'active', ?, ?, ?)
-     ON CONFLICT(name) DO UPDATE SET
+    `INSERT INTO usernames (name, username_display, username_canonical, pubkey, status, created_at, updated_at, claimed_at)
+     VALUES (?, ?, ?, ?, 'active', ?, ?, ?)
+     ON CONFLICT(username_canonical) DO UPDATE SET
+       name = excluded.name,
+       username_display = excluded.username_display,
        pubkey = excluded.pubkey,
        status = 'active',
        updated_at = excluded.updated_at,
        claimed_at = excluded.claimed_at`
-  ).bind(name, pubkey, now, now, now).run()
+  ).bind(nameCanonical, nameDisplay, nameCanonical, pubkey, now, now, now).run()
 }
 
 function escapeLikePattern(str: string): string {
@@ -192,8 +206,8 @@ export async function searchUsernames(
   if (query && query.length > 0) {
     const escapedQuery = escapeLikePattern(query)
     const searchPattern = `%${escapedQuery}%`
-    whereClause = `(name LIKE ? OR pubkey LIKE ? OR email LIKE ?)`
-    queryParams.push(searchPattern, searchPattern, searchPattern)
+    whereClause = `(name LIKE ? OR username_display LIKE ? OR username_canonical LIKE ? OR pubkey LIKE ? OR email LIKE ?)`
+    queryParams.push(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern)
   }
 
   // Add status filter if provided

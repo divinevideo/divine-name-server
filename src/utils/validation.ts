@@ -17,18 +17,43 @@ export class PubkeyValidationError extends Error {
   }
 }
 
-export function validateUsername(username: string): void {
-  if (!username || username.length === 0) {
+/**
+ * Validates and canonicalizes a username according to DNS label rules
+ * @param username - The username to validate
+ * @returns Object with display (original case) and canonical (lowercase) versions
+ * @throws UsernameValidationError if validation fails
+ */
+export function validateUsername(username: string): { display: string; canonical: string } {
+  // Trim whitespace
+  const candidate = username.trim()
+
+  // Reject empty
+  if (!candidate || candidate.length === 0) {
     throw new UsernameValidationError('Username is required')
   }
 
-  if (username.length < 3 || username.length > 20) {
-    throw new UsernameValidationError('Username must be 3-20 characters')
+  // Reject if length < 1 or > 63 (DNS label limit)
+  if (candidate.length < 1 || candidate.length > 63) {
+    throw new UsernameValidationError('Usernames must be 1–63 characters')
   }
 
-  const validPattern = /^[a-z0-9]+$/
-  if (!validPattern.test(username)) {
-    throw new UsernameValidationError('Username must be lowercase alphanumeric')
+  // Reject if contains anything outside [A-Za-z0-9-]
+  const validPattern = /^[A-Za-z0-9-]+$/
+  if (!validPattern.test(candidate)) {
+    throw new UsernameValidationError('Usernames can only contain letters, numbers, and hyphens')
+  }
+
+  // Reject if starts or ends with hyphen
+  if (candidate.startsWith('-') || candidate.endsWith('-')) {
+    throw new UsernameValidationError("Usernames can't start or end with a hyphen")
+  }
+
+  // Canonicalize to lowercase
+  const canonical = candidate.toLowerCase()
+
+  return {
+    display: candidate,
+    canonical
   }
 }
 
