@@ -1,5 +1,5 @@
 // ABOUTME: Username and pubkey validation utilities for format checking
-// ABOUTME: Enforces 3-20 char lowercase alphanumeric requirement and pubkey formats
+// ABOUTME: Enforces DNS label rules (1-63 chars, alphanumeric+hyphens, case-insensitive) and pubkey formats
 
 import { bech32 } from '@scure/base'
 

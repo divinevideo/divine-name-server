@@ -126,8 +126,8 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: 'MrBeast' })
     })
     
-    const res = await app.request(req, { env: { DB: db } } as any)
-    
+    const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+
     expect(res.status).toBe(200)
     const json = await res.json() as any
     expect(json.ok).toBe(true)
@@ -137,7 +137,7 @@ describe('Username Claiming - Case Insensitive', () => {
   it('should prevent case-insensitive collisions', async () => {
     const app = createTestApp()
     const db = createMockDB()
-    
+
     // First claim: MrBeast
     const req1 = new Request('http://localhost/api/username/claim', {
       method: 'POST',
@@ -147,10 +147,10 @@ describe('Username Claiming - Case Insensitive', () => {
       },
       body: JSON.stringify({ name: 'MrBeast' })
     })
-    
-    const res1 = await app.request(req1, { env: { DB: db } } as any)
+
+    const res1 = await app.fetch(req1, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
     expect(res1.status).toBe(200)
-    
+
     // Second claim: mrbeast (should fail)
     vi.mocked(verifyNip98Event).mockResolvedValue('differentpubkey456')
     const req2 = new Request('http://localhost/api/username/claim', {
@@ -161,8 +161,8 @@ describe('Username Claiming - Case Insensitive', () => {
       },
       body: JSON.stringify({ name: 'mrbeast' })
     })
-    
-    const res2 = await app.request(req2, { env: { DB: db } } as any)
+
+    const res2 = await app.fetch(req2, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
     expect(res2.status).toBe(409) // Conflict
     const json2 = await res2.json() as any
     expect(json2.error).toBe('That username is already reserved')
@@ -181,7 +181,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: 'alice_123' })
     })
     
-    const res = await app.request(req, { env: { DB: createMockDB() } } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
     expect(res.status).toBe(400)
     const json = await res.json() as any
     expect(json.error).toContain('letters, numbers, and hyphens')
@@ -189,7 +189,7 @@ describe('Username Claiming - Case Insensitive', () => {
 
   it('should reject username starting with hyphen', async () => {
     const app = createTestApp()
-    
+
     const req = new Request('http://localhost/api/username/claim', {
       method: 'POST',
       headers: {
@@ -198,8 +198,8 @@ describe('Username Claiming - Case Insensitive', () => {
       },
       body: JSON.stringify({ name: '-alice' })
     })
-    
-    const res = await app.request(req, { env: { DB: createMockDB() } } as any)
+
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
     expect(res.status).toBe(400)
     const json = await res.json() as any
     expect(json.error).toContain("can't start or end with a hyphen")
@@ -207,7 +207,7 @@ describe('Username Claiming - Case Insensitive', () => {
 
   it('should reject username ending with hyphen', async () => {
     const app = createTestApp()
-    
+
     const req = new Request('http://localhost/api/username/claim', {
       method: 'POST',
       headers: {
@@ -216,8 +216,8 @@ describe('Username Claiming - Case Insensitive', () => {
       },
       body: JSON.stringify({ name: 'alice-' })
     })
-    
-    const res = await app.request(req, { env: { DB: createMockDB() } } as any)
+
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
     expect(res.status).toBe(400)
     const json = await res.json() as any
     expect(json.error).toContain("can't start or end with a hyphen")
@@ -236,7 +236,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: 'm-r-beast-123' })
     })
     
-    const res = await app.request(req, { env: { DB: db } } as any)
+    const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
     expect(res.status).toBe(200)
     const json = await res.json() as any
     expect(json.name).toBe('m-r-beast-123')
@@ -245,7 +245,7 @@ describe('Username Claiming - Case Insensitive', () => {
   it('should accept single character username', async () => {
     const app = createTestApp()
     const db = createMockDB()
-    
+
     const req = new Request('http://localhost/api/username/claim', {
       method: 'POST',
       headers: {
@@ -254,14 +254,14 @@ describe('Username Claiming - Case Insensitive', () => {
       },
       body: JSON.stringify({ name: 'a' })
     })
-    
-    const res = await app.request(req, { env: { DB: db } } as any)
+
+    const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
     expect(res.status).toBe(200)
   })
 
   it('should reject username longer than 63 characters', async () => {
     const app = createTestApp()
-    
+
     const longName = 'a'.repeat(64)
     const req = new Request('http://localhost/api/username/claim', {
       method: 'POST',
@@ -271,8 +271,8 @@ describe('Username Claiming - Case Insensitive', () => {
       },
       body: JSON.stringify({ name: longName })
     })
-    
-    const res = await app.request(req, { env: { DB: createMockDB() } } as any)
+
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
     expect(res.status).toBe(400)
     const json = await res.json() as any
     expect(json.error).toContain('1–63 characters')

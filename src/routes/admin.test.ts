@@ -150,11 +150,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search')
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -166,11 +162,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=')
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -183,11 +175,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=&status=active')
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -200,11 +188,7 @@ describe('Admin Search Endpoint', () => {
 
     const longQuery = 'a'.repeat(101)
     const req = new Request(`http://localhost/admin/usernames/search?q=${longQuery}`)
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -216,11 +200,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=test')
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -235,11 +215,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=test&status=invalid')
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -251,11 +227,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=test&page=-1')
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -267,11 +239,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=test&page=0')
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -283,11 +251,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=test&page=abc')
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -299,11 +263,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=test&limit=-1')
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -315,11 +275,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=test&limit=0')
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -331,11 +287,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=test&limit=xyz')
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -347,29 +299,21 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=')
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
     expect(json.ok).toBe(true)
     expect(json.results).toBeDefined()
     expect(json.pagination).toBeDefined()
-    expect(json.pagination.total).toBe(5) // Mock returns count of 5
+    expect(json.pagination.total).toBe(1) // Mock has 1 result
   })
 
   it('should return filtered results with empty query and status filter', async () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=&status=active')
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -381,11 +325,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=&page=1&limit=10')
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -398,11 +338,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=a')
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -426,11 +362,7 @@ describe('Admin Bulk Reserve Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ names: 'alice,bob,charlie' })
     })
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -447,11 +379,7 @@ describe('Admin Bulk Reserve Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ names: 'alice bob charlie' })
     })
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -467,11 +395,7 @@ describe('Admin Bulk Reserve Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ names: ['alice', 'bob', 'charlie'] })
     })
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -487,11 +411,7 @@ describe('Admin Bulk Reserve Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ names: 'alice, bob charlie,dave' })
     })
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -507,11 +427,7 @@ describe('Admin Bulk Reserve Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({})
     })
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -527,11 +443,7 @@ describe('Admin Bulk Reserve Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ names: '   ' }) // whitespace only
     })
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -548,11 +460,7 @@ describe('Admin Bulk Reserve Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ names: tooMany })
     })
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -568,11 +476,7 @@ describe('Admin Bulk Reserve Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ names: 'alice,bob,charlie' })
     })
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -597,11 +501,7 @@ describe('Admin Bulk Reserve Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ names: 'alice_123' })
     })
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -623,11 +523,7 @@ describe('Admin Bulk Reserve Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ names: '@alice,@bob,@@charlie' })
     })
-    const res = await app.fetch(req, { 
-      env: { DB: createMockDB() },
-      waitUntil: async () => {},
-      passThroughOnException: () => {}
-    } as any)
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any

@@ -11,6 +11,7 @@ UPDATE usernames SET username_display = name, username_canonical = LOWER(name) W
 -- Create unique index on username_canonical (enforces uniqueness going forward)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_usernames_canonical ON usernames(username_canonical);
 
--- Note: The original UNIQUE constraint on the 'name' column remains for backward compatibility,
--- but all new lookups and inserts should use username_canonical for case-insensitive matching.
+-- Note: Both `name` and `username_canonical` have UNIQUE constraints. This is intentional:
+-- DNS is case-insensitive, so "Alice" and "alice" are the same subdomain (alice.divine.video).
+-- The dual constraints provide belt-and-suspenders protection against case-variant duplicates.
 
