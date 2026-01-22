@@ -94,7 +94,7 @@ export async function verifyNip98Event(
 
   // Verify signature
   try {
-    const isValid = await schnorr.verify(
+    const isValid = await schnorr.verifyAsync(
       hexToBytes(event.sig),
       hexToBytes(event.id),
       hexToBytes(event.pubkey)
