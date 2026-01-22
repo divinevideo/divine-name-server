@@ -150,7 +150,10 @@ admin.post('/username/reserve', async (c) => {
     // Check if already exists
     const existing = await getUsernameByName(c.env.DB, usernameData.canonical)
     if (existing) {
-      return c.json({ ok: false, error: 'That username is already reserved' }, 409)
+      const error = existing.status === 'active'
+        ? 'That username is already taken'
+        : `That username is already ${existing.status}`
+      return c.json({ ok: false, error }, 409)
     }
 
     // Include override reason in the reserved_reason if provided
@@ -209,7 +212,10 @@ admin.post('/username/reserve-bulk', async (c) => {
         // Check if already exists
         const existing = await getUsernameByName(c.env.DB, usernameData.canonical)
         if (existing) {
-          results.push({ name, status: 'failed', success: false, error: 'That username is already reserved' })
+          const error = existing.status === 'active'
+            ? 'That username is already taken'
+            : `That username is already ${existing.status}`
+          results.push({ name, status: 'failed', success: false, error })
           continue
         }
         await reserveUsername(c.env.DB, usernameData.display, usernameData.canonical, reason)

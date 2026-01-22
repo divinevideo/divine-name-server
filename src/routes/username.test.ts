@@ -165,7 +165,7 @@ describe('Username Claiming - Case Insensitive', () => {
     const res2 = await app.fetch(req2, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
     expect(res2.status).toBe(409) // Conflict
     const json2 = await res2.json() as any
-    expect(json2.error).toBe('That username is already reserved')
+    expect(json2.error).toBe('That username is already taken')
   })
 
   it('should validate username format correctly', async () => {
