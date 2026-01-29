@@ -184,7 +184,7 @@ describe('Username Claiming - Case Insensitive', () => {
     const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
     expect(res.status).toBe(400)
     const json = await res.json() as any
-    expect(json.error).toContain('letters, numbers, and hyphens')
+    expect(json.error).toContain('underscores')
   })
 
   it('should reject username starting with hyphen', async () => {

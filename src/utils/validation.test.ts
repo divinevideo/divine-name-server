@@ -81,12 +81,12 @@ describe('validateUsername', () => {
 
     it('should reject usernames with underscores', () => {
       expect(() => validateUsername('ab_')).toThrow(UsernameValidationError)
-      expect(() => validateUsername('ab_')).toThrow('letters, numbers, and hyphens')
+      expect(() => validateUsername('ab_')).toThrow('underscores')
     })
 
     it('should reject usernames with dots', () => {
       expect(() => validateUsername('ab.cd')).toThrow(UsernameValidationError)
-      expect(() => validateUsername('ab.cd')).toThrow('letters, numbers, and hyphens')
+      expect(() => validateUsername('ab.cd')).toThrow('dots')
     })
 
     it('should reject usernames starting with hyphen', () => {
@@ -101,17 +101,12 @@ describe('validateUsername', () => {
 
     it('should reject usernames with spaces', () => {
       expect(() => validateUsername('a b')).toThrow(UsernameValidationError)
-      expect(() => validateUsername('a b')).toThrow('letters, numbers, and hyphens')
-    })
-
-    it('should reject usernames with unicode characters', () => {
-      expect(() => validateUsername('äbc')).toThrow(UsernameValidationError)
-      expect(() => validateUsername('äbc')).toThrow('letters, numbers, and hyphens')
+      expect(() => validateUsername('a b')).toThrow('spaces')
     })
 
     it('should reject usernames with emojis', () => {
       expect(() => validateUsername('abc😀')).toThrow(UsernameValidationError)
-      expect(() => validateUsername('abc😀')).toThrow('letters, numbers, and hyphens')
+      expect(() => validateUsername('abc😀')).toThrow('emojis')
     })
 
     it('should allow multiple consecutive hyphens in middle', () => {
@@ -138,6 +133,120 @@ describe('validateUsername', () => {
       const result = validateUsername('Mr-Beast-123')
       expect(result.display).toBe('Mr-Beast-123')
       expect(result.canonical).toBe('mr-beast-123')
+    })
+  })
+
+  describe('internationalized domain names (IDN)', () => {
+    it('should accept Japanese characters', () => {
+      const result = validateUsername('日本語')
+      expect(result.display).toBe('日本語')
+      expect(result.canonical).toBe('xn--wgv71a119e')
+    })
+
+    it('should accept Chinese characters', () => {
+      const result = validateUsername('中文')
+      expect(result.display).toBe('中文')
+      expect(result.canonical).toBe('xn--fiq228c')
+    })
+
+    it('should accept Korean characters', () => {
+      const result = validateUsername('한국어')
+      expect(result.display).toBe('한국어')
+      expect(result.canonical).toMatch(/^xn--/)
+    })
+
+    it('should accept Thai characters', () => {
+      const result = validateUsername('ไทย')
+      expect(result.display).toBe('ไทย')
+      expect(result.canonical).toBe('xn--o3cw4h')
+    })
+
+    it('should accept Arabic characters', () => {
+      const result = validateUsername('عربي')
+      expect(result.display).toBe('عربي')
+      expect(result.canonical).toBe('xn--ngbrx4e')
+    })
+
+    it('should accept Cyrillic characters', () => {
+      const result = validateUsername('русский')
+      expect(result.display).toBe('русский')
+      expect(result.canonical).toMatch(/^xn--/)
+    })
+
+    it('should accept German umlauts', () => {
+      const result = validateUsername('münchen')
+      expect(result.display).toBe('münchen')
+      expect(result.canonical).toBe('xn--mnchen-3ya')
+    })
+
+    it('should accept accented Latin characters', () => {
+      const result = validateUsername('café')
+      expect(result.display).toBe('café')
+      expect(result.canonical).toBe('xn--caf-dma')
+    })
+
+    it('should accept mixed Unicode and ASCII', () => {
+      const result = validateUsername('user日本')
+      expect(result.display).toBe('user日本')
+      expect(result.canonical).toMatch(/^xn--/)
+    })
+
+    it('should accept Unicode with hyphens', () => {
+      const result = validateUsername('日本-語')
+      expect(result.display).toBe('日本-語')
+      // Hyphen is preserved in punycode encoding
+      expect(result.canonical).toMatch(/^xn--/)
+    })
+
+    it('should reject Unicode starting with hyphen', () => {
+      expect(() => validateUsername('-日本語')).toThrow(UsernameValidationError)
+      expect(() => validateUsername('-日本語')).toThrow("can't start or end with a hyphen")
+    })
+
+    it('should reject Unicode ending with hyphen', () => {
+      expect(() => validateUsername('日本語-')).toThrow(UsernameValidationError)
+      expect(() => validateUsername('日本語-')).toThrow("can't start or end with a hyphen")
+    })
+
+    it('should reject punycode that exceeds 63 characters', () => {
+      // Very long Unicode string that would exceed 63 chars in punycode
+      const longUnicode = '日本語'.repeat(20)
+      expect(() => validateUsername(longUnicode)).toThrow(UsernameValidationError)
+      expect(() => validateUsername(longUnicode)).toThrow('too long')
+    })
+
+    it('should reject invalid Unicode combining sequences', () => {
+      // Zero-width joiner without proper context
+      expect(() => validateUsername('a\u200Db')).toThrow(UsernameValidationError)
+    })
+
+    it('should reject usernames with only combining marks', () => {
+      // Combining diacritical marks without base character
+      expect(() => validateUsername('\u0300\u0301')).toThrow(UsernameValidationError)
+    })
+
+    it('should handle single Unicode character', () => {
+      const result = validateUsername('中')
+      expect(result.display).toBe('中')
+      expect(result.canonical).toBe('xn--fiq')
+    })
+
+    it('should reject ASCII hyphens at positions 3-4 (reserved for ACE prefix)', () => {
+      // "ab--cd" has hyphens at positions 3 and 4, which is reserved for punycode
+      expect(() => validateUsername('ab--cd')).toThrow(UsernameValidationError)
+      expect(() => validateUsername('ab--cd')).toThrow('positions 3 and 4')
+    })
+
+    it('should allow hyphens at other positions', () => {
+      const result = validateUsername('a--bcd')
+      expect(result.display).toBe('a--bcd')
+      expect(result.canonical).toBe('a--bcd')
+    })
+
+    it('should allow hyphens after position 4', () => {
+      const result = validateUsername('abcd--ef')
+      expect(result.display).toBe('abcd--ef')
+      expect(result.canonical).toBe('abcd--ef')
     })
   })
 })

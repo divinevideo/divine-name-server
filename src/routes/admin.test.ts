@@ -512,7 +512,7 @@ describe('Admin Bulk Reserve Endpoint', () => {
     const result = json.results[0]
     expect(result.name).toBe('alice_123')
     expect(result.success).toBe(false)
-    expect(result.error).toContain('letters, numbers, and hyphens')
+    expect(result.error).toContain('underscores')
   })
 
   it('should strip @ symbols from usernames', async () => {

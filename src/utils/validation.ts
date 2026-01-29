@@ -1,5 +1,5 @@
 // ABOUTME: Username and pubkey validation utilities for format checking
-// ABOUTME: Enforces DNS label rules (1-63 chars, alphanumeric+hyphens, case-insensitive) and pubkey formats
+// ABOUTME: Enforces IDNA 2008 rules for internationalized domain names (Unicode + ASCII)
 
 import { bech32 } from '@scure/base'
 
@@ -18,9 +18,35 @@ export class PubkeyValidationError extends Error {
 }
 
 /**
- * Validates and canonicalizes a username according to DNS label rules
- * @param username - The username to validate
- * @returns Object with display (original case) and canonical (lowercase) versions
+ * Converts a Unicode domain label to its ASCII/Punycode equivalent using IDNA
+ * @param label - The Unicode label to convert
+ * @returns The ASCII-compatible encoding (punycode if needed)
+ */
+function toAsciiLabel(label: string): string {
+  // Use URL API for IDNA conversion - it handles punycode encoding
+  try {
+    const url = new URL(`http://${label}.test`)
+    // Extract just the first label (before .test)
+    const hostname = url.hostname
+    const asciiLabel = hostname.split('.')[0]
+    return asciiLabel
+  } catch {
+    throw new UsernameValidationError('Username contains invalid characters for domain names')
+  }
+}
+
+/**
+ * Checks if a string contains only ASCII characters valid for domain labels
+ */
+function isAsciiLabel(str: string): boolean {
+  return /^[A-Za-z0-9-]+$/.test(str)
+}
+
+/**
+ * Validates and canonicalizes a username according to IDNA 2008 rules
+ * Supports both ASCII usernames and internationalized (Unicode) usernames
+ * @param username - The username to validate (can be ASCII or Unicode)
+ * @returns Object with display (original) and canonical (ASCII/punycode lowercase) versions
  * @throws UsernameValidationError if validation fails
  */
 export function validateUsername(username: string): { display: string; canonical: string } {
@@ -32,24 +58,70 @@ export function validateUsername(username: string): { display: string; canonical
     throw new UsernameValidationError('Username is required')
   }
 
-  // Reject if length < 1 or > 63 (DNS label limit)
-  if (candidate.length < 1 || candidate.length > 63) {
+  // Basic length check on input (generous limit for Unicode)
+  if (candidate.length > 63) {
     throw new UsernameValidationError('Usernames must be 1–63 characters')
   }
 
-  // Reject if contains anything outside [A-Za-z0-9-]
-  const validPattern = /^[A-Za-z0-9-]+$/
-  if (!validPattern.test(candidate)) {
-    throw new UsernameValidationError('Usernames can only contain letters, numbers, and hyphens')
-  }
-
-  // Reject if starts or ends with hyphen
+  // Reject if starts or ends with hyphen (applies to both Unicode and ASCII)
   if (candidate.startsWith('-') || candidate.endsWith('-')) {
     throw new UsernameValidationError("Usernames can't start or end with a hyphen")
   }
 
-  // Canonicalize to lowercase
-  const canonical = candidate.toLowerCase()
+  // Reject invalid characters that are never allowed in domain names
+  // This catches spaces, underscores, dots, and other punctuation early
+  const invalidChars = /[\s_.@!#$%^&*()+=\[\]{}|\\:;"'<>,?/`~]/
+  if (invalidChars.test(candidate)) {
+    throw new UsernameValidationError('Usernames cannot contain spaces, underscores, dots, or special characters')
+  }
+
+  // Reject emojis and other symbols - they are not valid in IDN
+  // Unicode emoji ranges: various blocks including symbols, pictographs, emoticons
+  const emojiPattern = /[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\u{1F600}-\u{1F64F}]|[\u{1F680}-\u{1F6FF}]|[\u{1FA00}-\u{1FAFF}]/u
+  if (emojiPattern.test(candidate)) {
+    throw new UsernameValidationError('Usernames cannot contain emojis')
+  }
+
+  let canonical: string
+
+  // Check if it's pure ASCII or contains Unicode
+  if (isAsciiLabel(candidate)) {
+    // Pure ASCII path - simple lowercase
+    canonical = candidate.toLowerCase()
+  } else {
+    // Unicode path - convert to punycode via IDNA
+    try {
+      canonical = toAsciiLabel(candidate.toLowerCase())
+    } catch (e) {
+      if (e instanceof UsernameValidationError) {
+        throw e
+      }
+      throw new UsernameValidationError('Username contains invalid characters for domain names')
+    }
+
+    // Verify the conversion produced valid output
+    if (!canonical || canonical.length === 0) {
+      throw new UsernameValidationError('Username contains invalid characters for domain names')
+    }
+  }
+
+  // Validate canonical form length (DNS label limit is 63 octets)
+  if (canonical.length > 63) {
+    throw new UsernameValidationError('Username is too long when encoded for DNS (max 63 characters)')
+  }
+
+  // Validate canonical form is valid ASCII label
+  if (!isAsciiLabel(canonical)) {
+    throw new UsernameValidationError('Username contains invalid characters for domain names')
+  }
+
+  // IDNA rule: labels cannot have hyphens at positions 3 and 4 unless it's a valid ACE prefix (xn--)
+  // This prevents confusion with punycode-encoded labels
+  if (canonical.length >= 4 && canonical[2] === '-' && canonical[3] === '-') {
+    if (!canonical.startsWith('xn--')) {
+      throw new UsernameValidationError('Usernames cannot have hyphens at positions 3 and 4')
+    }
+  }
 
   return {
     display: candidate,
