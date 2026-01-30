@@ -4,9 +4,12 @@
 import { Hono } from 'hono'
 import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus } from '../db/queries'
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
+import { syncUsernameToFastly, deleteUsernameFromFastly } from '../utils/fastly-sync'
 
 type Bindings = {
   DB: D1Database
+  FASTLY_API_TOKEN?: string
+  FASTLY_STORE_ID?: string
 }
 
 const admin = new Hono<{ Bindings: Bindings }>()
@@ -268,6 +271,17 @@ admin.post('/username/revoke', async (c) => {
 
     await revokeUsername(c.env.DB, usernameData.canonical, burn)
 
+    // Sync to Fastly - mark as revoked/burned or delete
+    c.executionCtx.waitUntil(
+      burn
+        ? deleteUsernameFromFastly(c.env, usernameData.canonical)
+        : syncUsernameToFastly(c.env, usernameData.canonical, {
+            pubkey: existing.pubkey || '',
+            relays: [],
+            status: burn ? 'burned' : 'revoked'
+          })
+    )
+
     return c.json({
       ok: true,
       name,
@@ -321,6 +335,15 @@ admin.post('/username/assign', async (c) => {
     }
 
     await assignUsername(c.env.DB, usernameData.display, usernameData.canonical, normalizedPubkey)
+
+    // Sync to Fastly KV for edge routing
+    c.executionCtx.waitUntil(
+      syncUsernameToFastly(c.env, usernameData.canonical, {
+        pubkey: normalizedPubkey,
+        relays: [],
+        status: 'active'
+      })
+    )
 
     if (overrideReason) {
       console.log(`Admin override: assigned short name "${name}" to ${normalizedPubkey.slice(0, 8)}... Reason: ${overrideReason}`)

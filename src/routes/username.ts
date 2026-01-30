@@ -10,9 +10,12 @@ import {
   getUsernameByPubkey,
   claimUsername
 } from '../db/queries'
+import { syncUsernameToFastly } from '../utils/fastly-sync'
 
 type Bindings = {
   DB: D1Database
+  FASTLY_API_TOKEN?: string
+  FASTLY_STORE_ID?: string
 }
 
 const username = new Hono<{ Bindings: Bindings }>()
@@ -92,6 +95,15 @@ username.post('/claim', async (c) => {
 
     // Claim the username
     await claimUsername(c.env.DB, nameDisplay, nameCanonical, pubkey, relays)
+
+    // Sync to Fastly KV for edge routing (async, don't block response)
+    c.executionCtx.waitUntil(
+      syncUsernameToFastly(c.env, nameCanonical, {
+        pubkey,
+        relays: relays || [],
+        status: 'active'
+      })
+    )
 
     // Return success response (use display name for URLs)
     return c.json({

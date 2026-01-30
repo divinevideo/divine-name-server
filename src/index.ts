@@ -10,6 +10,8 @@ import admin from './routes/admin'
 type Bindings = {
   DB: D1Database
   ASSETS: Fetcher
+  FASTLY_API_TOKEN?: string
+  FASTLY_STORE_ID?: string
 }
 
 const app = new Hono<{ Bindings: Bindings }>()

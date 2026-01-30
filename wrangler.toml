@@ -2,6 +2,12 @@ name = "divine-name-server"
 main = "src/index.ts"
 compatibility_date = "2024-11-15"
 
+# Fastly KV sync (for divine-router edge)
+# Set via wrangler secret put FASTLY_API_TOKEN
+# Set via wrangler secret put FASTLY_STORE_ID
+[vars]
+# FASTLY_STORE_ID = "your-store-id" # Set as secret in production
+
 # Routes
 routes = [
   { pattern = "divine.video/.well-known/*", zone_name = "divine.video" },
