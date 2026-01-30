@@ -4,6 +4,7 @@
 import { Hono } from 'hono'
 import { getUsernameByName } from '../db/queries'
 import { getSubdomain } from '../utils/subdomain'
+import { validateUsername } from '../utils/validation'
 
 type Bindings = {
   DB: D1Database
@@ -18,8 +19,14 @@ nip05.get('/.well-known/nostr.json', async (c) => {
 
     if (subdomain) {
       // Subdomain NIP-05: return single user with "_" name
-      // Normalize subdomain to lowercase for canonical lookup
-      const canonicalSubdomain = subdomain.toLowerCase()
+      // Convert subdomain to canonical form (handles Unicode → punycode)
+      let canonicalSubdomain: string
+      try {
+        const validated = validateUsername(subdomain)
+        canonicalSubdomain = validated.canonical
+      } catch {
+        return c.notFound()
+      }
       const username = await getUsernameByName(c.env.DB, canonicalSubdomain)
 
       if (!username || username.status !== 'active' || !username.pubkey) {
@@ -59,8 +66,18 @@ nip05.get('/.well-known/nostr.json', async (c) => {
         })
       }
 
-      // Query specific user by name (normalize to lowercase for canonical lookup)
-      const canonicalName = name.toLowerCase()
+      // Convert name to canonical form (handles Unicode → punycode)
+      let canonicalName: string
+      try {
+        const validated = validateUsername(name)
+        canonicalName = validated.canonical
+      } catch {
+        // Invalid username format - return empty result
+        return c.json({ names: {} }, 200, {
+          'Cache-Control': 'public, max-age=60',
+          'Access-Control-Allow-Origin': '*'
+        })
+      }
       const username = await getUsernameByName(c.env.DB, canonicalName)
 
       if (!username || username.status !== 'active' || !username.pubkey) {
@@ -70,11 +87,13 @@ nip05.get('/.well-known/nostr.json', async (c) => {
         })
       }
 
-      // Use display name if available, otherwise fall back to canonical/name
-      const displayName = username.username_display || username.name || canonicalName
+      // Use the queried name in response (preserves what client asked for)
+      // This ensures clients that query with punycode get punycode back,
+      // and clients that query with Unicode get Unicode back
+      const responseName = name.trim()
       const response: any = {
         names: {
-          [displayName]: username.pubkey
+          [responseName]: username.pubkey
         }
       }
 
