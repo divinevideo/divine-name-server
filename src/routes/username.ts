@@ -1,5 +1,6 @@
-// ABOUTME: Username claiming endpoint with NIP-98 authentication
-// ABOUTME: Handles POST /api/username/claim for users to claim usernames
+// ABOUTME: Username API endpoints for claiming and checking usernames
+// ABOUTME: Public endpoints: GET /check/:name, GET /by-pubkey/:pubkey
+// ABOUTME: Authenticated: POST /claim (NIP-98 auth - works for both custodial and non-custodial users)
 
 import { Hono } from 'hono'
 import { verifyNip98Event } from '../middleware/nip98'
@@ -19,6 +20,118 @@ type Bindings = {
 }
 
 const username = new Hono<{ Bindings: Bindings }>()
+
+// Public endpoint: check username availability (no auth required)
+// Used by Flutter app and web clients before attempting to claim
+username.get('/check/:name', async (c) => {
+  try {
+    const name = c.req.param('name')
+
+    // Validate username format
+    let usernameData: { display: string; canonical: string }
+    try {
+      usernameData = validateUsername(name)
+    } catch (error) {
+      if (error instanceof UsernameValidationError) {
+        return c.json({
+          ok: true,
+          available: false,
+          name,
+          reason: error.message
+        }, 200, { 'Access-Control-Allow-Origin': '*' })
+      }
+      throw error
+    }
+
+    // Check if reserved word
+    const reserved = await isReservedWord(c.env.DB, usernameData.canonical)
+    if (reserved) {
+      return c.json({
+        ok: true,
+        available: false,
+        name: usernameData.display,
+        canonical: usernameData.canonical,
+        reason: 'Username is reserved'
+      }, 200, { 'Access-Control-Allow-Origin': '*' })
+    }
+
+    // Check if already exists
+    const existing = await getUsernameByName(c.env.DB, usernameData.canonical)
+    if (existing) {
+      const reason = existing.status === 'active'
+        ? 'Username is already taken'
+        : existing.status === 'reserved'
+        ? 'Username is reserved'
+        : existing.status === 'burned'
+        ? 'Username is permanently unavailable'
+        : 'Username is unavailable'
+
+      return c.json({
+        ok: true,
+        available: existing.status === 'revoked', // Revoked usernames can be recycled
+        name: usernameData.display,
+        canonical: usernameData.canonical,
+        status: existing.status,
+        reason: existing.status === 'revoked' ? undefined : reason
+      }, 200, { 'Access-Control-Allow-Origin': '*' })
+    }
+
+    // Username is available
+    return c.json({
+      ok: true,
+      available: true,
+      name: usernameData.display,
+      canonical: usernameData.canonical
+    }, 200, { 'Access-Control-Allow-Origin': '*' })
+
+  } catch (error) {
+    console.error('Check error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+// Public endpoint: get username details by pubkey (no auth required)
+// Useful for checking if a pubkey already has a username
+username.get('/by-pubkey/:pubkey', async (c) => {
+  try {
+    const pubkey = c.req.param('pubkey')
+
+    // Basic hex validation
+    if (!/^[0-9a-f]{64}$/i.test(pubkey)) {
+      return c.json({
+        ok: false,
+        error: 'Invalid pubkey format (expected 64 hex characters)'
+      }, 400, { 'Access-Control-Allow-Origin': '*' })
+    }
+
+    const existing = await getUsernameByPubkey(c.env.DB, pubkey.toLowerCase())
+
+    if (!existing) {
+      return c.json({
+        ok: true,
+        found: false
+      }, 200, { 'Access-Control-Allow-Origin': '*' })
+    }
+
+    return c.json({
+      ok: true,
+      found: true,
+      name: existing.username_display || existing.name,
+      canonical: existing.username_canonical || existing.name?.toLowerCase(),
+      pubkey: existing.pubkey,
+      profile_url: `https://${existing.username_canonical || existing.name?.toLowerCase()}.divine.video/`,
+      nip05: {
+        main_domain: `${existing.username_canonical || existing.name?.toLowerCase()}@divine.video`,
+        underscore_subdomain: `_@${existing.username_canonical || existing.name?.toLowerCase()}.divine.video`,
+        host_style: `@${existing.username_canonical || existing.name?.toLowerCase()}.divine.video`
+      }
+    }, 200, { 'Access-Control-Allow-Origin': '*' })
+
+  } catch (error) {
+    console.error('By-pubkey error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
 
 username.post('/claim', async (c) => {
   try {

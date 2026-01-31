@@ -279,3 +279,95 @@ describe('Username Claiming - Case Insensitive', () => {
   })
 })
 
+describe('Public Username Endpoints', () => {
+  function createTestApp() {
+    const app = new Hono<{ Bindings: { DB: D1Database } }>()
+    app.route('/api/username', username)
+    return app
+  }
+
+  describe('GET /check/:name - Availability Check', () => {
+    it('should return available for unused username', async () => {
+      const app = createTestApp()
+      const db = createMockDB()
+
+      const req = new Request('http://localhost/api/username/check/newuser', {
+        method: 'GET'
+      })
+
+      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+      expect(res.status).toBe(200)
+      const json = await res.json() as any
+      expect(json.ok).toBe(true)
+      expect(json.available).toBe(true)
+      expect(json.canonical).toBe('newuser')
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
+    })
+
+    it('should return unavailable for invalid username format', async () => {
+      const app = createTestApp()
+      const db = createMockDB()
+
+      const req = new Request('http://localhost/api/username/check/bad_user', {
+        method: 'GET'
+      })
+
+      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+      expect(res.status).toBe(200)
+      const json = await res.json() as any
+      expect(json.ok).toBe(true)
+      expect(json.available).toBe(false)
+      expect(json.reason).toContain('underscores')
+    })
+
+    it('should preserve display case in response', async () => {
+      const app = createTestApp()
+      const db = createMockDB()
+
+      const req = new Request('http://localhost/api/username/check/MrBeast', {
+        method: 'GET'
+      })
+
+      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+      expect(res.status).toBe(200)
+      const json = await res.json() as any
+      expect(json.name).toBe('MrBeast')
+      expect(json.canonical).toBe('mrbeast')
+    })
+  })
+
+  describe('GET /by-pubkey/:pubkey - Lookup by Pubkey', () => {
+    it('should return found:false for unknown pubkey', async () => {
+      const app = createTestApp()
+      const db = createMockDB()
+
+      const pubkey = 'a'.repeat(64)
+      const req = new Request(`http://localhost/api/username/by-pubkey/${pubkey}`, {
+        method: 'GET'
+      })
+
+      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+      expect(res.status).toBe(200)
+      const json = await res.json() as any
+      expect(json.ok).toBe(true)
+      expect(json.found).toBe(false)
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
+    })
+
+    it('should reject invalid pubkey format', async () => {
+      const app = createTestApp()
+      const db = createMockDB()
+
+      const req = new Request('http://localhost/api/username/by-pubkey/invalidpubkey', {
+        method: 'GET'
+      })
+
+      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+      expect(res.status).toBe(400)
+      const json = await res.json() as any
+      expect(json.ok).toBe(false)
+      expect(json.error).toContain('Invalid pubkey format')
+    })
+  })
+})
+
