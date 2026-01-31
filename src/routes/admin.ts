@@ -356,6 +356,98 @@ admin.post('/username/assign', async (c) => {
   }
 })
 
+admin.post('/username/assign-bulk', async (c) => {
+  try {
+    const body = await c.req.json<{
+      assignments: Array<{ name: string; pubkey: string }>;
+      overrideShortNames?: boolean;
+      skipExisting?: boolean;
+    }>()
+    const { assignments, overrideShortNames = false, skipExisting = true } = body
+
+    if (!assignments || !Array.isArray(assignments)) {
+      return c.json({ ok: false, error: 'Assignments array is required' }, 400)
+    }
+
+    if (assignments.length === 0) {
+      return c.json({ ok: false, error: 'No assignments provided' }, 400)
+    }
+
+    if (assignments.length > 1000) {
+      return c.json({ ok: false, error: 'Maximum 1000 assignments per request' }, 400)
+    }
+
+    // Process each assignment
+    const results = []
+    for (const assignment of assignments) {
+      const { name, pubkey } = assignment
+
+      if (!name || !pubkey) {
+        results.push({ name: name || '(missing)', success: false, error: 'Name and pubkey are required' })
+        continue
+      }
+
+      try {
+        const usernameData = validateUsername(name)
+
+        // Short names require override flag
+        const isShortName = usernameData.canonical.length < 3
+        if (isShortName && !overrideShortNames) {
+          results.push({ name, success: false, error: 'Short name (1-2 chars) - set overrideShortNames: true to assign' })
+          continue
+        }
+
+        // Validate pubkey
+        const normalizedPubkey = validateAndNormalizePubkey(pubkey)
+
+        // Check if already exists
+        const existing = await getUsernameByName(c.env.DB, usernameData.canonical)
+        if (existing) {
+          if (existing.pubkey === normalizedPubkey) {
+            // Already assigned to this pubkey
+            results.push({ name, pubkey: normalizedPubkey, success: true, status: 'already_assigned' })
+            continue
+          }
+          if (skipExisting) {
+            results.push({ name, success: false, error: `Already ${existing.status} by another pubkey`, status: existing.status })
+            continue
+          }
+        }
+
+        await assignUsername(c.env.DB, usernameData.display, usernameData.canonical, normalizedPubkey)
+
+        // Sync to Fastly (fire and forget)
+        c.executionCtx.waitUntil(
+          syncUsernameToFastly(c.env, usernameData.canonical, {
+            pubkey: normalizedPubkey,
+            relays: [],
+            status: 'active'
+          })
+        )
+
+        results.push({ name, pubkey: normalizedPubkey, success: true, status: 'assigned' })
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+        results.push({ name, success: false, error: errorMessage })
+      }
+    }
+
+    const successCount = results.filter(r => r.success).length
+    const failureCount = results.filter(r => !r.success).length
+
+    return c.json({
+      ok: true,
+      total: assignments.length,
+      successful: successCount,
+      failed: failureCount,
+      results
+    })
+  } catch (error) {
+    console.error('Bulk assign error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
 admin.get('/export/csv', async (c) => {
   try {
     const status = c.req.query('status') as 'active' | 'reserved' | 'revoked' | 'burned' | undefined
