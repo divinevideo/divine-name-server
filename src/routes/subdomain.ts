@@ -1,5 +1,5 @@
 // ABOUTME: Subdomain profile routing middleware
-// ABOUTME: Proxies username.divine.video to main app's profile page
+// ABOUTME: Serves SPA at username.divine.video with injected user data for client-side routing
 
 import { Hono } from 'hono'
 import { getUsernameByName } from '../db/queries'
@@ -31,13 +31,28 @@ function hexToNpub(hex: string): string {
   return bech32.encode('npub', words)
 }
 
-subdomain.get('/', async (c) => {
-  const hostname = new URL(c.req.url).hostname
+// Static asset extensions to pass through to origin
+const ASSET_EXTENSIONS = ['.js', '.css', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.webp', '.avif', '.woff', '.woff2', '.ttf', '.otf', '.json', '.webmanifest', '.map']
+
+subdomain.get('*', async (c) => {
+  const url = new URL(c.req.url)
+  const hostname = url.hostname
   const subdomainName = getSubdomain(hostname)
 
   if (!subdomainName) {
     // Not a subdomain, pass through
     return c.notFound()
+  }
+
+  // Check if this is a static asset request - proxy to main app
+  const isAsset = ASSET_EXTENSIONS.some(ext => url.pathname.endsWith(ext)) || url.pathname.startsWith('/assets/')
+  if (isAsset) {
+    const mainAppUrl = `https://divine.video${url.pathname}${url.search}`
+    const response = await fetch(mainAppUrl)
+    return new Response(response.body, {
+      status: response.status,
+      headers: response.headers
+    })
   }
 
   try {
@@ -60,20 +75,84 @@ subdomain.get('/', async (c) => {
     // Convert pubkey to npub
     const npub = hexToNpub(username.pubkey)
 
-    // Proxy to main app
-    const mainAppUrl = `https://divine.video/profile/${npub}`
+    // Fetch profile from Funnelcake for display_name, picture, about
+    let profileData: { name?: string; display_name?: string; picture?: string; about?: string } = {}
+    try {
+      const profileResponse = await fetch(`https://relay.divine.video/api/users/${username.pubkey}`)
+      if (profileResponse.ok) {
+        const data = await profileResponse.json() as { profile?: typeof profileData }
+        profileData = data.profile || {}
+      }
+    } catch (e) {
+      console.error('Failed to fetch profile from Funnelcake:', e)
+    }
+
+    // Fetch the index.html from main app (not the profile page - we want the SPA shell)
+    const mainAppUrl = 'https://divine.video/'
     const response = await fetch(mainAppUrl)
 
-    // Return the response
-    return new Response(response.body, {
-      status: response.status,
-      headers: response.headers
-    })
+    if (!response.ok) {
+      console.error('Failed to fetch main app:', response.status)
+      return c.html('<h1>Error loading profile</h1>', 500)
+    }
+
+    let html = await response.text()
+
+    // Use display name from username_display field or profile
+    const displayName = username.username_display || profileData.display_name || profileData.name || subdomainName
+
+    // Build user data object to inject
+    const userData = {
+      subdomain: subdomainName,
+      pubkey: username.pubkey,
+      npub: npub,
+      username: username.username_display || username.name || subdomainName,
+      displayName: displayName,
+      picture: profileData.picture || null,
+      about: profileData.about || null,
+      nip05: `${subdomainName}@divine.video`,
+    }
+
+    // Inject user data script before </head>
+    const userDataScript = `<script>window.__DIVINE_USER__ = ${JSON.stringify(userData)};</script>`
+    html = html.replace('</head>', `${userDataScript}</head>`)
+
+    // Update OG meta tags for better sharing
+    const ogTitle = userData.displayName
+    const ogDescription = userData.about || `Watch ${userData.displayName}'s videos on diVine`
+    const ogImage = userData.picture || 'https://divine.video/og-image.png'
+    const ogUrl = `https://${subdomainName}.divine.video`
+
+    // Replace existing OG tags or add them
+    html = html.replace(/<meta property="og:title"[^>]*>/, `<meta property="og:title" content="${escapeHtml(ogTitle)}">`)
+    html = html.replace(/<meta property="og:description"[^>]*>/, `<meta property="og:description" content="${escapeHtml(ogDescription)}">`)
+    html = html.replace(/<meta property="og:image"[^>]*>/, `<meta property="og:image" content="${ogImage}">`)
+    html = html.replace(/<meta property="og:url"[^>]*>/, `<meta property="og:url" content="${ogUrl}">`)
+
+    // Also update Twitter card tags
+    html = html.replace(/<meta name="twitter:title"[^>]*>/, `<meta name="twitter:title" content="${escapeHtml(ogTitle)}">`)
+    html = html.replace(/<meta name="twitter:description"[^>]*>/, `<meta name="twitter:description" content="${escapeHtml(ogDescription)}">`)
+    html = html.replace(/<meta name="twitter:image"[^>]*>/, `<meta name="twitter:image" content="${ogImage}">`)
+
+    // Update page title
+    html = html.replace(/<title>[^<]*<\/title>/, `<title>${escapeHtml(ogTitle)} | diVine</title>`)
+
+    return c.html(html)
 
   } catch (error) {
     console.error('Subdomain routing error:', error)
     return c.html('<h1>Error loading profile</h1>', 500)
   }
 })
+
+// Helper to escape HTML special characters
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;')
+}
 
 export default subdomain
