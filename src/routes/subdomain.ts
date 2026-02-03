@@ -34,14 +34,19 @@ function hexToNpub(hex: string): string {
 // Static asset extensions to pass through to origin
 const ASSET_EXTENSIONS = ['.js', '.css', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.webp', '.avif', '.woff', '.woff2', '.ttf', '.otf', '.json', '.webmanifest', '.map']
 
-subdomain.get('*', async (c) => {
+subdomain.use('*', async (c, next) => {
+  // Only handle GET requests for subdomain profiles
+  if (c.req.method !== 'GET') {
+    return next()
+  }
+
   const url = new URL(c.req.url)
   const hostname = url.hostname
   const subdomainName = getSubdomain(hostname)
 
   if (!subdomainName) {
-    // Not a subdomain, pass through
-    return c.notFound()
+    // Not a username subdomain, let other routes handle it
+    return next()
   }
 
   // Check if this is a static asset request - proxy to main app
