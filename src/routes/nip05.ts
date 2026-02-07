@@ -78,7 +78,14 @@ nip05.get('/.well-known/nostr.json', async (c) => {
           'Access-Control-Allow-Origin': '*'
         })
       }
-      const username = await getUsernameByName(c.env.DB, canonicalName)
+      let username = await getUsernameByName(c.env.DB, canonicalName)
+
+      // Defensive fallback: if name has dots, try stripping them
+      // Handles legacy kind 0 events with dotted NIP-05 (e.g. lele.pons -> lelepons)
+      if ((!username || username.status !== 'active' || !username.pubkey) && canonicalName.includes('.')) {
+        const dotless = canonicalName.replace(/\./g, '')
+        username = await getUsernameByName(c.env.DB, dotless)
+      }
 
       if (!username || username.status !== 'active' || !username.pubkey) {
         return c.json({ names: {} }, 200, {
