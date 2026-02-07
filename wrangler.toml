@@ -20,6 +20,10 @@ binding = "DB"
 database_name = "divine-name-server-db"
 database_id = "e7e081c4-830d-449c-9de5-d93eaacefb34"
 
+# Hourly reconciliation of D1 -> Fastly KV
+[triggers]
+crons = ["0 * * * *"]
+
 # Admin UI static assets
 [assets]
 directory = "./admin-ui/dist"

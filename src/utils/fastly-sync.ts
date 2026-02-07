@@ -13,11 +13,18 @@ export interface UsernameKVData {
 }
 
 const FASTLY_API_BASE = 'https://api.fastly.com'
+const MAX_RETRIES = 3
+const RETRY_BASE_MS = 200
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
 
 /**
- * Sync a username to Fastly KV Store
+ * Sync a username to Fastly KV Store with retry
  * Called when a username is claimed or updated
  * Key format: user:{username} to match compute-js edge worker expectations
+ * Retries up to 3 times with exponential backoff (200ms, 400ms, 800ms)
  */
 export async function syncUsernameToFastly(
   env: FastlyEnv,
@@ -33,29 +40,39 @@ export async function syncUsernameToFastly(
   const kvKey = `user:${username}`
   const url = `${FASTLY_API_BASE}/resources/stores/kv/${env.FASTLY_STORE_ID}/keys/${encodeURIComponent(kvKey)}`
 
-  try {
-    const response = await fetch(url, {
-      method: 'PUT',
-      headers: {
-        'Fastly-Key': env.FASTLY_API_TOKEN,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(data),
-    })
+  let lastError = ''
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      const response = await fetch(url, {
+        method: 'PUT',
+        headers: {
+          'Fastly-Key': env.FASTLY_API_TOKEN,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+      })
 
-    if (!response.ok) {
+      if (response.ok) {
+        if (attempt > 0) console.log(`Fastly sync success for ${username} on attempt ${attempt + 1}`)
+        else console.log(`Fastly sync success: ${username} -> ${data.status}`)
+        return { success: true }
+      }
+
+      lastError = `Fastly API error: ${response.status}`
       const errorText = await response.text()
-      console.error(`Fastly sync failed for ${username}: ${response.status} ${errorText}`)
-      return { success: false, error: `Fastly API error: ${response.status}` }
+      console.error(`Fastly sync attempt ${attempt + 1}/${MAX_RETRIES} failed for ${username}: ${response.status} ${errorText}`)
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : 'Unknown error'
+      console.error(`Fastly sync attempt ${attempt + 1}/${MAX_RETRIES} error for ${username}: ${lastError}`)
     }
 
-    console.log(`Fastly sync success: ${username} -> ${data.status}`)
-    return { success: true }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error'
-    console.error(`Fastly sync error for ${username}: ${message}`)
-    return { success: false, error: message }
+    if (attempt < MAX_RETRIES - 1) {
+      await sleep(RETRY_BASE_MS * Math.pow(2, attempt))
+    }
   }
+
+  console.error(`Fastly sync FAILED for ${username} after ${MAX_RETRIES} attempts`)
+  return { success: false, error: lastError }
 }
 
 /**

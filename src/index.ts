@@ -6,6 +6,8 @@ import username from './routes/username'
 import nip05 from './routes/nip05'
 import subdomain from './routes/subdomain'
 import admin from './routes/admin'
+import { getAllActiveUsernames } from './db/queries'
+import { bulkSyncToFastly } from './utils/fastly-sync'
 
 type Bindings = {
   DB: D1Database
@@ -74,4 +76,25 @@ app.get('*', async (c) => {
   return c.notFound()
 })
 
-export default app
+export default {
+  fetch: app.fetch,
+  async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) {
+    // Hourly reconciliation: sync all active D1 users to Fastly KV
+    if (!env.FASTLY_API_TOKEN || !env.FASTLY_STORE_ID) return
+
+    const activeUsers = await getAllActiveUsernames(env.DB)
+    const toSync = activeUsers
+      .filter(u => u.pubkey)
+      .map(u => ({
+        username: u.username_canonical || u.name,
+        data: {
+          pubkey: u.pubkey!,
+          relays: u.relays ? (() => { try { return JSON.parse(u.relays!) } catch { return [] } })() : [],
+          status: 'active' as const
+        }
+      }))
+
+    const results = await bulkSyncToFastly(env, toSync)
+    console.log(`Cron sync: ${results.success} synced, ${results.failed} failed out of ${toSync.length} active users`)
+  }
+}
