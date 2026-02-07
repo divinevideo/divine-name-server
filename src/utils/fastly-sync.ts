@@ -17,6 +17,7 @@ const FASTLY_API_BASE = 'https://api.fastly.com'
 /**
  * Sync a username to Fastly KV Store
  * Called when a username is claimed or updated
+ * Key format: user:{username} to match compute-js edge worker expectations
  */
 export async function syncUsernameToFastly(
   env: FastlyEnv,
@@ -28,7 +29,9 @@ export async function syncUsernameToFastly(
     return { success: true } // Don't fail if Fastly is not configured
   }
 
-  const url = `${FASTLY_API_BASE}/resources/stores/kv/${env.FASTLY_STORE_ID}/keys/${encodeURIComponent(username)}`
+  // Key format must match compute-js expectations: user:{username}
+  const kvKey = `user:${username}`
+  const url = `${FASTLY_API_BASE}/resources/stores/kv/${env.FASTLY_STORE_ID}/keys/${encodeURIComponent(kvKey)}`
 
   try {
     const response = await fetch(url, {
@@ -58,6 +61,7 @@ export async function syncUsernameToFastly(
 /**
  * Delete a username from Fastly KV Store
  * Called when a username is burned or permanently removed
+ * Key format: user:{username} to match compute-js edge worker expectations
  */
 export async function deleteUsernameFromFastly(
   env: FastlyEnv,
@@ -68,7 +72,9 @@ export async function deleteUsernameFromFastly(
     return { success: true }
   }
 
-  const url = `${FASTLY_API_BASE}/resources/stores/kv/${env.FASTLY_STORE_ID}/keys/${encodeURIComponent(username)}`
+  // Key format must match compute-js expectations: user:{username}
+  const kvKey = `user:${username}`
+  const url = `${FASTLY_API_BASE}/resources/stores/kv/${env.FASTLY_STORE_ID}/keys/${encodeURIComponent(kvKey)}`
 
   try {
     const response = await fetch(url, {

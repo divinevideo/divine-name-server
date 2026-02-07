@@ -11,7 +11,9 @@
     "test:once": "vitest run",
     "build:admin": "cd admin-ui && npm run build",
     "dev": "wrangler dev",
-    "deploy": "npm run build:admin && wrangler deploy"
+    "deploy": "npm run build:admin && wrangler deploy",
+    "import-vine-users": "bun run scripts/import-vine-users.ts",
+    "import-vine-users:dry-run": "bun run scripts/import-vine-users.ts --dry-run"
   },
   "keywords": [],
   "author": "",
@@ -25,6 +27,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20251115.0",
+    "pg": "^8.11.3",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4",
     "wrangler": "^4.47.0"

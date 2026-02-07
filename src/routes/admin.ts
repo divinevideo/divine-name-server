@@ -2,9 +2,9 @@
 // ABOUTME: Protected by Cloudflare Access, handles reserve/revoke/burn/assign
 
 import { Hono } from 'hono'
-import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus } from '../db/queries'
+import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getAllActiveUsernames } from '../db/queries'
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
-import { syncUsernameToFastly, deleteUsernameFromFastly } from '../utils/fastly-sync'
+import { syncUsernameToFastly, deleteUsernameFromFastly, bulkSyncToFastly } from '../utils/fastly-sync'
 
 type Bindings = {
   DB: D1Database
@@ -495,6 +495,45 @@ admin.get('/export/csv', async (c) => {
     })
   } catch (error) {
     console.error('Export error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+// Full sync: push all active D1 users to Fastly KV (additive only, never deletes)
+admin.post('/sync/fastly', async (c) => {
+  try {
+    if (!c.env.FASTLY_API_TOKEN || !c.env.FASTLY_STORE_ID) {
+      return c.json({ ok: false, error: 'Fastly credentials not configured' }, 400)
+    }
+
+    const activeUsers = await getAllActiveUsernames(c.env.DB)
+
+    if (activeUsers.length === 0) {
+      return c.json({ ok: true, message: 'No active users to sync', synced: 0 })
+    }
+
+    const toSync = activeUsers
+      .filter(u => u.pubkey) // Only sync users that have a pubkey
+      .map(u => ({
+        username: u.username_canonical || u.name,
+        data: {
+          pubkey: u.pubkey!,
+          relays: u.relays ? (() => { try { return JSON.parse(u.relays!) } catch { return [] } })() : [],
+          status: 'active' as const
+        }
+      }))
+
+    const results = await bulkSyncToFastly(c.env, toSync)
+
+    return c.json({
+      ok: true,
+      total_active: activeUsers.length,
+      synced: results.success,
+      failed: results.failed,
+      errors: results.errors.length > 0 ? results.errors.slice(0, 20) : undefined
+    })
+  } catch (error) {
+    console.error('Fastly sync error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
   }
 })
