@@ -215,10 +215,16 @@ admin.post('/username/reserve-bulk', async (c) => {
         // Check if already exists
         const existing = await getUsernameByName(c.env.DB, usernameData.canonical)
         if (existing) {
-          const error = existing.status === 'active'
-            ? 'That username is already taken'
-            : `That username is already ${existing.status}`
-          results.push({ name, status: 'failed', success: false, error })
+          if (existing.status === 'reserved') {
+            // Already reserved is not a failure — treat as success so bulk uploads
+            // don't flag duplicates as errors (makes it easier to spot real issues)
+            results.push({ name, status: 'already reserved', success: true })
+          } else {
+            const error = existing.status === 'active'
+              ? 'That username is already taken'
+              : `That username is already ${existing.status}`
+            results.push({ name, status: 'failed', success: false, error })
+          }
           continue
         }
         await reserveUsername(c.env.DB, usernameData.display, usernameData.canonical, reason)
