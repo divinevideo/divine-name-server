@@ -27,3 +27,4 @@ crons = ["0 * * * *"]
 # Admin UI static assets
 [assets]
 directory = "./admin-ui/dist"
+binding = "ASSETS"
