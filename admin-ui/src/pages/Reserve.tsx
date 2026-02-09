@@ -15,6 +15,7 @@ export default function Reserve() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
+  const [successStatus, setSuccessStatus] = useState<string>('reserved')
   const [showOverrideConfirm, setShowOverrideConfirm] = useState(false)
   const [overrideReason, setOverrideReason] = useState('')
 
@@ -49,6 +50,7 @@ export default function Reserve() {
 
       if (result.ok) {
         setSuccess(true)
+        setSuccessStatus(result.status || 'reserved')
         setTimeout(() => navigate('/'), 2000)
       } else if (result.requiresOverride) {
         setShowOverrideConfirm(true)
@@ -230,7 +232,9 @@ export default function Reserve() {
             {success && (
               <div className="rounded-md bg-green-50 p-4">
                 <p className="text-sm text-green-800">
-                  Username reserved successfully! Redirecting...
+                  {successStatus === 'already reserved'
+                    ? 'Username is already reserved. Redirecting...'
+                    : 'Username reserved successfully! Redirecting...'}
                 </p>
               </div>
             )}

@@ -153,6 +153,9 @@ admin.post('/username/reserve', async (c) => {
     // Check if already exists
     const existing = await getUsernameByName(c.env.DB, usernameData.canonical)
     if (existing) {
+      if (existing.status === 'reserved') {
+        return c.json({ ok: true, name, status: 'already reserved' })
+      }
       const error = existing.status === 'active'
         ? 'That username is already taken'
         : `That username is already ${existing.status}`
