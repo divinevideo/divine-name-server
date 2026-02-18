@@ -10,6 +10,12 @@ vi.mock('../middleware/nip98', () => ({
   verifyNip98Event: vi.fn()
 }))
 
+// Mock Fastly sync utilities
+vi.mock('../utils/fastly-sync', () => ({
+  syncUsernameToFastly: vi.fn().mockResolvedValue({ success: true }),
+  deleteUsernameFromFastly: vi.fn().mockResolvedValue({ success: true })
+}))
+
 // Mock D1 database
 function createMockDB() {
   const mockUsernames: any[] = []
@@ -276,6 +282,46 @@ describe('Username Claiming - Case Insensitive', () => {
     expect(res.status).toBe(400)
     const json = await res.json() as any
     expect(json.error).toContain('1–63 characters')
+  })
+
+  it('should delete old username from Fastly KV when claiming a new one', async () => {
+    const app = createTestApp()
+    const db = createMockDB()
+    const waitUntilCalls: Promise<any>[] = []
+
+    // First claim: "oldname"
+    const req1 = new Request('http://localhost/api/username/claim', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Nostr base64...',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name: 'oldname' })
+    })
+
+    await app.fetch(req1, { DB: db }, { waitUntil: (p: Promise<any>) => { waitUntilCalls.push(p) }, passThroughOnException: () => {} })
+
+    // Second claim: "newname" (same pubkey)
+    const { deleteUsernameFromFastly } = await import('../utils/fastly-sync')
+    vi.mocked(deleteUsernameFromFastly).mockClear()
+
+    const req2 = new Request('http://localhost/api/username/claim', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Nostr base64...',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name: 'newname' })
+    })
+
+    const res2 = await app.fetch(req2, { DB: db }, { waitUntil: (p: Promise<any>) => { waitUntilCalls.push(p) }, passThroughOnException: () => {} })
+    expect(res2.status).toBe(200)
+
+    // Verify deleteUsernameFromFastly was called with the old name
+    expect(deleteUsernameFromFastly).toHaveBeenCalledWith(
+      expect.objectContaining({}),
+      'oldname'
+    )
   })
 })
 
