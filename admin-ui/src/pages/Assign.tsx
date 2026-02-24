@@ -2,7 +2,7 @@
 // ABOUTME: Allows admins to directly assign usernames to specific pubkeys (VIP onboarding)
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { assignUsername } from '../api/client'
+import { assignUsername, notifyAssignment } from '../api/client'
 
 export default function Assign() {
   const navigate = useNavigate()
@@ -11,8 +11,15 @@ export default function Assign() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
+  const [assignedName, setAssignedName] = useState('')
   const [showOverrideConfirm, setShowOverrideConfirm] = useState(false)
   const [overrideReason, setOverrideReason] = useState('')
+
+  // Notification state (shown after successful assignment)
+  const [notifyEmail, setNotifyEmail] = useState('')
+  const [notifyLoading, setNotifyLoading] = useState(false)
+  const [notifyError, setNotifyError] = useState<string | null>(null)
+  const [notifySent, setNotifySent] = useState(false)
 
   const isShortName = name.length > 0 && name.length < 3
 
@@ -38,7 +45,7 @@ export default function Assign() {
 
       if (result.ok) {
         setSuccess(true)
-        setTimeout(() => navigate('/'), 2000)
+        setAssignedName(name)
       } else if (result.requiresOverride) {
         // Server says we need override - show confirmation
         setShowOverrideConfirm(true)
@@ -56,6 +63,25 @@ export default function Assign() {
   const handleCancelOverride = () => {
     setShowOverrideConfirm(false)
     setOverrideReason('')
+  }
+
+  const handleNotify = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setNotifyLoading(true)
+    setNotifyError(null)
+
+    try {
+      const result = await notifyAssignment(assignedName, notifyEmail)
+      if (result.ok) {
+        setNotifySent(true)
+      } else {
+        setNotifyError(result.error || 'Failed to send notification')
+      }
+    } catch (err) {
+      setNotifyError(err instanceof Error ? err.message : 'Request failed')
+    } finally {
+      setNotifyLoading(false)
+    }
   }
 
   return (
@@ -170,14 +196,61 @@ export default function Assign() {
           )}
 
           {success && (
-            <div className="rounded-md bg-green-50 p-4">
-              <p className="text-sm text-green-800">
-                Username assigned successfully! Redirecting...
-              </p>
+            <div className="space-y-4">
+              <div className="rounded-md bg-green-50 p-4">
+                <p className="text-sm text-green-800">
+                  Username <strong>@{assignedName}</strong> assigned successfully!
+                </p>
+              </div>
+
+              {/* Optional: send notification email to the user */}
+              {!notifySent ? (
+                <div className="rounded-md bg-blue-50 border border-blue-200 p-4">
+                  <h3 className="text-sm font-medium text-blue-800 mb-2">Send notification email (optional)</h3>
+                  <form onSubmit={handleNotify} className="flex gap-2 items-end">
+                    <div className="flex-1">
+                      <label htmlFor="notifyEmail" className="block text-xs font-medium text-blue-700 mb-1">
+                        User's email address
+                      </label>
+                      <input
+                        type="email"
+                        id="notifyEmail"
+                        value={notifyEmail}
+                        onChange={(e) => setNotifyEmail(e.target.value)}
+                        required
+                        placeholder="user@example.com"
+                        className="block w-full rounded-md border-blue-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2 border"
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={notifyLoading}
+                      className="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                    >
+                      {notifyLoading ? 'Sending...' : 'Send Email'}
+                    </button>
+                  </form>
+                  {notifyError && (
+                    <p className="mt-2 text-xs text-red-700">{notifyError}</p>
+                  )}
+                </div>
+              ) : (
+                <div className="rounded-md bg-green-50 p-4">
+                  <p className="text-sm text-green-800">Notification email sent to {notifyEmail}</p>
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => navigate('/')}
+                className="inline-flex justify-center rounded-md border border-gray-300 bg-white py-2 px-4 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+              >
+                Done
+              </button>
             </div>
           )}
 
-          {!showOverrideConfirm && (
+          {!showOverrideConfirm && !success && (
             <div className="flex gap-3">
               <button
                 type="submit"

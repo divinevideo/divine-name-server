@@ -5,11 +5,13 @@ import { Hono } from 'hono'
 import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getAllActiveUsernames } from '../db/queries'
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
 import { syncUsernameToFastly, deleteUsernameFromFastly, bulkSyncToFastly } from '../utils/fastly-sync'
+import { sendAssignmentNotificationEmail } from '../utils/email'
 
 type Bindings = {
   DB: D1Database
   FASTLY_API_TOKEN?: string
   FASTLY_STORE_ID?: string
+  SENDGRID_API_KEY?: string
 }
 
 const admin = new Hono<{ Bindings: Bindings }>()
@@ -543,6 +545,56 @@ admin.post('/sync/fastly', async (c) => {
     })
   } catch (error) {
     console.error('Fastly sync error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.post('/notify-assignment', async (c) => {
+  try {
+    const body = await c.req.json<{ name: string; email: string }>()
+    const { name, email } = body
+
+    if (!name) {
+      return c.json({ ok: false, error: 'Name is required' }, 400)
+    }
+
+    if (!email) {
+      return c.json({ ok: false, error: 'Email is required' }, 400)
+    }
+
+    // Basic email format validation
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return c.json({ ok: false, error: 'Invalid email address' }, 400)
+    }
+
+    let usernameData: { display: string; canonical: string }
+    try {
+      usernameData = validateUsername(name)
+    } catch (error) {
+      if (error instanceof UsernameValidationError) {
+        return c.json({ ok: false, error: error.message }, 400)
+      }
+      throw error
+    }
+
+    // Confirm username exists and is active
+    const existing = await getUsernameByName(c.env.DB, usernameData.canonical)
+    if (!existing) {
+      return c.json({ ok: false, error: 'Username not found' }, 404)
+    }
+    if (existing.status !== 'active') {
+      return c.json({ ok: false, error: `Username is not active (status: ${existing.status})` }, 409)
+    }
+
+    if (!c.env.SENDGRID_API_KEY) {
+      return c.json({ ok: false, error: 'Email sending not configured' }, 503)
+    }
+
+    await sendAssignmentNotificationEmail(c.env.SENDGRID_API_KEY, email, usernameData.display)
+
+    return c.json({ ok: true, name: usernameData.display, email })
+  } catch (error) {
+    console.error('Notify assignment error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
   }
 })

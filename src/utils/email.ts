@@ -28,6 +28,56 @@ async function sendViaSendGrid(apiKey: string, payload: SendGridPayload): Promis
   }
 }
 
+export async function sendAssignmentNotificationEmail(
+  apiKey: string,
+  toEmail: string,
+  name: string
+): Promise<void> {
+  const subject = `Your diVine username @${name} has been assigned`
+
+  const htmlContent = `<html>
+<body style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+  <h1 style="color: #00B488;">Your diVine username is ready</h1>
+  <p>Your username <strong>@${name}</strong> has been assigned to your account on diVine.</p>
+  <p>Your profile is now live at:</p>
+  <div style="margin: 20px 0;">
+    <a href="https://${name}.divine.video/"
+       style="color: #00B488; font-size: 18px; font-weight: bold; text-decoration: none;">
+      ${name}.divine.video
+    </a>
+  </div>
+  <p>You can now use <strong>${name}@divine.video</strong> as your NIP-05 identifier on Nostr.</p>
+  <p style="color: #666; font-size: 14px; margin-top: 30px;">
+    If you have any questions, please reach out to the diVine team.
+  </p>
+</body>
+</html>`
+
+  const textContent = `Your diVine username @${name} has been assigned
+
+Your username @${name} has been assigned to your account on diVine.
+
+Your profile is now live at: https://${name}.divine.video/
+
+You can now use ${name}@divine.video as your NIP-05 identifier on Nostr.
+
+If you have any questions, please reach out to the diVine team.`
+
+  await sendViaSendGrid(apiKey, {
+    personalizations: [{ to: [{ email: toEmail }] }],
+    from: { email: 'noreply@divine.video', name: 'diVine' },
+    subject,
+    content: [
+      { type: 'text/plain', value: textContent },
+      { type: 'text/html', value: htmlContent }
+    ],
+    tracking_settings: {
+      click_tracking: { enable: false },
+      open_tracking: { enable: false }
+    }
+  })
+}
+
 export async function sendReservationConfirmationEmail(
   apiKey: string,
   toEmail: string,

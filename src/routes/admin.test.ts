@@ -1,9 +1,15 @@
 // ABOUTME: Tests for admin endpoints
 // ABOUTME: Validates search endpoint input validation and error handling
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
 import admin from './admin'
+
+// Mock the email utility so tests don't hit SendGrid
+vi.mock('../utils/email', () => ({
+  sendAssignmentNotificationEmail: vi.fn().mockResolvedValue(undefined),
+  sendReservationConfirmationEmail: vi.fn().mockResolvedValue(undefined)
+}))
 
 // Mock D1 database
 function createMockDB() {
@@ -535,5 +541,157 @@ describe('Admin Bulk Reserve Endpoint', () => {
     expect(json.results.find((r: any) => r.name === 'bob')).toBeTruthy()
     expect(json.results.find((r: any) => r.name === 'charlie')).toBeTruthy()
     expect(json.results.find((r: any) => r.name === '@alice')).toBeFalsy()
+  })
+})
+
+describe('Admin Notify Assignment Endpoint', () => {
+  // DB that returns an active username for 'testuser' and null for unknown names
+  function createNotifyMockDB(status: string = 'active') {
+    return {
+      prepare: (sql: string) => ({
+        bind: (...params: any[]) => ({
+          first: async () => {
+            if (sql.includes('username_canonical') || sql.includes('name = ?')) {
+              const lookup = params[0]
+              if (lookup === 'testuser') {
+                return {
+                  id: 1,
+                  name: 'testuser',
+                  username_display: 'testuser',
+                  username_canonical: 'testuser',
+                  pubkey: 'abc123',
+                  email: null,
+                  relays: null,
+                  status,
+                  recyclable: 0,
+                  created_at: 1700000000,
+                  updated_at: 1700000000,
+                  claimed_at: 1700000000,
+                  revoked_at: null,
+                  reserved_reason: null,
+                  admin_notes: null
+                }
+              }
+              return null
+            }
+            return null
+          },
+          all: async () => ({ results: [] }),
+          run: async () => ({ success: true })
+        })
+      })
+    } as unknown as D1Database
+  }
+
+  function createTestApp() {
+    const app = new Hono<{ Bindings: { DB: D1Database; SENDGRID_API_KEY?: string } }>()
+    app.route('/admin', admin)
+    return app
+  }
+
+  it('should return 400 if name is missing', async () => {
+    const app = createTestApp()
+    const req = new Request('http://localhost/admin/notify-assignment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'user@example.com' })
+    })
+    const res = await app.fetch(req, { DB: createNotifyMockDB(), SENDGRID_API_KEY: 'test-key' }, { waitUntil: () => {}, passThroughOnException: () => {} })
+
+    expect(res.status).toBe(400)
+    const json = await res.json() as any
+    expect(json.ok).toBe(false)
+    expect(json.error).toContain('Name is required')
+  })
+
+  it('should return 400 if email is missing', async () => {
+    const app = createTestApp()
+    const req = new Request('http://localhost/admin/notify-assignment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'testuser' })
+    })
+    const res = await app.fetch(req, { DB: createNotifyMockDB(), SENDGRID_API_KEY: 'test-key' }, { waitUntil: () => {}, passThroughOnException: () => {} })
+
+    expect(res.status).toBe(400)
+    const json = await res.json() as any
+    expect(json.ok).toBe(false)
+    expect(json.error).toContain('Email is required')
+  })
+
+  it('should return 400 if email is invalid', async () => {
+    const app = createTestApp()
+    const req = new Request('http://localhost/admin/notify-assignment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'testuser', email: 'not-an-email' })
+    })
+    const res = await app.fetch(req, { DB: createNotifyMockDB(), SENDGRID_API_KEY: 'test-key' }, { waitUntil: () => {}, passThroughOnException: () => {} })
+
+    expect(res.status).toBe(400)
+    const json = await res.json() as any
+    expect(json.ok).toBe(false)
+    expect(json.error).toContain('Invalid email address')
+  })
+
+  it('should return 404 if username does not exist', async () => {
+    const app = createTestApp()
+    const req = new Request('http://localhost/admin/notify-assignment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'nonexistent', email: 'user@example.com' })
+    })
+    const res = await app.fetch(req, { DB: createNotifyMockDB(), SENDGRID_API_KEY: 'test-key' }, { waitUntil: () => {}, passThroughOnException: () => {} })
+
+    expect(res.status).toBe(404)
+    const json = await res.json() as any
+    expect(json.ok).toBe(false)
+    expect(json.error).toContain('not found')
+  })
+
+  it('should return 409 if username is not active', async () => {
+    const app = createTestApp()
+    const req = new Request('http://localhost/admin/notify-assignment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'testuser', email: 'user@example.com' })
+    })
+    const res = await app.fetch(req, { DB: createNotifyMockDB('reserved'), SENDGRID_API_KEY: 'test-key' }, { waitUntil: () => {}, passThroughOnException: () => {} })
+
+    expect(res.status).toBe(409)
+    const json = await res.json() as any
+    expect(json.ok).toBe(false)
+    expect(json.error).toContain('not active')
+  })
+
+  it('should return 503 if SendGrid API key is not configured', async () => {
+    const app = createTestApp()
+    const req = new Request('http://localhost/admin/notify-assignment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'testuser', email: 'user@example.com' })
+    })
+    const res = await app.fetch(req, { DB: createNotifyMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+
+    expect(res.status).toBe(503)
+    const json = await res.json() as any
+    expect(json.ok).toBe(false)
+    expect(json.error).toContain('not configured')
+  })
+
+  it('should send notification and return success', async () => {
+    const app = createTestApp()
+    const req = new Request('http://localhost/admin/notify-assignment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'testuser', email: 'user@example.com' })
+    })
+    const res = await app.fetch(req, { DB: createNotifyMockDB(), SENDGRID_API_KEY: 'test-key' }, { waitUntil: () => {}, passThroughOnException: () => {} })
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.name).toBe('testuser')
+    expect(json.email).toBe('user@example.com')
   })
 })

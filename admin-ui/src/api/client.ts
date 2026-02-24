@@ -134,6 +134,23 @@ export async function addReservedWord(
   return response.json()
 }
 
+export async function notifyAssignment(
+  name: string,
+  email: string
+): Promise<ApiResponse & { name?: string; email?: string }> {
+  const response = await fetch(`${API_BASE}/notify-assignment`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, email })
+  })
+
+  if (!response.ok) {
+    throw new Error(`Notify assignment failed: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
 export async function deleteReservedWord(word: string): Promise<ApiResponse> {
   const response = await fetch(`${API_BASE}/reserved-words/${encodeURIComponent(word)}`, {
     method: 'DELETE'
