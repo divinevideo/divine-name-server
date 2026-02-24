@@ -22,7 +22,11 @@ function createMockDB() {
       claimed_at: 1700000000,
       revoked_at: null,
       reserved_reason: null,
-      admin_notes: null
+      admin_notes: null,
+      reservation_email: null,
+      confirmation_token: null,
+      reservation_expires_at: null,
+      subscription_expires_at: null
     },
     {
       id: 2,
@@ -39,7 +43,11 @@ function createMockDB() {
       claimed_at: null,
       revoked_at: null,
       reserved_reason: 'Test reservation',
-      admin_notes: null
+      admin_notes: null,
+      reservation_email: null,
+      confirmation_token: null,
+      reservation_expires_at: null,
+      subscription_expires_at: null
     },
     {
       id: 3,
@@ -56,7 +64,11 @@ function createMockDB() {
       claimed_at: 1700000200,
       revoked_at: null,
       reserved_reason: null,
-      admin_notes: null
+      admin_notes: null,
+      reservation_email: null,
+      confirmation_token: null,
+      reservation_expires_at: null,
+      subscription_expires_at: null
     }
   ]
 

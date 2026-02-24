@@ -9,7 +9,7 @@ export interface Username {
   pubkey: string | null
   email: string | null
   relays: string | null
-  status: 'active' | 'reserved' | 'revoked' | 'burned'
+  status: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation'
   recyclable: number
   created_at: number
   updated_at: number
@@ -17,6 +17,20 @@ export interface Username {
   revoked_at: number | null
   reserved_reason: string | null
   admin_notes: string | null
+  reservation_email: string | null
+  confirmation_token: string | null
+  reservation_expires_at: number | null
+  subscription_expires_at: number | null
+}
+
+export interface ReservationToken {
+  id: number
+  token: string
+  username_canonical: string
+  email: string
+  created_at: number
+  confirmed_at: number | null
+  expires_at: number
 }
 
 export interface SearchParams {
@@ -310,4 +324,99 @@ export async function exportUsernamesByStatus(
     'SELECT * FROM usernames ORDER BY status, name'
   ).all<Username>()
   return result.results
+}
+
+export async function countRecentReservationsByEmail(
+  db: D1Database,
+  email: string,
+  since: number
+): Promise<number> {
+  const result = await db.prepare(
+    'SELECT COUNT(*) as count FROM reservation_tokens WHERE email = ? AND created_at > ?'
+  ).bind(email.toLowerCase(), since).first<{ count: number }>()
+
+  return result?.count ?? 0
+}
+
+export async function createReservation(
+  db: D1Database,
+  nameDisplay: string,
+  nameCanonical: string,
+  email: string,
+  token: string,
+  expiresAt: number
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000)
+  const normalizedEmail = email.toLowerCase()
+
+  // Upsert username record with pending-confirmation status
+  await db.prepare(
+    `INSERT INTO usernames (name, username_display, username_canonical, status, reservation_email, confirmation_token, reservation_expires_at, created_at, updated_at)
+     VALUES (?, ?, ?, 'pending-confirmation', ?, ?, ?, ?, ?)
+     ON CONFLICT(username_canonical) DO UPDATE SET
+       username_display = excluded.username_display,
+       status = 'pending-confirmation',
+       reservation_email = excluded.reservation_email,
+       confirmation_token = excluded.confirmation_token,
+       reservation_expires_at = excluded.reservation_expires_at,
+       updated_at = excluded.updated_at`
+  ).bind(nameCanonical, nameDisplay, nameCanonical, normalizedEmail, token, expiresAt, now, now).run()
+
+  // Insert token record for rate limiting and confirmation tracking
+  await db.prepare(
+    `INSERT INTO reservation_tokens (token, username_canonical, email, created_at, expires_at)
+     VALUES (?, ?, ?, ?, ?)`
+  ).bind(token, nameCanonical, normalizedEmail, now, expiresAt).run()
+}
+
+export async function getReservationByToken(
+  db: D1Database,
+  token: string
+): Promise<ReservationToken | null> {
+  return db.prepare(
+    'SELECT * FROM reservation_tokens WHERE token = ?'
+  ).bind(token).first<ReservationToken>()
+}
+
+export async function confirmReservation(
+  db: D1Database,
+  token: string,
+  usernameCanonical: string,
+  subscriptionExpiresAt: number
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000)
+
+  // Mark token as confirmed
+  await db.prepare(
+    'UPDATE reservation_tokens SET confirmed_at = ? WHERE token = ?'
+  ).bind(now, token).run()
+
+  // Promote username from pending-confirmation to reserved with subscription expiry
+  await db.prepare(
+    `UPDATE usernames
+     SET status = 'reserved',
+         confirmation_token = NULL,
+         subscription_expires_at = ?,
+         updated_at = ?
+     WHERE username_canonical = ? AND status = 'pending-confirmation'`
+  ).bind(subscriptionExpiresAt, now, usernameCanonical).run()
+}
+
+export async function expireStaleReservations(
+  db: D1Database
+): Promise<number> {
+  const now = Math.floor(Date.now() / 1000)
+
+  const result = await db.prepare(
+    `UPDATE usernames
+     SET status = 'revoked',
+         confirmation_token = NULL,
+         reservation_email = NULL,
+         reservation_expires_at = NULL,
+         revoked_at = ?,
+         updated_at = ?
+     WHERE status = 'pending-confirmation' AND reservation_expires_at < ?`
+  ).bind(now, now, now).run()
+
+  return result.meta?.changes ?? 0
 }

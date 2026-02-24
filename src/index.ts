@@ -6,7 +6,7 @@ import username from './routes/username'
 import nip05 from './routes/nip05'
 import subdomain from './routes/subdomain'
 import admin from './routes/admin'
-import { getAllActiveUsernames } from './db/queries'
+import { getAllActiveUsernames, expireStaleReservations } from './db/queries'
 import { bulkSyncToFastly } from './utils/fastly-sync'
 
 type Bindings = {
@@ -79,6 +79,12 @@ app.get('*', async (c) => {
 export default {
   fetch: app.fetch,
   async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) {
+    // Expire unconfirmed reservations older than 48 hours
+    const expired = await expireStaleReservations(env.DB)
+    if (expired > 0) {
+      console.log(`Cron: expired ${expired} stale pending-confirmation reservations`)
+    }
+
     // Hourly reconciliation: sync all active D1 users to Fastly KV
     if (!env.FASTLY_API_TOKEN || !env.FASTLY_STORE_ID) return
 

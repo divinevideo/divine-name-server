@@ -1,5 +1,5 @@
-// ABOUTME: Username API endpoints for claiming and checking usernames
-// ABOUTME: Public endpoints: GET /check/:name, GET /by-pubkey/:pubkey
+// ABOUTME: Username API endpoints for claiming, checking, and reserving usernames
+// ABOUTME: Public endpoints: GET /check/:name, GET /by-pubkey/:pubkey, POST /reserve, GET /confirm
 // ABOUTME: Authenticated: POST /claim (NIP-98 auth - works for both custodial and non-custodial users)
 
 import { Hono } from 'hono'
@@ -9,14 +9,20 @@ import {
   isReservedWord,
   getUsernameByName,
   getUsernameByPubkey,
-  claimUsername
+  claimUsername,
+  countRecentReservationsByEmail,
+  createReservation,
+  getReservationByToken,
+  confirmReservation
 } from '../db/queries'
 import { syncUsernameToFastly } from '../utils/fastly-sync'
+import { sendReservationConfirmationEmail } from '../utils/email'
 
 type Bindings = {
   DB: D1Database
   FASTLY_API_TOKEN?: string
   FASTLY_STORE_ID?: string
+  SENDGRID_API_KEY?: string
 }
 
 const username = new Hono<{ Bindings: Bindings }>()
@@ -58,12 +64,25 @@ username.get('/check/:name', async (c) => {
     // Check if already exists
     const existing = await getUsernameByName(c.env.DB, usernameData.canonical)
     if (existing) {
+      // Expired pending-confirmation reservations are treated as available
+      const now = Math.floor(Date.now() / 1000)
+      if (existing.status === 'pending-confirmation' && existing.reservation_expires_at && existing.reservation_expires_at < now) {
+        return c.json({
+          ok: true,
+          available: true,
+          name: usernameData.display,
+          canonical: usernameData.canonical
+        }, 200, { 'Access-Control-Allow-Origin': '*' })
+      }
+
       const reason = existing.status === 'active'
         ? 'Username is already taken'
         : existing.status === 'reserved'
         ? 'Username is reserved'
         : existing.status === 'burned'
         ? 'Username is permanently unavailable'
+        : existing.status === 'pending-confirmation'
+        ? 'Username is pending email confirmation'
         : 'Username is unavailable'
 
       return c.json({
@@ -133,6 +152,150 @@ username.get('/by-pubkey/:pubkey', async (c) => {
   }
 })
 
+// Public endpoint: reserve a username with email confirmation (no Nostr auth required)
+// Rate limited to 5 reservations per email per hour
+username.post('/reserve', async (c) => {
+  try {
+    const body = await c.req.json() as { name?: string; email?: string }
+    const { name, email } = body
+
+    if (!name || typeof name !== 'string') {
+      return c.json({ ok: false, error: 'name is required' }, 400, { 'Access-Control-Allow-Origin': '*' })
+    }
+    if (!email || typeof email !== 'string') {
+      return c.json({ ok: false, error: 'email is required' }, 400, { 'Access-Control-Allow-Origin': '*' })
+    }
+
+    // Basic email format validation
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return c.json({ ok: false, error: 'Invalid email address' }, 400, { 'Access-Control-Allow-Origin': '*' })
+    }
+
+    // Validate username format
+    let usernameData: { display: string; canonical: string }
+    try {
+      usernameData = validateUsername(name)
+    } catch (error) {
+      if (error instanceof UsernameValidationError) {
+        return c.json({ ok: false, error: error.message }, 400, { 'Access-Control-Allow-Origin': '*' })
+      }
+      throw error
+    }
+
+    const { display: nameDisplay, canonical: nameCanonical } = usernameData
+
+    // Check if reserved word
+    const reserved = await isReservedWord(c.env.DB, nameCanonical)
+    if (reserved) {
+      return c.json({ ok: false, error: 'Username is reserved' }, 403, { 'Access-Control-Allow-Origin': '*' })
+    }
+
+    // Check if name is already taken
+    const existing = await getUsernameByName(c.env.DB, nameCanonical)
+    if (existing) {
+      const now = Math.floor(Date.now() / 1000)
+      const isExpiredPending = existing.status === 'pending-confirmation'
+        && existing.reservation_expires_at !== null
+        && existing.reservation_expires_at < now
+
+      if (!isExpiredPending) {
+        if (existing.status === 'active') {
+          return c.json({ ok: false, error: 'Username is already taken' }, 409, { 'Access-Control-Allow-Origin': '*' })
+        }
+        if (existing.status === 'reserved') {
+          return c.json({ ok: false, error: 'Username is already reserved' }, 409, { 'Access-Control-Allow-Origin': '*' })
+        }
+        if (existing.status === 'burned') {
+          return c.json({ ok: false, error: 'Username is permanently unavailable' }, 403, { 'Access-Control-Allow-Origin': '*' })
+        }
+        if (existing.status === 'pending-confirmation') {
+          return c.json({ ok: false, error: 'Username is pending email confirmation' }, 409, { 'Access-Control-Allow-Origin': '*' })
+        }
+      }
+      // Expired pending-confirmation or revoked: allow re-reservation
+    }
+
+    // Rate limit: max 5 reservations per email per hour
+    const oneHourAgo = Math.floor(Date.now() / 1000) - 3600
+    const recentCount = await countRecentReservationsByEmail(c.env.DB, email, oneHourAgo)
+    if (recentCount >= 5) {
+      return c.json({ ok: false, error: 'Too many reservation attempts. Please try again later.' }, 429, { 'Access-Control-Allow-Origin': '*' })
+    }
+
+    // Generate confirmation token and set expiry (48 hours)
+    const token = crypto.randomUUID()
+    const expiresAt = Math.floor(Date.now() / 1000) + (48 * 60 * 60)
+
+    // Persist reservation
+    await createReservation(c.env.DB, nameDisplay, nameCanonical, email, token, expiresAt)
+
+    // Send confirmation email (if API key configured)
+    if (c.env.SENDGRID_API_KEY) {
+      const confirmationUrl = `https://names.divine.video/api/username/confirm?token=${token}`
+      c.executionCtx.waitUntil(
+        sendReservationConfirmationEmail(c.env.SENDGRID_API_KEY, email, nameDisplay, confirmationUrl)
+          .catch(err => console.error('Failed to send confirmation email:', err))
+      )
+    } else {
+      console.warn('SENDGRID_API_KEY not set - skipping confirmation email')
+    }
+
+    return c.json({
+      ok: true,
+      message: 'Reservation created. Check your email to confirm.',
+      name: nameDisplay,
+      canonical: nameCanonical
+    }, 200, { 'Access-Control-Allow-Origin': '*' })
+
+  } catch (error) {
+    console.error('Reserve error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500, { 'Access-Control-Allow-Origin': '*' })
+  }
+})
+
+// Public endpoint: confirm a username reservation via email token
+// Linked from the confirmation email sent by /reserve
+username.get('/confirm', async (c) => {
+  try {
+    const token = c.req.query('token')
+
+    if (!token) {
+      return c.json({ ok: false, error: 'token is required' }, 400, { 'Access-Control-Allow-Origin': '*' })
+    }
+
+    const reservation = await getReservationByToken(c.env.DB, token)
+
+    if (!reservation) {
+      return c.json({ ok: false, error: 'Invalid or expired confirmation token' }, 404, { 'Access-Control-Allow-Origin': '*' })
+    }
+
+    if (reservation.confirmed_at !== null) {
+      return c.json({ ok: false, error: 'This token has already been used' }, 409, { 'Access-Control-Allow-Origin': '*' })
+    }
+
+    const now = Math.floor(Date.now() / 1000)
+    if (reservation.expires_at < now) {
+      return c.json({ ok: false, error: 'Confirmation token has expired' }, 410, { 'Access-Control-Allow-Origin': '*' })
+    }
+
+    // Subscription expires 1 year from confirmation
+    const subscriptionExpiresAt = now + (365 * 24 * 60 * 60)
+
+    await confirmReservation(c.env.DB, token, reservation.username_canonical, subscriptionExpiresAt)
+
+    return c.json({
+      ok: true,
+      message: 'Username reserved successfully.',
+      canonical: reservation.username_canonical,
+      subscription_expires_at: subscriptionExpiresAt
+    }, 200, { 'Access-Control-Allow-Origin': '*' })
+
+  } catch (error) {
+    console.error('Confirm error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500, { 'Access-Control-Allow-Origin': '*' })
+  }
+})
+
 username.post('/claim', async (c) => {
   try {
     // Read raw body text first (needed for NIP-98 payload verification)
@@ -193,6 +356,9 @@ username.post('/claim', async (c) => {
       }
       if (existing.status === 'burned') {
         return c.json({ ok: false, error: 'Username is permanently unavailable' }, 403)
+      }
+      if (existing.status === 'pending-confirmation') {
+        return c.json({ ok: false, error: 'Username is pending email confirmation' }, 409)
       }
       // If revoked and recyclable, allow claim (continue below)
     }
