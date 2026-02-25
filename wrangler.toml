@@ -5,8 +5,17 @@ compatibility_date = "2024-11-15"
 # Fastly KV sync (for divine-router edge)
 # Set via wrangler secret put FASTLY_API_TOKEN
 # Set via wrangler secret put FASTLY_STORE_ID
+
+# Payment/invite gate for public name reservations
+# ALLOWED_MINTS: comma-separated list of trusted Cashu mint URLs (e.g. "https://mint.example.com")
+# NAME_PRICE_SATS: minimum sat amount required to reserve a name (default: 1000)
+# INVITE_FAUCET_URL: base URL of the invite code faucet service (e.g. "https://faucet.example.com")
+# Set via wrangler secret put SENDGRID_API_KEY
 [vars]
 # FASTLY_STORE_ID = "your-store-id" # Set as secret in production
+# ALLOWED_MINTS = "https://8333.space:3338,https://mint.minibits.cash/Bitcoin"
+# NAME_PRICE_SATS = "1000"
+# INVITE_FAUCET_URL = "https://faucet.divine.video"
 
 # Routes
 routes = [

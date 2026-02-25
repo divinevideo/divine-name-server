@@ -402,6 +402,55 @@ export async function confirmReservation(
   ).bind(subscriptionExpiresAt, now, usernameCanonical).run()
 }
 
+export interface SpentCashuProof {
+  proof_secret: string
+  cashu_token_hash: string
+  username_canonical: string
+  amount: number
+  created_at: number
+}
+
+export interface CashuProofRecord {
+  secret: string
+  amount: number
+}
+
+// Check which proof secrets from the given list are already spent
+export async function findSpentProofs(
+  db: D1Database,
+  secrets: string[]
+): Promise<string[]> {
+  if (secrets.length === 0) return []
+
+  const spentSecrets: string[] = []
+  for (const secret of secrets) {
+    const result = await db.prepare(
+      'SELECT proof_secret FROM spent_cashu_proofs WHERE proof_secret = ?'
+    ).bind(secret).first<{ proof_secret: string }>()
+    if (result) {
+      spentSecrets.push(secret)
+    }
+  }
+  return spentSecrets
+}
+
+// Store proof secrets as spent to prevent replay attacks
+export async function storeSpentProofs(
+  db: D1Database,
+  proofs: CashuProofRecord[],
+  tokenHash: string,
+  usernameCanonical: string
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000)
+  for (const proof of proofs) {
+    await db.prepare(
+      `INSERT OR IGNORE INTO spent_cashu_proofs
+       (proof_secret, cashu_token_hash, username_canonical, amount, created_at)
+       VALUES (?, ?, ?, ?, ?)`
+    ).bind(proof.secret, tokenHash, usernameCanonical, proof.amount, now).run()
+  }
+}
+
 export async function expireStaleReservations(
   db: D1Database
 ): Promise<number> {

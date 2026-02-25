@@ -15,10 +15,11 @@ vi.mock('../utils/email', () => ({
   sendReservationConfirmationEmail: vi.fn().mockResolvedValue(undefined)
 }))
 
-// Mock D1 database with support for reservations
+// Mock D1 database with support for reservations and spent Cashu proofs
 function createMockDB(initialUsernames: any[] = []) {
   const mockUsernames: any[] = [...initialUsernames]
   const mockReservationTokens: any[] = []
+  const mockSpentProofs: Set<string> = new Set()
 
   return {
     prepare: (sql: string) => {
@@ -28,6 +29,12 @@ function createMockDB(initialUsernames: any[] = []) {
           boundParams = params
           return {
             first: async () => {
+              // Spent Cashu proof lookup
+              if (sql.includes('FROM spent_cashu_proofs WHERE proof_secret = ?')) {
+                const secret = boundParams[0]
+                return mockSpentProofs.has(secret) ? { proof_secret: secret } : null
+              }
+
               // Token lookup in reservation_tokens
               if (sql.includes('FROM reservation_tokens WHERE token = ?')) {
                 const token = boundParams[0]
@@ -490,9 +497,20 @@ describe('Public Username Endpoints', () => {
 
 describe('Public Name Reservation', () => {
   function createTestApp() {
-    const app = new Hono<{ Bindings: { DB: D1Database; SENDGRID_API_KEY?: string } }>()
+    const app = new Hono<{ Bindings: { DB: D1Database; SENDGRID_API_KEY?: string; ALLOWED_MINTS?: string; NAME_PRICE_JSON?: string; INVITE_FAUCET_URL?: string } }>()
     app.route('/api/username', username)
     return app
+  }
+
+  // Build a valid mock cashuA token for tests
+  function mockCashuToken(amount: number = 2000, mint: string = 'https://testmint.example.com'): string {
+    const payload = {
+      token: [{ mint, proofs: [{ amount, id: 'test-id', secret: `secret-${Date.now()}-${Math.random()}`, C: 'test-C-value' }] }],
+      unit: 'sat'
+    }
+    // base64url encode
+    const b64 = btoa(JSON.stringify(payload)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+    return `cashuA${b64}`
   }
 
   const mockEnv = { waitUntil: () => {}, passThroughOnException: () => {} }
@@ -505,10 +523,10 @@ describe('Public Name Reservation', () => {
       const req = new Request('http://localhost/api/username/reserve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'alice', email: 'alice@example.com' })
+        body: JSON.stringify({ name: 'alice', email: 'alice@example.com', cashu_token: mockCashuToken() })
       })
 
-      const res = await app.fetch(req, { DB: db }, mockEnv)
+      const res = await app.fetch(req, { DB: db, ALLOWED_MINTS: 'https://testmint.example.com' }, mockEnv)
       expect(res.status).toBe(200)
       const json = await res.json() as any
       expect(json.ok).toBe(true)
@@ -525,10 +543,10 @@ describe('Public Name Reservation', () => {
       const req = new Request('http://localhost/api/username/reserve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'AliceInWonderland', email: 'alice@example.com' })
+        body: JSON.stringify({ name: 'AliceInWonderland', email: 'alice@example.com', cashu_token: mockCashuToken() })
       })
 
-      const res = await app.fetch(req, { DB: db }, mockEnv)
+      const res = await app.fetch(req, { DB: db, ALLOWED_MINTS: 'https://testmint.example.com' }, mockEnv)
       expect(res.status).toBe(200)
       const json = await res.json() as any
       expect(json.name).toBe('AliceInWonderland')
@@ -673,10 +691,10 @@ describe('Public Name Reservation', () => {
       const req = new Request('http://localhost/api/username/reserve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'alice', email: 'newalice@example.com' })
+        body: JSON.stringify({ name: 'alice', email: 'newalice@example.com', cashu_token: mockCashuToken() })
       })
 
-      const res = await app.fetch(req, { DB: db }, mockEnv)
+      const res = await app.fetch(req, { DB: db, ALLOWED_MINTS: 'https://testmint.example.com' }, mockEnv)
       expect(res.status).toBe(200)
       const json = await res.json() as any
       expect(json.ok).toBe(true)

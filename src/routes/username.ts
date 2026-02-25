@@ -13,16 +13,30 @@ import {
   countRecentReservationsByEmail,
   createReservation,
   getReservationByToken,
-  confirmReservation
+  confirmReservation,
+  findSpentProofs,
+  storeSpentProofs
 } from '../db/queries'
 import { syncUsernameToFastly } from '../utils/fastly-sync'
 import { sendReservationConfirmationEmail } from '../utils/email'
+import {
+  parseCashuToken,
+  validateMintAllowlist,
+  sumProofAmounts,
+  getProofSecrets,
+  hashCashuToken,
+  CashuValidationError
+} from '../utils/cashu'
+import { getRegistrationPrice } from '../utils/pricing'
 
 type Bindings = {
   DB: D1Database
   FASTLY_API_TOKEN?: string
   FASTLY_STORE_ID?: string
   SENDGRID_API_KEY?: string
+  ALLOWED_MINTS?: string
+  NAME_PRICE_JSON?: string
+  INVITE_FAUCET_URL?: string
 }
 
 const username = new Hono<{ Bindings: Bindings }>()
@@ -153,11 +167,17 @@ username.get('/by-pubkey/:pubkey', async (c) => {
 })
 
 // Public endpoint: reserve a username with email confirmation (no Nostr auth required)
+// Requires either a Cashu payment token or a valid invite code to prevent bot spam
 // Rate limited to 5 reservations per email per hour
 username.post('/reserve', async (c) => {
   try {
-    const body = await c.req.json() as { name?: string; email?: string }
-    const { name, email } = body
+    const body = await c.req.json() as {
+      name?: string
+      email?: string
+      cashu_token?: string
+      invite_code?: string
+    }
+    const { name, email, cashu_token, invite_code } = body
 
     if (!name || typeof name !== 'string') {
       return c.json({ ok: false, error: 'name is required' }, 400, { 'Access-Control-Allow-Origin': '*' })
@@ -220,6 +240,78 @@ username.post('/reserve', async (c) => {
     const recentCount = await countRecentReservationsByEmail(c.env.DB, email, oneHourAgo)
     if (recentCount >= 5) {
       return c.json({ ok: false, error: 'Too many reservation attempts. Please try again later.' }, 429, { 'Access-Control-Allow-Origin': '*' })
+    }
+
+    // Require payment or invite code
+    if (!cashu_token && !invite_code) {
+      return c.json({ ok: false, error: 'Payment or invite code required' }, 403, { 'Access-Control-Allow-Origin': '*' })
+    }
+
+    if (cashu_token) {
+      // Parse and validate Cashu token format
+      let parsed
+      try {
+        parsed = parseCashuToken(cashu_token)
+      } catch (err) {
+        if (err instanceof CashuValidationError) {
+          return c.json({ ok: false, error: err.message }, 400, { 'Access-Control-Allow-Origin': '*' })
+        }
+        throw err
+      }
+
+      // Validate mint is in the allowlist
+      const allowedMints = (c.env.ALLOWED_MINTS || '')
+        .split(',')
+        .map(m => m.trim())
+        .filter(Boolean)
+      try {
+        validateMintAllowlist(parsed.tokens, allowedMints)
+      } catch (err) {
+        if (err instanceof CashuValidationError) {
+          return c.json({ ok: false, error: err.message }, 403, { 'Access-Control-Allow-Origin': '*' })
+        }
+        throw err
+      }
+
+      // Validate total amount meets tiered price based on name length/premium status
+      const totalAmount = sumProofAmounts(parsed.tokens)
+      const minPrice = getRegistrationPrice(nameCanonical, c.env.NAME_PRICE_JSON)
+      if (totalAmount < minPrice) {
+        return c.json({
+          ok: false,
+          error: `Insufficient payment: ${totalAmount} sats provided, ${minPrice} sats required`
+        }, 402, { 'Access-Control-Allow-Origin': '*' })
+      }
+
+      // Check for replayed proofs
+      const secrets = getProofSecrets(parsed.tokens)
+      const spentSecrets = await findSpentProofs(c.env.DB, secrets)
+      if (spentSecrets.length > 0) {
+        return c.json({ ok: false, error: 'Cashu proof has already been used' }, 409, { 'Access-Control-Allow-Origin': '*' })
+      }
+
+      // Store proofs as spent before creating the reservation
+      const tokenHash = await hashCashuToken(cashu_token)
+      const proofData = parsed.tokens.flatMap(t =>
+        t.proofs.map(p => ({ secret: p.secret, amount: p.amount }))
+      )
+      await storeSpentProofs(c.env.DB, proofData, tokenHash, nameCanonical)
+
+    } else if (invite_code) {
+      if (!c.env.INVITE_FAUCET_URL) {
+        return c.json({ ok: false, error: 'Invite code redemption not configured' }, 500, { 'Access-Control-Allow-Origin': '*' })
+      }
+
+      // Redeem invite code via the faucet service
+      const faucetRes = await fetch(`${c.env.INVITE_FAUCET_URL}/api/invite/redeem`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: invite_code })
+      })
+
+      if (!faucetRes.ok) {
+        return c.json({ ok: false, error: 'Invalid invite code' }, 403, { 'Access-Control-Allow-Origin': '*' })
+      }
     }
 
     // Generate confirmation token and set expiry (48 hours)
