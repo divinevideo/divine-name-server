@@ -1,5 +1,5 @@
 // ABOUTME: Tests for admin endpoints
-// ABOUTME: Validates search endpoint input validation and error handling
+// ABOUTME: Validates search endpoint input validation, error handling, and hostname auth guard
 
 import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
@@ -693,5 +693,80 @@ describe('Admin Notify Assignment Endpoint', () => {
     expect(json.ok).toBe(true)
     expect(json.name).toBe('testuser')
     expect(json.email).toBe('user@example.com')
+  })
+})
+
+describe('Admin Hostname Auth Guard', () => {
+  function createTestApp() {
+    const app = new Hono<{ Bindings: { DB: D1Database } }>()
+    app.route('/api/admin', admin)
+    return app
+  }
+
+  it('should block admin API requests from names.divine.video', async () => {
+    const app = createTestApp()
+
+    const req = new Request('https://names.divine.video/api/admin/usernames/search?q=test')
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+
+    expect(res.status).toBe(403)
+    const json = await res.json() as any
+    expect(json.ok).toBe(false)
+    expect(json.error).toBe('Unauthorized')
+  })
+
+  it('should block admin API requests from arbitrary hostnames', async () => {
+    const app = createTestApp()
+
+    const req = new Request('https://evil.example.com/api/admin/export/csv')
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+
+    expect(res.status).toBe(403)
+    const json = await res.json() as any
+    expect(json.ok).toBe(false)
+  })
+
+  it('should block admin POST requests from non-admin hostnames', async () => {
+    const app = createTestApp()
+
+    const req = new Request('https://names.divine.video/api/admin/username/assign', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'alice', pubkey: 'a'.repeat(64) })
+    })
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+
+    expect(res.status).toBe(403)
+  })
+
+  it('should allow admin API requests from names.admin.divine.video with CF Access JWT', async () => {
+    const app = createTestApp()
+
+    const req = new Request('https://names.admin.divine.video/api/admin/usernames/search?q=test', {
+      headers: { 'Cf-Access-Jwt-Assertion': 'fake-jwt-for-test' }
+    })
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+  })
+
+  it('should block admin API requests from names.admin.divine.video without CF Access JWT', async () => {
+    const app = createTestApp()
+
+    const req = new Request('https://names.admin.divine.video/api/admin/usernames/search?q=test')
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+
+    expect(res.status).toBe(403)
+  })
+
+  it('should allow admin API requests from localhost for local dev', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/api/admin/usernames/search?q=test')
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+
+    expect(res.status).toBe(200)
   })
 })

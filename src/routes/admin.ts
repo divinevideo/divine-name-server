@@ -16,8 +16,31 @@ type Bindings = {
 
 const admin = new Hono<{ Bindings: Bindings }>()
 
-// Note: These routes are protected by Cloudflare Access at the edge
-// No additional auth needed in worker code
+// Defense-in-depth: verify requests come through Cloudflare Access
+// Cloudflare Access protects names.admin.divine.video at the edge,
+// but the worker is also reachable via names.divine.video which has
+// no Access policy. This middleware blocks that bypass.
+admin.use('*', async (c, next) => {
+  const url = new URL(c.req.url)
+
+  // Only allow admin API on the admin subdomain (and localhost for dev)
+  const isAdminHost = url.hostname === 'names.admin.divine.video'
+  const isLocalDev = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
+
+  if (!isAdminHost && !isLocalDev) {
+    return c.json({ ok: false, error: 'Unauthorized' }, 403)
+  }
+
+  // In production, require Cloudflare Access JWT header
+  if (isAdminHost) {
+    const cfJwt = c.req.header('Cf-Access-Jwt-Assertion')
+    if (!cfJwt) {
+      return c.json({ ok: false, error: 'Unauthorized' }, 403)
+    }
+  }
+
+  await next()
+})
 
 admin.get('/usernames/search', async (c) => {
   try {
