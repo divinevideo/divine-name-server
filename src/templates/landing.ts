@@ -57,23 +57,6 @@ export function landingPage(): string {
             <p class="text-xs text-gray-500 mt-1">We'll send a confirmation link. Your email is never shared.</p>
           </div>
 
-          <!-- Payment method toggle -->
-          <div class="mb-4">
-            <label class="block text-sm text-gray-400 mb-2">Payment method</label>
-            <div class="flex gap-2">
-              <button id="btn-invite" type="button"
-                class="flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-colors
-                       border-divine bg-divine/10 text-divine">
-                Invite Code
-              </button>
-              <button id="btn-cashu" type="button"
-                class="flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-colors
-                       border-gray-600 bg-gray-800 text-gray-400 hover:border-gray-500">
-                Cashu Token
-              </button>
-            </div>
-          </div>
-
           <!-- Invite code input -->
           <div id="invite-field" class="mb-4">
             <label for="invite-input" class="block text-sm text-gray-400 mb-1">Invite code</label>
@@ -87,20 +70,6 @@ export function landingPage(): string {
             >
           </div>
 
-          <!-- Cashu token input -->
-          <div id="cashu-field" class="hidden mb-4">
-            <label for="cashu-input" class="block text-sm text-gray-400 mb-1">Cashu token</label>
-            <textarea
-              id="cashu-input"
-              rows="3"
-              placeholder="cashuA..."
-              class="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white
-                     placeholder-gray-500 focus:outline-none focus:border-divine focus:ring-1 focus:ring-divine
-                     transition-colors font-mono text-sm resize-none"
-            ></textarea>
-            <p id="price-hint" class="text-xs text-gray-500 mt-1"></p>
-          </div>
-
           <button id="submit-btn" type="button"
             class="w-full py-3 bg-divine hover:bg-divine-600 text-white font-semibold rounded-lg
                    transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
@@ -112,33 +81,6 @@ export function landingPage(): string {
       </div>
     </div>
 
-    <!-- Pricing info -->
-    <div class="max-w-lg mx-auto mt-12 text-center">
-      <h3 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Pricing</h3>
-      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
-        <div class="bg-gray-900 rounded-lg p-3 border border-gray-800">
-          <div class="text-divine font-bold text-lg">10,000</div>
-          <div class="text-gray-500">sats</div>
-          <div class="text-gray-400 mt-1">1-2 chars</div>
-        </div>
-        <div class="bg-gray-900 rounded-lg p-3 border border-gray-800">
-          <div class="text-divine font-bold text-lg">5,000</div>
-          <div class="text-gray-500">sats</div>
-          <div class="text-gray-400 mt-1">3 chars</div>
-        </div>
-        <div class="bg-gray-900 rounded-lg p-3 border border-gray-800">
-          <div class="text-divine font-bold text-lg">2,000</div>
-          <div class="text-gray-500">sats</div>
-          <div class="text-gray-400 mt-1">4-5 chars</div>
-        </div>
-        <div class="bg-gray-900 rounded-lg p-3 border border-gray-800">
-          <div class="text-divine font-bold text-lg">1,000</div>
-          <div class="text-gray-500">sats</div>
-          <div class="text-gray-400 mt-1">6+ chars</div>
-        </div>
-      </div>
-      <p class="text-xs text-gray-500 mt-2">Premium names (dictionary words) are 10,000 sats regardless of length.</p>
-    </div>
   `
 
   const scripts = `<script>
@@ -150,60 +92,11 @@ export function landingPage(): string {
   const reserveHeading = document.getElementById('reserve-heading');
   const emailInput = document.getElementById('email-input');
   const inviteInput = document.getElementById('invite-input');
-  const cashuInput = document.getElementById('cashu-input');
   const submitBtn = document.getElementById('submit-btn');
   const submitResult = document.getElementById('submit-result');
-  const priceHint = document.getElementById('price-hint');
-  const btnInvite = document.getElementById('btn-invite');
-  const btnCashu = document.getElementById('btn-cashu');
-  const inviteField = document.getElementById('invite-field');
-  const cashuField = document.getElementById('cashu-field');
 
   let debounceTimer = null;
   let currentName = '';
-  let paymentMethod = 'invite';
-
-  // Premium names list (mirrors server-side)
-  const PREMIUM = new Set([
-    'music','dance','art','video','film','photo','sound','beat','remix','loop','live','sing','play',
-    'band','song','audio','love','follow','share','like','viral','trend','famous','star','fan','crew',
-    'squad','vibe','mood','real','legend','bitcoin','crypto','nostr','relay','lightning','cashu','zap',
-    'code','hack','dev','app','web','ai','bot','vine','divine','creator','comedy','funny','lol',
-    'admin','support','help','official','news','shop','store','money','cash','pay','gold','king',
-    'queen','boss','god'
-  ]);
-
-  function getPrice(name) {
-    const n = name.toLowerCase();
-    if (PREMIUM.has(n)) return 10000;
-    const len = n.length;
-    if (len <= 2) return 10000;
-    if (len === 3) return 5000;
-    if (len <= 5) return 2000;
-    return 1000;
-  }
-
-  function formatSats(n) {
-    return n.toLocaleString();
-  }
-
-  // Payment method toggle
-  btnInvite.addEventListener('click', function() {
-    paymentMethod = 'invite';
-    btnInvite.className = 'flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-colors border-divine bg-divine/10 text-divine';
-    btnCashu.className = 'flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-colors border-gray-600 bg-gray-800 text-gray-400 hover:border-gray-500';
-    inviteField.classList.remove('hidden');
-    cashuField.classList.add('hidden');
-  });
-
-  btnCashu.addEventListener('click', function() {
-    paymentMethod = 'cashu';
-    btnCashu.className = 'flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-colors border-divine bg-divine/10 text-divine';
-    btnInvite.className = 'flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-colors border-gray-600 bg-gray-800 text-gray-400 hover:border-gray-500';
-    cashuField.classList.remove('hidden');
-    inviteField.classList.add('hidden');
-    priceHint.textContent = 'Required: ' + formatSats(getPrice(currentName)) + ' sats';
-  });
 
   nameInput.addEventListener('input', function() {
     const val = nameInput.value.trim();
@@ -233,18 +126,15 @@ export function landingPage(): string {
       if (nameInput.value.trim() !== name) return;
 
       if (data.available) {
-        const price = getPrice(data.canonical || name);
         checkResult.innerHTML =
           '<div class="flex items-center gap-2 text-divine fade-in py-2">' +
             '<svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
               '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>' +
             '</svg>' +
-            '<span><strong>' + escapeHtml(data.canonical || name) + '</strong> is available! ' +
-            '<span class="text-gray-400">(' + formatSats(price) + ' sats)</span></span>' +
+            '<span><strong>' + escapeHtml(data.canonical || name) + '</strong> is available!</span>' +
           '</div>';
 
         reserveHeading.textContent = 'Reserve @' + (data.canonical || name) + '.divine.video';
-        priceHint.textContent = 'Required: ' + formatSats(price) + ' sats';
         reserveForm.classList.remove('hidden');
       } else {
         checkResult.innerHTML =
@@ -275,23 +165,13 @@ export function landingPage(): string {
       return;
     }
 
-    const payload = { name: name, email: email };
-
-    if (paymentMethod === 'invite') {
-      const code = inviteInput.value.trim();
-      if (!code) {
-        submitResult.innerHTML = '<div class="text-red-400 text-sm">Please enter an invite code.</div>';
-        return;
-      }
-      payload.invite_code = code;
-    } else {
-      const token = cashuInput.value.trim();
-      if (!token) {
-        submitResult.innerHTML = '<div class="text-red-400 text-sm">Please paste a Cashu token.</div>';
-        return;
-      }
-      payload.cashu_token = token;
+    const code = inviteInput.value.trim();
+    if (!code) {
+      submitResult.innerHTML = '<div class="text-red-400 text-sm">Please enter an invite code.</div>';
+      return;
     }
+
+    const payload = { name: name, email: email, invite_code: code };
 
     submitBtn.disabled = true;
     submitBtn.textContent = 'Reserving...';
