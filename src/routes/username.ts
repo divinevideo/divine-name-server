@@ -17,7 +17,7 @@ import {
   findSpentProofs,
   storeSpentProofs
 } from '../db/queries'
-import { syncUsernameToFastly } from '../utils/fastly-sync'
+import { syncUsernameToFastly, deleteUsernameFromFastly } from '../utils/fastly-sync'
 import { sendReservationConfirmationEmail } from '../utils/email'
 import {
   parseCashuToken,
@@ -459,8 +459,12 @@ username.post('/claim', async (c) => {
     const currentUsername = await getUsernameByPubkey(c.env.DB, pubkey)
     if (currentUsername) {
       const currentCanonical = currentUsername.username_canonical || currentUsername.name?.toLowerCase()
-      if (currentCanonical !== nameCanonical) {
-        // User is claiming a new username, old one will be auto-revoked
+      if (currentCanonical && currentCanonical !== nameCanonical) {
+        // User is claiming a new username, old one will be auto-revoked in D1.
+        // Also delete the old entry from Fastly KV so it stops resolving.
+        c.executionCtx.waitUntil(
+          deleteUsernameFromFastly(c.env, currentCanonical)
+        )
       }
     }
 

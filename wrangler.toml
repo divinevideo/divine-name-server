@@ -2,6 +2,13 @@ name = "divine-name-server"
 main = "src/index.ts"
 compatibility_date = "2024-11-15"
 
+# Routes (must be top-level, before any [section] headers)
+routes = [
+  { pattern = "divine.video/.well-known/*", zone_name = "divine.video" },
+  { pattern = "names.admin.divine.video/*", zone_name = "divine.video" },
+  { pattern = "names.divine.video/*", zone_name = "divine.video" }
+]
+
 # Fastly KV sync (for divine-router edge)
 # Set via wrangler secret put FASTLY_API_TOKEN
 # Set via wrangler secret put FASTLY_STORE_ID
@@ -16,13 +23,6 @@ compatibility_date = "2024-11-15"
 # ALLOWED_MINTS = "https://8333.space:3338,https://mint.minibits.cash/Bitcoin"
 # NAME_PRICE_SATS = "1000"
 # INVITE_FAUCET_URL = "https://faucet.divine.video"
-
-# Routes
-routes = [
-  { pattern = "divine.video/.well-known/*", zone_name = "divine.video" },
-  { pattern = "names.admin.divine.video/*", zone_name = "divine.video" },
-  { pattern = "names.divine.video/api/username/*", zone_name = "divine.video" }
-]
 
 [[d1_databases]]
 binding = "DB"
