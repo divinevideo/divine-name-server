@@ -323,7 +323,7 @@ username.post('/reserve', async (c) => {
 
     // Send confirmation email (if API key configured)
     if (c.env.SENDGRID_API_KEY) {
-      const confirmationUrl = `https://names.divine.video/api/username/confirm?token=${token}`
+      const confirmationUrl = `https://names.divine.video/confirm?token=${token}`
       c.executionCtx.waitUntil(
         sendReservationConfirmationEmail(c.env.SENDGRID_API_KEY, email, nameDisplay, confirmationUrl)
           .catch(err => console.error('Failed to send confirmation email:', err))

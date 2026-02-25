@@ -6,6 +6,7 @@ import username from './routes/username'
 import nip05 from './routes/nip05'
 import subdomain from './routes/subdomain'
 import admin from './routes/admin'
+import publicRoutes from './routes/public'
 import { getAllActiveUsernames, expireStaleReservations } from './db/queries'
 import { bulkSyncToFastly } from './utils/fastly-sync'
 
@@ -30,6 +31,10 @@ app.get('/.well-known/apple-app-site-association', (c) => {
 // Subdomain profile routing (must be first to catch subdomains)
 app.route('', subdomain)
 
+// Public UI for names.divine.video (hostname-guarded)
+app.route('', publicRoutes)
+
+// Service info fallback for non-public hostnames
 app.get('/', (c) => {
   return c.json({
     service: 'divine-name-server',
