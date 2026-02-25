@@ -33,7 +33,8 @@ database_id = "e7e081c4-830d-449c-9de5-d93eaacefb34"
 [triggers]
 crons = ["0 * * * *"]
 
-# Admin UI static assets
+# Admin UI static assets (run_worker_first so public UI isn't overridden)
 [assets]
 directory = "./admin-ui/dist"
 binding = "ASSETS"
+run_worker_first = true
