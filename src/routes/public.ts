@@ -38,20 +38,20 @@ publicRoutes.use('*', async (c, next) => {
 })
 
 // Landing page
-publicRoutes.get('/', async (c) => {
+publicRoutes.get('/', async (c, next) => {
   const url = new URL(c.req.url)
   if (!ALLOWED_HOSTNAMES.includes(url.hostname)) {
-    return // Let other routes handle it
+    return next() // Let other routes handle it
   }
 
   return c.html(landingPage())
 })
 
 // Email confirmation — renders HTML result page
-publicRoutes.get('/confirm', async (c) => {
+publicRoutes.get('/confirm', async (c, next) => {
   const url = new URL(c.req.url)
   if (!ALLOWED_HOSTNAMES.includes(url.hostname)) {
-    return // Let other routes handle it
+    return next() // Let other routes handle it
   }
 
   const token = c.req.query('token')

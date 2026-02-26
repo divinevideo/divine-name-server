@@ -34,8 +34,12 @@ app.route('', subdomain)
 // Public UI for names.divine.video (hostname-guarded)
 app.route('', publicRoutes)
 
-// Service info fallback for non-public hostnames
-app.get('/', (c) => {
+// Service info fallback for non-public, non-admin hostnames
+app.get('/', (c, next) => {
+  const hostname = new URL(c.req.url).hostname
+  if (hostname === 'names.admin.divine.video') {
+    return next() // Let admin SPA catch-all handle it
+  }
   return c.json({
     service: 'divine-name-server',
     version: '0.1.0'
