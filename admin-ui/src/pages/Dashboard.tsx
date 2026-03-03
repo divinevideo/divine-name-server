@@ -120,6 +120,7 @@ export default function Dashboard() {
               <option value="">All Statuses</option>
               <option value="active">Active</option>
               <option value="reserved">Reserved</option>
+              <option value="recovered">Recovered (Vine)</option>
               <option value="revoked">Revoked</option>
               <option value="burned">Burned</option>
             </select>
@@ -149,6 +150,16 @@ export default function Dashboard() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
               Active
+            </a>
+            <a
+              href="/api/admin/export/csv?status=recovered"
+              download="usernames-recovered.csv"
+              className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-md bg-purple-100 text-purple-700 hover:bg-purple-200"
+            >
+              <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Recovered (Vine)
             </a>
             <a
               href="/api/admin/export/csv?status=reserved"
@@ -260,7 +271,10 @@ export default function Dashboard() {
                           {truncate(username.email, 30)}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <StatusBadge status={username.status} />
+                          <StatusBadge
+                            status={username.status}
+                            isRecovered={username.status === 'active' && !!username.pubkey && !!username.reserved_reason?.toLowerCase().includes('vine')}
+                          />
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                           {formatDate(username.created_at)}
