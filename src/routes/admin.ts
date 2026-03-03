@@ -2,10 +2,36 @@
 // ABOUTME: Protected by Cloudflare Access, handles reserve/revoke/burn/assign
 
 import { Hono } from 'hono'
+import { bech32 } from '@scure/base'
 import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getAllActiveUsernames } from '../db/queries'
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
 import { syncUsernameToFastly, deleteUsernameFromFastly, bulkSyncToFastly } from '../utils/fastly-sync'
 import { sendAssignmentNotificationEmail } from '../utils/email'
+
+/** Convert a 64-char hex pubkey to npub bech32 format */
+function hexToNpub(hex: string): string {
+  try {
+    const bytes = new Uint8Array(hex.match(/.{2}/g)!.map(b => parseInt(b, 16)))
+    // Convert 8-bit bytes to 5-bit words for bech32
+    const words: number[] = []
+    let acc = 0
+    let bits = 0
+    for (const byte of bytes) {
+      acc = (acc << 8) | byte
+      bits += 8
+      while (bits >= 5) {
+        bits -= 5
+        words.push((acc >> bits) & 31)
+      }
+    }
+    if (bits > 0) {
+      words.push((acc << (5 - bits)) & 31)
+    }
+    return bech32.encode('npub', words)
+  } catch {
+    return ''
+  }
+}
 
 type Bindings = {
   DB: D1Database
@@ -45,7 +71,7 @@ admin.use('*', async (c, next) => {
 admin.get('/usernames/search', async (c) => {
   try {
     const query = c.req.query('q')
-    const status = c.req.query('status') as 'active' | 'reserved' | 'revoked' | 'burned' | undefined
+    const status = c.req.query('status') as 'active' | 'reserved' | 'revoked' | 'burned' | 'recovered' | undefined
     const pageStr = c.req.query('page') || '1'
     const limitStr = c.req.query('limit') || '50'
 
@@ -59,7 +85,7 @@ admin.get('/usernames/search', async (c) => {
     }
 
     // Validate status parameter
-    const validStatuses = ['active', 'reserved', 'revoked', 'burned']
+    const validStatuses = ['active', 'reserved', 'revoked', 'burned', 'recovered']
     if (status && !validStatuses.includes(status)) {
       return c.json({ ok: false, error: 'Invalid status parameter' }, 400)
     }
@@ -484,10 +510,10 @@ admin.post('/username/assign-bulk', async (c) => {
 
 admin.get('/export/csv', async (c) => {
   try {
-    const status = c.req.query('status') as 'active' | 'reserved' | 'revoked' | 'burned' | undefined
+    const status = c.req.query('status') as 'active' | 'reserved' | 'revoked' | 'burned' | 'recovered' | undefined
 
     // Validate status parameter
-    const validStatuses = ['active', 'reserved', 'revoked', 'burned']
+    const validStatuses = ['active', 'reserved', 'revoked', 'burned', 'recovered']
     if (status && !validStatuses.includes(status)) {
       return c.json({ ok: false, error: 'Invalid status parameter' }, 400)
     }
@@ -495,14 +521,15 @@ admin.get('/export/csv', async (c) => {
     const usernames = await exportUsernamesByStatus(c.env.DB, status)
 
     // Build CSV content
-    const headers = ['name', 'pubkey', 'status', 'created_at', 'claimed_at', 'revoked_at', 'reserved_reason']
+    const headers = ['name', 'pubkey', 'npub', 'status', 'created_at', 'claimed_at', 'revoked_at', 'reserved_reason']
     const csvRows = [headers.join(',')]
 
     for (const u of usernames) {
       const row = [
         u.name,
         u.pubkey || '',
-        u.status,
+        u.pubkey ? hexToNpub(u.pubkey) : '',
+        status === 'recovered' ? 'recovered' : u.status,
         u.created_at ? new Date(u.created_at * 1000).toISOString() : '',
         u.claimed_at ? new Date(u.claimed_at * 1000).toISOString() : '',
         u.revoked_at ? new Date(u.revoked_at * 1000).toISOString() : '',

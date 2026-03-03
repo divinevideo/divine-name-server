@@ -35,7 +35,7 @@ export interface ReservationToken {
 
 export interface SearchParams {
   query: string
-  status?: 'active' | 'reserved' | 'revoked' | 'burned'
+  status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'recovered'
   page?: number
   limit?: number
 }
@@ -225,7 +225,15 @@ export async function searchUsernames(
   }
 
   // Add status filter if provided
-  if (status) {
+  if (status === 'recovered') {
+    // "Recovered" = Vine accounts that have been claimed (active with pubkey, originally from Vine import)
+    const recoveredCondition = `status = 'active' AND pubkey IS NOT NULL AND reserved_reason LIKE '%Vine%'`
+    if (whereClause) {
+      whereClause += ` AND ${recoveredCondition}`
+    } else {
+      whereClause = recoveredCondition
+    }
+  } else if (status) {
     if (whereClause) {
       whereClause += ` AND status = ?`
     } else {
@@ -311,8 +319,15 @@ export async function deleteReservedWord(
 
 export async function exportUsernamesByStatus(
   db: D1Database,
-  status?: 'active' | 'reserved' | 'revoked' | 'burned'
+  status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'recovered'
 ): Promise<Username[]> {
+  if (status === 'recovered') {
+    const result = await db.prepare(
+      `SELECT * FROM usernames WHERE status = 'active' AND pubkey IS NOT NULL AND reserved_reason LIKE '%Vine%' ORDER BY claimed_at DESC, name`
+    ).all<Username>()
+    return result.results
+  }
+
   if (status) {
     const result = await db.prepare(
       'SELECT * FROM usernames WHERE status = ? ORDER BY name'
