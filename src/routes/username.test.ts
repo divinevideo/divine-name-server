@@ -490,6 +490,48 @@ describe('Public Username Endpoints', () => {
       expect(json.reason).toContain('underscores')
     })
 
+    it('should return pubkey for active username', async () => {
+      const app = createTestApp()
+      const ownerPubkey = 'a'.repeat(64)
+      const db = createMockDB([{
+        id: 1, name: 'alice', username_display: 'alice', username_canonical: 'alice',
+        pubkey: ownerPubkey, status: 'active', reservation_expires_at: null
+      }])
+
+      const req = new Request('http://localhost/api/username/check/alice', {
+        method: 'GET'
+      })
+
+      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+      expect(res.status).toBe(200)
+      const json = await res.json() as any
+      expect(json.ok).toBe(true)
+      expect(json.available).toBe(false)
+      expect(json.status).toBe('active')
+      expect(json.pubkey).toBe(ownerPubkey)
+      expect(json.reason).toBe('Username is already taken')
+    })
+
+    it('should not return pubkey for reserved username', async () => {
+      const app = createTestApp()
+      const db = createMockDB([{
+        id: 1, name: 'bob', username_display: 'bob', username_canonical: 'bob',
+        pubkey: null, status: 'reserved', reservation_expires_at: null
+      }])
+
+      const req = new Request('http://localhost/api/username/check/bob', {
+        method: 'GET'
+      })
+
+      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+      expect(res.status).toBe(200)
+      const json = await res.json() as any
+      expect(json.ok).toBe(true)
+      expect(json.available).toBe(false)
+      expect(json.status).toBe('reserved')
+      expect(json.pubkey).toBeUndefined()
+    })
+
     it('should preserve display case in response', async () => {
       const app = createTestApp()
       const db = createMockDB()
