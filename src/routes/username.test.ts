@@ -512,6 +512,27 @@ describe('Public Username Endpoints', () => {
       expect(json.reason).toBe('Username is already taken')
     })
 
+    it('should normalize active username pubkey to lowercase', async () => {
+      const app = createTestApp()
+      const ownerPubkeyUpper = 'A'.repeat(64)
+      const db = createMockDB([{
+        id: 1, name: 'alice', username_display: 'alice', username_canonical: 'alice',
+        pubkey: ownerPubkeyUpper, status: 'active', reservation_expires_at: null
+      }])
+
+      const req = new Request('http://localhost/api/username/check/alice', {
+        method: 'GET'
+      })
+
+      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+      expect(res.status).toBe(200)
+      const json = await res.json() as any
+      expect(json.ok).toBe(true)
+      expect(json.available).toBe(false)
+      expect(json.status).toBe('active')
+      expect(json.pubkey).toBe(ownerPubkeyUpper.toLowerCase())
+    })
+
     it('should not return pubkey for reserved username', async () => {
       const app = createTestApp()
       const db = createMockDB([{
@@ -956,4 +977,3 @@ describe('Public Name Reservation', () => {
     })
   })
 })
-

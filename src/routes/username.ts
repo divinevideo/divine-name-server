@@ -109,7 +109,7 @@ username.get('/check/:name', async (c) => {
         // Include owning pubkey for active names so clients can distinguish
         // "taken by me" (admin-assigned) from "taken by someone else".
         // Pubkeys are already public via NIP-05 resolution.
-        ...(existing.status === 'active' && existing.pubkey ? { pubkey: existing.pubkey } : {})
+        ...(existing.status === 'active' && existing.pubkey ? { pubkey: existing.pubkey.toLowerCase() } : {})
       }, 200, { 'Access-Control-Allow-Origin': '*' })
     }
 
