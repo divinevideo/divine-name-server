@@ -105,7 +105,11 @@ username.get('/check/:name', async (c) => {
         name: usernameData.display,
         canonical: usernameData.canonical,
         status: existing.status,
-        reason: existing.status === 'revoked' ? undefined : reason
+        reason: existing.status === 'revoked' ? undefined : reason,
+        // Include owning pubkey for active names so clients can distinguish
+        // "taken by me" (admin-assigned) from "taken by someone else".
+        // Pubkeys are already public via NIP-05 resolution.
+        ...(existing.status === 'active' && existing.pubkey ? { pubkey: existing.pubkey } : {})
       }, 200, { 'Access-Control-Allow-Origin': '*' })
     }
 
