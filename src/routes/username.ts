@@ -57,6 +57,7 @@ username.get('/check/:name', async (c) => {
           ok: true,
           available: false,
           name,
+          code: 'invalid_format',
           reason: error.message
         }, 200, { 'Access-Control-Allow-Origin': '*' })
       }
@@ -71,6 +72,7 @@ username.get('/check/:name', async (c) => {
         available: false,
         name: usernameData.display,
         canonical: usernameData.canonical,
+        code: 'reserved',
         reason: 'Username is reserved'
       }, 200, { 'Access-Control-Allow-Origin': '*' })
     }
@@ -89,6 +91,13 @@ username.get('/check/:name', async (c) => {
         }, 200, { 'Access-Control-Allow-Origin': '*' })
       }
 
+      const codeMap: Record<string, string> = {
+        active: 'taken',
+        reserved: 'reserved',
+        burned: 'burned',
+        'pending-confirmation': 'pending_confirmation',
+      }
+
       const reason = existing.status === 'active'
         ? 'Username is already taken'
         : existing.status === 'reserved'
@@ -105,6 +114,7 @@ username.get('/check/:name', async (c) => {
         name: usernameData.display,
         canonical: usernameData.canonical,
         status: existing.status,
+        code: existing.status === 'revoked' ? undefined : codeMap[existing.status] || 'unavailable',
         reason: existing.status === 'revoked' ? undefined : reason,
         // Include owning pubkey for active names so clients can distinguish
         // "taken by me" (admin-assigned) from "taken by someone else".
