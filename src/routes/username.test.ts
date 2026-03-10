@@ -487,6 +487,7 @@ describe('Public Username Endpoints', () => {
       const json = await res.json() as any
       expect(json.ok).toBe(true)
       expect(json.available).toBe(false)
+      expect(json.code).toBe('invalid_format')
       expect(json.reason).toContain('underscores')
     })
 
@@ -508,6 +509,7 @@ describe('Public Username Endpoints', () => {
       expect(json.ok).toBe(true)
       expect(json.available).toBe(false)
       expect(json.status).toBe('active')
+      expect(json.code).toBe('taken')
       expect(json.pubkey).toBe(ownerPubkey)
       expect(json.reason).toBe('Username is already taken')
     })
@@ -550,7 +552,40 @@ describe('Public Username Endpoints', () => {
       expect(json.ok).toBe(true)
       expect(json.available).toBe(false)
       expect(json.status).toBe('reserved')
+      expect(json.code).toBe('reserved')
       expect(json.pubkey).toBeUndefined()
+    })
+
+    it('should return code:reserved for reserved word', async () => {
+      const app = createTestApp()
+      // Create a mock DB where reserved_words returns a hit
+      const db = createMockDB()
+      const originalPrepare = db.prepare.bind(db)
+      ;(db as any).prepare = (sql: string) => {
+        const stmt = originalPrepare(sql)
+        if (sql.includes('reserved_words')) {
+          return {
+            bind: (...params: any[]) => ({
+              first: async () => ({ word: params[0] }),
+              all: async () => ({ results: [{ word: params[0] }] }),
+              run: async () => ({ success: true, meta: { changes: 0 } })
+            })
+          }
+        }
+        return stmt
+      }
+
+      const req = new Request('http://localhost/api/username/check/admin', {
+        method: 'GET'
+      })
+
+      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+      expect(res.status).toBe(200)
+      const json = await res.json() as any
+      expect(json.ok).toBe(true)
+      expect(json.available).toBe(false)
+      expect(json.code).toBe('reserved')
+      expect(json.reason).toBe('Username is reserved')
     })
 
     it('should preserve display case in response', async () => {
