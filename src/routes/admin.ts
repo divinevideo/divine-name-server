@@ -525,7 +525,7 @@ admin.get('/export/csv', async (c) => {
     const usernames = await exportUsernamesByStatus(c.env.DB, status)
 
     // Build CSV content
-    const headers = ['name', 'pubkey', 'npub', 'status', 'created_at', 'claimed_at', 'revoked_at', 'reserved_reason']
+    const headers = ['name', 'pubkey', 'npub', 'status', 'claim_source', 'created_by', 'created_at', 'claimed_at', 'revoked_at', 'reserved_reason']
     const csvRows = [headers.join(',')]
 
     for (const u of usernames) {
@@ -534,6 +534,8 @@ admin.get('/export/csv', async (c) => {
         u.pubkey || '',
         u.pubkey ? hexToNpub(u.pubkey) : '',
         status === 'recovered' ? 'recovered' : u.status,
+        u.claim_source || 'unknown',
+        (u.created_by || '').replace(/"/g, '""'),
         u.created_at ? new Date(u.created_at * 1000).toISOString() : '',
         u.claimed_at ? new Date(u.claimed_at * 1000).toISOString() : '',
         u.revoked_at ? new Date(u.revoked_at * 1000).toISOString() : '',
