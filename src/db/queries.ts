@@ -139,20 +139,24 @@ export async function reserveUsername(
   db: D1Database,
   nameDisplay: string,
   nameCanonical: string,
-  reason: string
+  reason: string,
+  claimSource: ClaimSource,
+  createdBy: string | null
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000)
 
   await db.prepare(
-    `INSERT INTO usernames (name, username_display, username_canonical, status, reserved_reason, created_at, updated_at)
-     VALUES (?, ?, ?, 'reserved', ?, ?, ?)
+    `INSERT INTO usernames (name, username_display, username_canonical, status, reserved_reason, claim_source, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, 'reserved', ?, ?, ?, ?, ?)
      ON CONFLICT(username_canonical) DO UPDATE SET
        name = excluded.name,
        username_display = excluded.username_display,
        status = 'reserved',
        reserved_reason = excluded.reserved_reason,
+       claim_source = excluded.claim_source,
+       created_by = excluded.created_by,
        updated_at = excluded.updated_at`
-  ).bind(nameCanonical, nameDisplay, nameCanonical, reason, now, now).run()
+  ).bind(nameCanonical, nameDisplay, nameCanonical, reason, claimSource, createdBy, now, now).run()
 }
 
 export async function revokeUsername(
@@ -179,7 +183,9 @@ export async function assignUsername(
   db: D1Database,
   nameDisplay: string,
   nameCanonical: string,
-  pubkey: string
+  pubkey: string,
+  claimSource: ClaimSource,
+  createdBy: string | null
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000)
 
@@ -194,16 +200,18 @@ export async function assignUsername(
 
   // Assign username using canonical for uniqueness
   await db.prepare(
-    `INSERT INTO usernames (name, username_display, username_canonical, pubkey, status, created_at, updated_at, claimed_at)
-     VALUES (?, ?, ?, ?, 'active', ?, ?, ?)
+    `INSERT INTO usernames (name, username_display, username_canonical, pubkey, status, claim_source, created_by, created_at, updated_at, claimed_at)
+     VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)
      ON CONFLICT(username_canonical) DO UPDATE SET
        name = excluded.name,
        username_display = excluded.username_display,
        pubkey = excluded.pubkey,
        status = 'active',
+       claim_source = excluded.claim_source,
+       created_by = excluded.created_by,
        updated_at = excluded.updated_at,
        claimed_at = excluded.claimed_at`
-  ).bind(nameCanonical, nameDisplay, nameCanonical, pubkey, now, now, now).run()
+  ).bind(nameCanonical, nameDisplay, nameCanonical, pubkey, claimSource, createdBy, now, now, now).run()
 }
 
 function escapeLikePattern(str: string): string {

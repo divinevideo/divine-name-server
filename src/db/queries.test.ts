@@ -2,7 +2,7 @@
 // ABOUTME: Validates search functionality with mocked D1 database
 
 import { describe, it, expect, vi } from 'vitest'
-import { searchUsernames, claimUsername, createReservation, type SearchParams, type Username } from './queries'
+import { searchUsernames, claimUsername, createReservation, reserveUsername, type SearchParams, type Username } from './queries'
 
 // Mock D1 database
 function createMockDB() {
@@ -387,6 +387,32 @@ describe('claimUsername', () => {
     const insertSql = sqlStatements[1] // Second call is INSERT (first is revoke UPDATE)
     expect(insertSql).toContain("'self-service'")
     expect(insertSql).toContain('claim_source')
+  })
+})
+
+describe('reserveUsername', () => {
+  it('should include claim_source and created_by in SQL', async () => {
+    const sqlStatements: string[] = []
+    const boundParams: any[][] = []
+    const mockDB = {
+      prepare: (sql: string) => {
+        sqlStatements.push(sql)
+        return {
+          bind: (...params: any[]) => {
+            boundParams.push(params)
+            return { run: async () => ({ success: true }) }
+          },
+        }
+      },
+    } as unknown as D1Database
+
+    await reserveUsername(mockDB, 'TestName', 'testname', 'brand protection', 'admin', 'matt@divine.video')
+
+    expect(sqlStatements[0]).toContain('claim_source')
+    expect(sqlStatements[0]).toContain('created_by')
+    const allParams = boundParams.flat()
+    expect(allParams).toContain('matt@divine.video')
+    expect(allParams).toContain('admin')
   })
 })
 
