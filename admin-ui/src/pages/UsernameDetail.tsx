@@ -203,6 +203,18 @@ export default function UsernameDetail() {
               <p className="mt-1 text-sm text-gray-900">{username.admin_notes}</p>
             </div>
           )}
+
+          <div>
+            <p className="text-sm font-medium text-gray-500">Source</p>
+            <p className="mt-1 text-sm text-gray-900">{username.claim_source}</p>
+          </div>
+
+          {username.created_by && (
+            <div>
+              <p className="text-sm font-medium text-gray-500">Created by</p>
+              <p className="mt-1 text-sm text-gray-900">{username.created_by}</p>
+            </div>
+          )}
         </div>
       </div>
 

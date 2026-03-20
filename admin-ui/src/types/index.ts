@@ -1,3 +1,5 @@
+export type ClaimSource = 'self-service' | 'admin' | 'bulk-upload' | 'vine-import' | 'public-reservation' | 'unknown'
+
 export interface Username {
   id: number
   name: string
@@ -12,6 +14,8 @@ export interface Username {
   revoked_at: number | null
   reserved_reason: string | null
   admin_notes: string | null
+  claim_source: ClaimSource
+  created_by: string | null
 }
 
 export interface SearchResult {

@@ -198,10 +198,9 @@ async function main() {
     const escaped = (s: string) => s.replace(/'/g, "''")
 
     sqlStatements.push(
-      `INSERT INTO usernames (name, username_display, username_canonical, pubkey, status, created_at, updated_at, claimed_at) ` +
-      `VALUES ('${escaped(canonical)}', '${escaped(a.display)}', '${escaped(canonical)}', '${a.pubkey}', 'active', ${now}, ${now}, ${now}) ` +
-      `ON CONFLICT(username_canonical) DO UPDATE SET ` +
-      `pubkey = '${a.pubkey}', username_display = '${escaped(a.display)}', status = 'active', updated_at = ${now}, claimed_at = ${now}`
+      `INSERT INTO usernames (name, username_display, username_canonical, pubkey, status, claim_source, created_at, updated_at, claimed_at) ` +
+      `VALUES ('${escaped(canonical)}', '${escaped(a.display)}', '${escaped(canonical)}', '${a.pubkey}', 'active', 'vine-import', ${now}, ${now}, ${now}) ` +
+      `ON CONFLICT(username_canonical) DO NOTHING`
     )
   }
 
@@ -213,8 +212,8 @@ async function main() {
 
   // Execute via wrangler
   console.log('Executing via wrangler d1 execute...')
+  const scriptDir = import.meta.dir
   try {
-    const scriptDir = import.meta.dir
     execSync(`cd ${scriptDir}/.. && npx wrangler d1 execute divine-name-server-db --remote --file=${sqlFile}`, {
       stdio: 'inherit'
     })
@@ -224,6 +223,58 @@ async function main() {
     console.error('You can manually run:')
     console.error(`  cd divine-name-server && npx wrangler d1 execute divine-name-server-db --remote --file=${sqlFile}`)
     process.exit(1)
+  }
+
+  // Check for skipped names (collisions with existing records)
+  console.log('\nChecking for name collisions...')
+  const skippedNames: { name: string; existingStatus: string; existingPubkey: string; vinePubkey: string }[] = []
+  const batchSize = 500
+
+  for (let i = 0; i < assignments.length; i += batchSize) {
+    const batch = assignments.slice(i, i + batchSize)
+    const canonicals = batch.map(a => `'${a.name.toLowerCase().replace(/'/g, "''")}'`)
+    const checkSql = `SELECT username_canonical, status, pubkey FROM usernames WHERE username_canonical IN (${canonicals.join(',')}) AND (claim_source != 'vine-import' OR claim_source IS NULL)`
+
+    const checkFile = `/tmp/vine-import-check-${i}.sql`
+    fs.writeFileSync(checkFile, checkSql)
+
+    try {
+      const result = execSync(
+        `cd ${scriptDir}/.. && npx wrangler d1 execute divine-name-server-db --remote --file=${checkFile} --json`,
+        { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+      )
+      const parsed = JSON.parse(result)
+      const rows = parsed?.[0]?.results || []
+      for (const row of rows) {
+        const vine = batch.find(a => a.name.toLowerCase() === row.username_canonical)
+        skippedNames.push({
+          name: row.username_canonical,
+          existingStatus: row.status || 'unknown',
+          existingPubkey: row.pubkey || 'none',
+          vinePubkey: vine?.pubkey || 'unknown',
+        })
+      }
+    } catch {
+      console.warn(`Warning: could not verify batch ${i}-${i + batchSize}`)
+    }
+
+    // Clean up temp file
+    try { fs.unlinkSync(checkFile) } catch {}
+  }
+
+  if (skippedNames.length > 0) {
+    console.log(`\nSkipped ${skippedNames.length} names (already exist). Review in admin UI.`)
+
+    const csvHeader = 'name,existing_status,existing_pubkey,vine_pubkey'
+    const csvRows = skippedNames.map(s =>
+      `${s.name},${s.existingStatus},${s.existingPubkey},${s.vinePubkey}`
+    )
+    const csvContent = [csvHeader, ...csvRows].join('\n')
+    const skippedFile = '/tmp/vine-import-skipped.csv'
+    fs.writeFileSync(skippedFile, csvContent)
+    console.log(`Skipped names written to: ${skippedFile}`)
+  } else {
+    console.log('\nNo collisions — all names imported successfully.')
   }
 
   // Sync to Fastly KV

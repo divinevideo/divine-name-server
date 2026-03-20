@@ -215,7 +215,8 @@ admin.post('/username/reserve', async (c) => {
 
     // Include override reason in the reserved_reason if provided
     const finalReason = overrideReason ? `${reason} [Override: ${overrideReason}]` : reason
-    await reserveUsername(c.env.DB, usernameData.display, usernameData.canonical, finalReason)
+    const createdBy = c.req.header('Cf-Access-Authenticated-User-Email') || null
+    await reserveUsername(c.env.DB, usernameData.display, usernameData.canonical, finalReason, 'admin', createdBy)
 
     if (overrideReason) {
       console.log(`Admin override: reserved short name "${name}". Reason: ${overrideReason}`)
@@ -262,6 +263,7 @@ admin.post('/username/reserve-bulk', async (c) => {
     }
 
     // Process each name
+    const createdBy = c.req.header('Cf-Access-Authenticated-User-Email') || null
     const results = []
     for (const name of nameList) {
       try {
@@ -281,7 +283,7 @@ admin.post('/username/reserve-bulk', async (c) => {
           }
           continue
         }
-        await reserveUsername(c.env.DB, usernameData.display, usernameData.canonical, reason)
+        await reserveUsername(c.env.DB, usernameData.display, usernameData.canonical, reason, 'bulk-upload', createdBy)
         results.push({ name, status: 'reserved', success: true })
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error'
@@ -394,7 +396,8 @@ admin.post('/username/assign', async (c) => {
       throw error
     }
 
-    await assignUsername(c.env.DB, usernameData.display, usernameData.canonical, normalizedPubkey)
+    const createdBy = c.req.header('Cf-Access-Authenticated-User-Email') || null
+    await assignUsername(c.env.DB, usernameData.display, usernameData.canonical, normalizedPubkey, 'admin', createdBy)
 
     // Sync to Fastly KV for edge routing
     c.executionCtx.waitUntil(
@@ -438,6 +441,7 @@ admin.post('/username/assign-bulk', async (c) => {
     }
 
     // Process each assignment
+    const createdBy = c.req.header('Cf-Access-Authenticated-User-Email') || null
     const results = []
     for (const assignment of assignments) {
       const { name, pubkey } = assignment
@@ -474,7 +478,7 @@ admin.post('/username/assign-bulk', async (c) => {
           }
         }
 
-        await assignUsername(c.env.DB, usernameData.display, usernameData.canonical, normalizedPubkey)
+        await assignUsername(c.env.DB, usernameData.display, usernameData.canonical, normalizedPubkey, 'bulk-upload', createdBy)
 
         // Sync to Fastly (fire and forget)
         c.executionCtx.waitUntil(
@@ -521,7 +525,7 @@ admin.get('/export/csv', async (c) => {
     const usernames = await exportUsernamesByStatus(c.env.DB, status)
 
     // Build CSV content
-    const headers = ['name', 'pubkey', 'npub', 'status', 'created_at', 'claimed_at', 'revoked_at', 'reserved_reason']
+    const headers = ['name', 'pubkey', 'npub', 'status', 'claim_source', 'created_by', 'created_at', 'claimed_at', 'revoked_at', 'reserved_reason']
     const csvRows = [headers.join(',')]
 
     for (const u of usernames) {
@@ -530,6 +534,8 @@ admin.get('/export/csv', async (c) => {
         u.pubkey || '',
         u.pubkey ? hexToNpub(u.pubkey) : '',
         status === 'recovered' ? 'recovered' : u.status,
+        u.claim_source || 'unknown',
+        (u.created_by || '').replace(/"/g, '""'),
         u.created_at ? new Date(u.created_at * 1000).toISOString() : '',
         u.claimed_at ? new Date(u.claimed_at * 1000).toISOString() : '',
         u.revoked_at ? new Date(u.revoked_at * 1000).toISOString() : '',

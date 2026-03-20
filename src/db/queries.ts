@@ -1,6 +1,8 @@
 // ABOUTME: Database query helpers for usernames and reserved words
 // ABOUTME: Provides type-safe D1 database operations
 
+export type ClaimSource = 'self-service' | 'admin' | 'bulk-upload' | 'vine-import' | 'public-reservation' | 'unknown'
+
 export interface Username {
   id: number
   name: string // Legacy field, kept for backward compatibility
@@ -21,6 +23,8 @@ export interface Username {
   confirmation_token: string | null
   reservation_expires_at: number | null
   subscription_expires_at: number | null
+  claim_source: ClaimSource
+  created_by: string | null
 }
 
 export interface ReservationToken {
@@ -106,14 +110,16 @@ export async function claimUsername(
 
   // Then insert or update the new username using canonical for uniqueness
   await db.prepare(
-    `INSERT INTO usernames (name, username_display, username_canonical, pubkey, relays, status, created_at, updated_at, claimed_at)
-     VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
+    `INSERT INTO usernames (name, username_display, username_canonical, pubkey, relays, status, claim_source, created_at, updated_at, claimed_at)
+     VALUES (?, ?, ?, ?, ?, 'active', 'self-service', ?, ?, ?)
      ON CONFLICT(username_canonical) DO UPDATE SET
        name = excluded.name,
        username_display = excluded.username_display,
        pubkey = excluded.pubkey,
        relays = excluded.relays,
        status = 'active',
+       claim_source = 'self-service',
+       created_by = NULL,
        updated_at = excluded.updated_at,
        claimed_at = excluded.claimed_at`
   ).bind(nameCanonical, nameDisplay, nameCanonical, pubkey, relaysJson, now, now, now).run()
@@ -133,20 +139,24 @@ export async function reserveUsername(
   db: D1Database,
   nameDisplay: string,
   nameCanonical: string,
-  reason: string
+  reason: string,
+  claimSource: ClaimSource,
+  createdBy: string | null
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000)
 
   await db.prepare(
-    `INSERT INTO usernames (name, username_display, username_canonical, status, reserved_reason, created_at, updated_at)
-     VALUES (?, ?, ?, 'reserved', ?, ?, ?)
+    `INSERT INTO usernames (name, username_display, username_canonical, status, reserved_reason, claim_source, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, 'reserved', ?, ?, ?, ?, ?)
      ON CONFLICT(username_canonical) DO UPDATE SET
        name = excluded.name,
        username_display = excluded.username_display,
        status = 'reserved',
        reserved_reason = excluded.reserved_reason,
+       claim_source = excluded.claim_source,
+       created_by = excluded.created_by,
        updated_at = excluded.updated_at`
-  ).bind(nameCanonical, nameDisplay, nameCanonical, reason, now, now).run()
+  ).bind(nameCanonical, nameDisplay, nameCanonical, reason, claimSource, createdBy, now, now).run()
 }
 
 export async function revokeUsername(
@@ -173,7 +183,9 @@ export async function assignUsername(
   db: D1Database,
   nameDisplay: string,
   nameCanonical: string,
-  pubkey: string
+  pubkey: string,
+  claimSource: ClaimSource,
+  createdBy: string | null
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000)
 
@@ -188,16 +200,18 @@ export async function assignUsername(
 
   // Assign username using canonical for uniqueness
   await db.prepare(
-    `INSERT INTO usernames (name, username_display, username_canonical, pubkey, status, created_at, updated_at, claimed_at)
-     VALUES (?, ?, ?, ?, 'active', ?, ?, ?)
+    `INSERT INTO usernames (name, username_display, username_canonical, pubkey, status, claim_source, created_by, created_at, updated_at, claimed_at)
+     VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)
      ON CONFLICT(username_canonical) DO UPDATE SET
        name = excluded.name,
        username_display = excluded.username_display,
        pubkey = excluded.pubkey,
        status = 'active',
+       claim_source = excluded.claim_source,
+       created_by = excluded.created_by,
        updated_at = excluded.updated_at,
        claimed_at = excluded.claimed_at`
-  ).bind(nameCanonical, nameDisplay, nameCanonical, pubkey, now, now, now).run()
+  ).bind(nameCanonical, nameDisplay, nameCanonical, pubkey, claimSource, createdBy, now, now, now).run()
 }
 
 function escapeLikePattern(str: string): string {
@@ -366,11 +380,13 @@ export async function createReservation(
 
   // Upsert username record with pending-confirmation status
   await db.prepare(
-    `INSERT INTO usernames (name, username_display, username_canonical, status, reservation_email, confirmation_token, reservation_expires_at, created_at, updated_at)
-     VALUES (?, ?, ?, 'pending-confirmation', ?, ?, ?, ?, ?)
+    `INSERT INTO usernames (name, username_display, username_canonical, status, claim_source, reservation_email, confirmation_token, reservation_expires_at, created_at, updated_at)
+     VALUES (?, ?, ?, 'pending-confirmation', 'public-reservation', ?, ?, ?, ?, ?)
      ON CONFLICT(username_canonical) DO UPDATE SET
        username_display = excluded.username_display,
        status = 'pending-confirmation',
+       claim_source = 'public-reservation',
+       created_by = NULL,
        reservation_email = excluded.reservation_email,
        confirmation_token = excluded.confirmation_token,
        reservation_expires_at = excluded.reservation_expires_at,
