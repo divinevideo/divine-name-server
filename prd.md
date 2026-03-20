@@ -220,6 +220,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_usernames_pubkey_active
 
 ⸻
 
+7.1.1 Username Provenance
+
+Each username record tracks how it was created via `claim_source` and optionally who created it via `created_by`.
+
+| claim_source | Meaning | created_by |
+|-------------|---------|------------|
+| `self-service` | User claimed via NIP-98 signature | null (pubkey is the identity) |
+| `admin` | Admin reserved or assigned a single name | CF Access email of the admin |
+| `bulk-upload` | Admin reserved or assigned in bulk | CF Access email of the admin |
+| `vine-import` | Imported from Vine archive | null (script-level operation) |
+| `public-reservation` | Reserved via email + Cashu/invite payment | null (email in reservation_email) |
+| `unknown` | Pre-existing record (before migration 0007) | null |
+
+Notes:
+- `claim_source` reflects current provenance, not a changelog. If a name is reassigned, only the most recent source is recorded.
+- Status-changing operations (revoke, burn, expire) do not alter `claim_source` or `created_by`.
+- `created_by` only contains internal team emails (CF Access), never end-user PII.
+
+⸻
+
 7.2 Cloudflare Worker Responsibilities
 
 Required:
