@@ -1,6 +1,8 @@
 // ABOUTME: Database query helpers for usernames and reserved words
 // ABOUTME: Provides type-safe D1 database operations
 
+export type ClaimSource = 'self-service' | 'admin' | 'bulk-upload' | 'vine-import' | 'public-reservation' | 'unknown'
+
 export interface Username {
   id: number
   name: string // Legacy field, kept for backward compatibility
@@ -21,6 +23,8 @@ export interface Username {
   confirmation_token: string | null
   reservation_expires_at: number | null
   subscription_expires_at: number | null
+  claim_source: ClaimSource
+  created_by: string | null
 }
 
 export interface ReservationToken {

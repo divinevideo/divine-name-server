@@ -26,7 +26,9 @@ function createMockDB() {
       reservation_email: null,
       confirmation_token: null,
       reservation_expires_at: null,
-      subscription_expires_at: null
+      subscription_expires_at: null,
+      claim_source: 'unknown',
+      created_by: null
     },
     {
       id: 2,
@@ -47,7 +49,9 @@ function createMockDB() {
       reservation_email: null,
       confirmation_token: null,
       reservation_expires_at: null,
-      subscription_expires_at: null
+      subscription_expires_at: null,
+      claim_source: 'unknown',
+      created_by: null
     },
     {
       id: 3,
@@ -68,7 +72,9 @@ function createMockDB() {
       reservation_email: null,
       confirmation_token: null,
       reservation_expires_at: null,
-      subscription_expires_at: null
+      subscription_expires_at: null,
+      claim_source: 'unknown',
+      created_by: null
     }
   ]
 

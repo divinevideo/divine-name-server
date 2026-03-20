@@ -12,6 +12,8 @@ export interface Username {
   revoked_at: number | null
   reserved_reason: string | null
   admin_notes: string | null
+  claim_source: string
+  created_by: string | null
 }
 
 export interface SearchResult {
