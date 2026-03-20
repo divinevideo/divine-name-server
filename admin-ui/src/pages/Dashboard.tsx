@@ -51,13 +51,15 @@ export default function Dashboard() {
   const downloadSearchResultsCSV = () => {
     if (results.length === 0) return
 
-    const headers = ['Username', 'Pubkey', 'Email', 'Status', 'Created']
+    const headers = ['Username', 'Pubkey', 'Email', 'Status', 'Created', 'Source', 'Created By']
     const rows = results.map((username: Username) => [
       username.name,
       username.pubkey || '',
       username.email || '',
       username.status,
-      formatDate(username.created_at)
+      formatDate(username.created_at),
+      username.claim_source,
+      username.created_by || ''
     ])
 
     const csvContent = [
@@ -250,6 +252,9 @@ export default function Dashboard() {
                         Status
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Source
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Created
                       </th>
                     </tr>
@@ -275,6 +280,9 @@ export default function Dashboard() {
                             status={username.status}
                             isRecovered={username.status === 'active' && !!username.pubkey && !!username.reserved_reason?.toLowerCase().includes('vine')}
                           />
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {username.claim_source}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                           {formatDate(username.created_at)}
