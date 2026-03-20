@@ -490,7 +490,9 @@ username.post('/claim', async (c) => {
       syncUsernameToFastly(c.env, nameCanonical, {
         pubkey,
         relays: relays || [],
-        status: 'active'
+        status: 'active',
+        atproto_did: null,
+        atproto_state: null,
       })
     )
 

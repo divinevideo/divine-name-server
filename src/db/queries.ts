@@ -25,6 +25,8 @@ export interface Username {
   subscription_expires_at: number | null
   claim_source: ClaimSource
   created_by: string | null
+  atproto_did: string | null
+  atproto_state: 'pending' | 'ready' | 'failed' | 'disabled' | null
 }
 
 export interface ReservationToken {

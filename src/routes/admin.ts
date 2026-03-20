@@ -340,7 +340,9 @@ admin.post('/username/revoke', async (c) => {
         : syncUsernameToFastly(c.env, usernameData.canonical, {
             pubkey: existing.pubkey || '',
             relays: [],
-            status: burn ? 'burned' : 'revoked'
+            status: burn ? 'burned' : 'revoked',
+            atproto_did: null,
+            atproto_state: null,
           })
     )
 
@@ -404,7 +406,9 @@ admin.post('/username/assign', async (c) => {
       syncUsernameToFastly(c.env, usernameData.canonical, {
         pubkey: normalizedPubkey,
         relays: [],
-        status: 'active'
+        status: 'active',
+        atproto_did: null,
+        atproto_state: null,
       })
     )
 
@@ -485,7 +489,9 @@ admin.post('/username/assign-bulk', async (c) => {
           syncUsernameToFastly(c.env, usernameData.canonical, {
             pubkey: normalizedPubkey,
             relays: [],
-            status: 'active'
+            status: 'active',
+            atproto_did: null,
+            atproto_state: null,
           })
         )
 
@@ -586,7 +592,9 @@ admin.post('/sync/fastly', async (c) => {
         data: {
           pubkey: u.pubkey!,
           relays: u.relays ? (() => { try { return JSON.parse(u.relays!) } catch { return [] } })() : [],
-          status: 'active' as const
+          status: 'active' as const,
+          atproto_did: u.atproto_did || null,
+          atproto_state: u.atproto_state || null,
         }
       }))
 
@@ -651,6 +659,70 @@ admin.post('/notify-assignment', async (c) => {
     return c.json({ ok: true, name: usernameData.display, email })
   } catch (error) {
     console.error('Notify assignment error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.post('/username/set-atproto', async (c) => {
+  try {
+    const body = await c.req.json<{
+      name: string
+      atproto_did: string | null
+      atproto_state: 'pending' | 'ready' | 'failed' | 'disabled' | null
+    }>()
+    const { name, atproto_did, atproto_state } = body
+
+    if (!name) {
+      return c.json({ ok: false, error: 'Name is required' }, 400)
+    }
+
+    // Validate DID format if provided
+    if (atproto_did !== null && atproto_did !== undefined) {
+      if (typeof atproto_did !== 'string' || !atproto_did.startsWith('did:plc:')) {
+        return c.json({ ok: false, error: 'atproto_did must be a did:plc: identifier' }, 400)
+      }
+    }
+
+    // Validate state if provided
+    const validStates = ['pending', 'ready', 'failed', 'disabled', null]
+    if (!validStates.includes(atproto_state)) {
+      return c.json({ ok: false, error: 'atproto_state must be one of: pending, ready, failed, disabled, or null' }, 400)
+    }
+
+    const canonical = name.toLowerCase()
+    const existing = await getUsernameByName(c.env.DB, canonical)
+    if (!existing) {
+      return c.json({ ok: false, error: 'Username not found' }, 404)
+    }
+
+    // Update ATProto fields in D1
+    const now = Math.floor(Date.now() / 1000)
+    await c.env.DB.prepare(
+      `UPDATE usernames SET atproto_did = ?, atproto_state = ?, updated_at = ? WHERE username_canonical = ? OR name = ?`
+    ).bind(atproto_did || null, atproto_state || null, now, canonical, name).run()
+
+    // Sync to Fastly KV
+    if (existing.status === 'active' && existing.pubkey) {
+      const relays = existing.relays ? (() => { try { return JSON.parse(existing.relays!) } catch { return [] } })() : []
+      c.executionCtx.waitUntil(
+        syncUsernameToFastly(c.env, canonical, {
+          pubkey: existing.pubkey,
+          relays,
+          status: 'active',
+          atproto_did: atproto_did || null,
+          atproto_state: atproto_state || null,
+        })
+      )
+    }
+
+    return c.json({
+      ok: true,
+      name: canonical,
+      atproto_did: atproto_did || null,
+      atproto_state: atproto_state || null,
+    })
+  } catch (error) {
+    console.error('Set ATProto error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
   }
 })

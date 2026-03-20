@@ -10,6 +10,8 @@ export interface UsernameKVData {
   pubkey: string
   relays: string[]
   status: 'active' | 'revoked' | 'reserved' | 'burned'
+  atproto_did?: string | null
+  atproto_state?: 'pending' | 'ready' | 'failed' | 'disabled' | null
 }
 
 const FASTLY_API_BASE = 'https://api.fastly.com'
