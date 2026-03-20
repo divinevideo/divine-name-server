@@ -2,7 +2,7 @@
 // ABOUTME: Verifies KV data includes atproto_did and atproto_state
 
 import { describe, it, expect } from 'vitest'
-import type { UsernameKVData } from '../src/utils/fastly-sync'
+import { syncUsernameToFastly, type UsernameKVData } from '../src/utils/fastly-sync'
 
 describe('UsernameKVData with ATProto fields', () => {
   it('should include atproto fields when present', () => {
@@ -60,5 +60,24 @@ describe('UsernameKVData with ATProto fields', () => {
       }
       expect(data.atproto_state).toBe(state)
     }
+  })
+
+  it('reports a failure when Fastly runtime configuration is missing', async () => {
+    const result = await syncUsernameToFastly(
+      {},
+      'alice',
+      {
+        pubkey: 'abc123',
+        relays: [],
+        status: 'active',
+        atproto_did: 'did:plc:abc123',
+        atproto_state: 'ready',
+      }
+    )
+
+    expect(result).toEqual({
+      success: false,
+      error: 'Fastly sync configuration is missing',
+    })
   })
 })

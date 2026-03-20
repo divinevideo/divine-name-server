@@ -3,6 +3,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { validateUsername, UsernameValidationError, validateRelays, RelayValidationError, validateAndNormalizePubkey, PubkeyValidationError } from './validation'
+import { getSubdomain } from './subdomain'
 
 describe('validateUsername', () => {
   describe('valid usernames', () => {
@@ -338,5 +339,18 @@ describe('validateAndNormalizePubkey', () => {
 
   it('should reject random strings', () => {
     expect(() => validateAndNormalizePubkey('not-a-pubkey')).toThrow(PubkeyValidationError)
+  })
+})
+
+describe('service subdomain exclusions', () => {
+  it('rejects service subdomains as profile subdomains', () => {
+    expect(getSubdomain('names.divine.video')).toBeNull()
+    expect(getSubdomain('www.divine.video')).toBeNull()
+    expect(getSubdomain('login.divine.video')).toBeNull()
+    expect(getSubdomain('pds.divine.video')).toBeNull()
+    expect(getSubdomain('feed.divine.video')).toBeNull()
+    expect(getSubdomain('labeler.divine.video')).toBeNull()
+    expect(getSubdomain('relay.divine.video')).toBeNull()
+    expect(getSubdomain('media.divine.video')).toBeNull()
   })
 })
