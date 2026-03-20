@@ -110,14 +110,16 @@ export async function claimUsername(
 
   // Then insert or update the new username using canonical for uniqueness
   await db.prepare(
-    `INSERT INTO usernames (name, username_display, username_canonical, pubkey, relays, status, created_at, updated_at, claimed_at)
-     VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
+    `INSERT INTO usernames (name, username_display, username_canonical, pubkey, relays, status, claim_source, created_at, updated_at, claimed_at)
+     VALUES (?, ?, ?, ?, ?, 'active', 'self-service', ?, ?, ?)
      ON CONFLICT(username_canonical) DO UPDATE SET
        name = excluded.name,
        username_display = excluded.username_display,
        pubkey = excluded.pubkey,
        relays = excluded.relays,
        status = 'active',
+       claim_source = 'self-service',
+       created_by = NULL,
        updated_at = excluded.updated_at,
        claimed_at = excluded.claimed_at`
   ).bind(nameCanonical, nameDisplay, nameCanonical, pubkey, relaysJson, now, now, now).run()
@@ -370,11 +372,13 @@ export async function createReservation(
 
   // Upsert username record with pending-confirmation status
   await db.prepare(
-    `INSERT INTO usernames (name, username_display, username_canonical, status, reservation_email, confirmation_token, reservation_expires_at, created_at, updated_at)
-     VALUES (?, ?, ?, 'pending-confirmation', ?, ?, ?, ?, ?)
+    `INSERT INTO usernames (name, username_display, username_canonical, status, claim_source, reservation_email, confirmation_token, reservation_expires_at, created_at, updated_at)
+     VALUES (?, ?, ?, 'pending-confirmation', 'public-reservation', ?, ?, ?, ?, ?)
      ON CONFLICT(username_canonical) DO UPDATE SET
        username_display = excluded.username_display,
        status = 'pending-confirmation',
+       claim_source = 'public-reservation',
+       created_by = NULL,
        reservation_email = excluded.reservation_email,
        confirmation_token = excluded.confirmation_token,
        reservation_expires_at = excluded.reservation_expires_at,

@@ -2,7 +2,7 @@
 // ABOUTME: Validates search functionality with mocked D1 database
 
 import { describe, it, expect, vi } from 'vitest'
-import { searchUsernames, type SearchParams, type Username } from './queries'
+import { searchUsernames, claimUsername, createReservation, type SearchParams, type Username } from './queries'
 
 // Mock D1 database
 function createMockDB() {
@@ -365,5 +365,49 @@ describe('searchUsernames', () => {
     const result = await searchUsernames(db, params)
 
     expect(result.results).toHaveLength(0)
+  })
+})
+
+describe('claimUsername', () => {
+  it('should set claim_source to self-service', async () => {
+    const sqlStatements: string[] = []
+    const mockDB = {
+      prepare: (sql: string) => {
+        sqlStatements.push(sql)
+        return {
+          bind: (...params: any[]) => ({
+            run: async () => ({ success: true }),
+          }),
+        }
+      },
+    } as unknown as D1Database
+
+    await claimUsername(mockDB, 'TestUser', 'testuser', 'abc123', null)
+
+    const insertSql = sqlStatements[1] // Second call is INSERT (first is revoke UPDATE)
+    expect(insertSql).toContain("'self-service'")
+    expect(insertSql).toContain('claim_source')
+  })
+})
+
+describe('createReservation', () => {
+  it('should set claim_source to public-reservation', async () => {
+    const sqlStatements: string[] = []
+    const mockDB = {
+      prepare: (sql: string) => {
+        sqlStatements.push(sql)
+        return {
+          bind: (...params: any[]) => ({
+            run: async () => ({ success: true }),
+          }),
+        }
+      },
+    } as unknown as D1Database
+
+    await createReservation(mockDB, 'TestUser', 'testuser', 'test@example.com', 'token123', 9999999999)
+
+    const insertSql = sqlStatements[0]
+    expect(insertSql).toContain("'public-reservation'")
+    expect(insertSql).toContain('claim_source')
   })
 })
