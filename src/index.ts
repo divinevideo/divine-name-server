@@ -7,14 +7,16 @@ import nip05 from './routes/nip05'
 import subdomain from './routes/subdomain'
 import admin from './routes/admin'
 import publicRoutes from './routes/public'
+import internalAtproto from './routes/internal-atproto'
 import { getAllActiveUsernames, expireStaleReservations } from './db/queries'
-import { bulkSyncToFastly } from './utils/fastly-sync'
+import { bulkSyncToFastly, parseRelayHints } from './utils/fastly-sync'
 
 type Bindings = {
   DB: D1Database
   ASSETS: Fetcher
   FASTLY_API_TOKEN?: string
   FASTLY_STORE_ID?: string
+  ATPROTO_SYNC_TOKEN?: string
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
@@ -51,6 +53,9 @@ app.route('/api/username', username)
 
 // Admin API (protected by Cloudflare Access)
 app.route('/api/admin', admin)
+
+// Internal service API (service-authenticated bearer token)
+app.route('/api/internal', internalAtproto)
 
 // NIP-05
 app.route('', nip05)
@@ -95,8 +100,6 @@ export default {
     }
 
     // Hourly reconciliation: sync all active D1 users to Fastly KV
-    if (!env.FASTLY_API_TOKEN || !env.FASTLY_STORE_ID) return
-
     const activeUsers = await getAllActiveUsernames(env.DB)
     const toSync = activeUsers
       .filter(u => u.pubkey)
@@ -104,8 +107,10 @@ export default {
         username: u.username_canonical || u.name,
         data: {
           pubkey: u.pubkey!,
-          relays: u.relays ? (() => { try { return JSON.parse(u.relays!) } catch { return [] } })() : [],
-          status: 'active' as const
+          relays: parseRelayHints(u.relays),
+          status: 'active' as const,
+          atproto_did: u.atproto_did,
+          atproto_state: u.atproto_state,
         }
       }))
 

@@ -2,7 +2,16 @@
 // ABOUTME: Extracts and validates subdomain from hostname
 
 // Service subdomains that are NOT user profiles
-const SERVICE_SUBDOMAINS = new Set(['names', 'www'])
+const SERVICE_SUBDOMAINS = new Set([
+  'names',
+  'www',
+  'login',
+  'pds',
+  'feed',
+  'labeler',
+  'relay',
+  'media',
+])
 
 /**
  * Extracts the subdomain from a hostname.

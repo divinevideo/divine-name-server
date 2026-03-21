@@ -10,6 +10,18 @@ export interface UsernameKVData {
   pubkey: string
   relays: string[]
   status: 'active' | 'revoked' | 'reserved' | 'burned'
+  atproto_did?: string | null
+  atproto_state?: 'pending' | 'ready' | 'failed' | 'disabled' | null
+}
+
+export function parseRelayHints(relays: string | null | undefined): string[] {
+  if (!relays) return []
+  try {
+    const parsed = JSON.parse(relays)
+    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string') : []
+  } catch {
+    return []
+  }
 }
 
 const FASTLY_API_BASE = 'https://api.fastly.com'
@@ -32,8 +44,9 @@ export async function syncUsernameToFastly(
   data: UsernameKVData
 ): Promise<{ success: boolean; error?: string }> {
   if (!env.FASTLY_API_TOKEN || !env.FASTLY_STORE_ID) {
-    console.log('Fastly sync skipped: missing FASTLY_API_TOKEN or FASTLY_STORE_ID')
-    return { success: true } // Don't fail if Fastly is not configured
+    const error = 'Fastly sync configuration is missing'
+    console.error(`${error}: FASTLY_API_TOKEN or FASTLY_STORE_ID is unset`)
+    return { success: false, error }
   }
 
   // Key format must match compute-js expectations: user:{username}
