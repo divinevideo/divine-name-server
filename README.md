@@ -280,6 +280,59 @@ Directly assign a username to a pubkey, bypassing normal claim flow.
 }
 ```
 
+#### POST /api/admin/username/set-atproto
+
+Link a username to an ATProto `did:plc` identity for handle resolution. This enables `username.divine.video/.well-known/atproto-did` to return the user's DID.
+
+**Request Body:**
+```json
+{
+  "name": "alice",
+  "atproto_did": "did:plc:abc123def456",
+  "atproto_state": "ready"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Username to update |
+| `atproto_did` | string \| null | The user's `did:plc:` identifier. Must start with `did:plc:`. Set to `null` to clear. |
+| `atproto_state` | string \| null | Lifecycle state: `pending`, `ready`, `failed`, `disabled`, or `null` |
+
+**States:**
+- `pending` — DID assigned, awaiting PDS configuration
+- `ready` — Handle resolution is active (`/.well-known/atproto-did` returns the DID)
+- `failed` — PDS configuration failed
+- `disabled` — Handle resolution explicitly disabled (returns 404)
+- `null` — No ATProto identity configured
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "name": "alice",
+  "atproto_did": "did:plc:abc123def456",
+  "atproto_state": "ready"
+}
+```
+
+**How it works:**
+1. Call this endpoint to set a user's ATProto DID and state
+2. The Fastly KV entry is updated with the ATProto fields
+3. `divine-router` reads the KV entry and serves `/.well-known/atproto-did`
+4. Only returns the DID when `status=active`, `atproto_state=ready`, and `atproto_did` is present
+
+**Important:** The user's DID document (managed by their PDS) must also contain `alsoKnownAs: ["at://username.divine.video"]` for bidirectional handle verification to succeed. This endpoint does not mint or manage DIDs — they come from the ATProto control plane.
+
+**To disable resolution immediately:**
+```json
+{
+  "name": "alice",
+  "atproto_did": "did:plc:abc123def456",
+  "atproto_state": "disabled"
+}
+```
+
 ## Database Schema
 
 See `migrations/0001_initial_schema.sql` for complete schema definition.
@@ -304,6 +357,8 @@ Primary table mapping usernames to Nostr pubkeys.
 | revoked_at | INTEGER | Unix timestamp when revoked |
 | reserved_reason | TEXT | Admin reason for reservation |
 | admin_notes | TEXT | Admin notes about username |
+| atproto_did | TEXT | User's ATProto `did:plc:` identifier (set via admin API) |
+| atproto_state | TEXT | ATProto handle resolution state: pending/ready/failed/disabled |
 
 **Indexes:**
 - `idx_usernames_pubkey_active`: Unique partial index ensuring one active username per pubkey
