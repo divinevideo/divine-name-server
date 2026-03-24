@@ -2,7 +2,7 @@
 // ABOUTME: Shows all metadata and provides actions like assign, revoke, burn
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { searchUsernames, assignUsername, revokeUsername } from '../api/client'
+import { getUsernameDetail, updateUsernameMetadata, assignUsername, revokeUsername } from '../api/client'
 import type { Username } from '../types'
 import StatusBadge from '../components/StatusBadge'
 
@@ -22,6 +22,12 @@ export default function UsernameDetail() {
   const [showRevoke, setShowRevoke] = useState(false)
   const [burnOnRevoke, setBurnOnRevoke] = useState(false)
   const [revokeLoading, setRevokeLoading] = useState(false)
+  const [draftNotes, setDraftNotes] = useState('')
+  const [draftTags, setDraftTags] = useState<string[]>([])
+  const [tagInput, setTagInput] = useState('')
+  const [saveLoading, setSaveLoading] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [saveSuccess, setSaveSuccess] = useState<string | null>(null)
 
   useEffect(() => {
     loadUsername()
@@ -33,17 +39,58 @@ export default function UsernameDetail() {
     setError(null)
 
     try {
-      const result = await searchUsernames(name)
-      const found = result.results.find(u => u.name === name)
-      if (found) {
-        setUsername(found)
-      } else {
-        setError('Username not found')
-      }
+      const result = await getUsernameDetail(name)
+      setUsername(result.username)
+      setDraftNotes(result.username.admin_notes || '')
+      setDraftTags(result.username.tags || [])
+      setSaveError(null)
+      setSaveSuccess(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load username')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleAddTag = () => {
+    const nextTag = tagInput.trim().replace(/\s+/g, ' ')
+    if (!nextTag) return
+
+    setDraftTags((currentTags) => {
+      const exists = currentTags.some((tag) => tag.toLowerCase() === nextTag.toLowerCase())
+      return exists ? currentTags : [...currentTags, nextTag]
+    })
+    setTagInput('')
+    setSaveSuccess(null)
+  }
+
+  const handleRemoveTag = (tagToRemove: string) => {
+    setDraftTags((currentTags) => currentTags.filter((tag) => tag !== tagToRemove))
+    setSaveSuccess(null)
+  }
+
+  const handleSaveMetadata = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!username) return
+
+    setSaveLoading(true)
+    setSaveError(null)
+    setSaveSuccess(null)
+
+    try {
+      const result = await updateUsernameMetadata(
+        username.name,
+        draftNotes.trim() ? draftNotes.trim() : null,
+        draftTags
+      )
+      setUsername(result.username)
+      setDraftNotes(result.username.admin_notes || '')
+      setDraftTags(result.username.tags || [])
+      setSaveSuccess('Internal tracking updated.')
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Save failed')
+    } finally {
+      setSaveLoading(false)
     }
   }
 
@@ -133,9 +180,107 @@ export default function UsernameDetail() {
         <p className="mt-1 text-sm text-gray-600">
           {username.name}@divine.video
         </p>
+        {draftTags.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {draftTags.map((tag) => (
+              <span
+                key={tag}
+                className="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700"
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Details Card */}
+      <div className="bg-white shadow rounded-lg overflow-hidden mb-6">
+        <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
+          <h3 className="text-lg font-medium text-gray-900">Internal Tracking</h3>
+        </div>
+        <form onSubmit={handleSaveMetadata} className="px-6 py-4 space-y-5">
+          <div>
+            <label htmlFor="admin-notes" className="block text-sm font-medium text-gray-700">
+              Internal Notes
+            </label>
+            <textarea
+              id="admin-notes"
+              rows={5}
+              value={draftNotes}
+              onChange={(event) => {
+                setDraftNotes(event.target.value)
+                setSaveSuccess(null)
+              }}
+              placeholder="Add context for trust and safety, support, marketing, or outreach."
+              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="tag-input" className="block text-sm font-medium text-gray-700">
+              Tags
+            </label>
+            <div className="mt-1 flex gap-2">
+              <input
+                id="tag-input"
+                type="text"
+                value={tagInput}
+                onChange={(event) => setTagInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    handleAddTag()
+                  }
+                }}
+                placeholder="VIP, brand, creator, outreach..."
+                className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
+              />
+              <button
+                type="button"
+                onClick={handleAddTag}
+                className="inline-flex items-center rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800"
+              >
+                Add Tag
+              </button>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {draftTags.length > 0 ? (
+                draftTags.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => handleRemoveTag(tag)}
+                    className="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                  >
+                    {tag}
+                    <span className="ml-2 text-blue-500">×</span>
+                  </button>
+                ))
+              ) : (
+                <p className="text-sm text-gray-500">No internal tags yet.</p>
+              )}
+            </div>
+          </div>
+
+          {saveError && (
+            <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">{saveError}</div>
+          )}
+          {saveSuccess && (
+            <div className="rounded-md bg-green-50 p-3 text-sm text-green-700">{saveSuccess}</div>
+          )}
+
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={saveLoading}
+              className="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              {saveLoading ? 'Saving...' : 'Save Internal Tracking'}
+            </button>
+          </div>
+        </form>
+      </div>
+
       <div className="bg-white shadow rounded-lg overflow-hidden mb-6">
         <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
           <h3 className="text-lg font-medium text-gray-900">Details</h3>
@@ -194,13 +339,6 @@ export default function UsernameDetail() {
             <div>
               <p className="text-sm font-medium text-gray-500">Reserved Reason</p>
               <p className="mt-1 text-sm text-gray-900">{username.reserved_reason}</p>
-            </div>
-          )}
-
-          {username.admin_notes && (
-            <div>
-              <p className="text-sm font-medium text-gray-500">Admin Notes</p>
-              <p className="mt-1 text-sm text-gray-900">{username.admin_notes}</p>
             </div>
           )}
 

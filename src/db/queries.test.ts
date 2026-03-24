@@ -22,7 +22,7 @@ function createMockDB() {
       claimed_at: 1700000000,
       revoked_at: null,
       reserved_reason: null,
-      admin_notes: null,
+      admin_notes: 'VIP creator account',
       reservation_email: null,
       confirmation_token: null,
       reservation_expires_at: null,
@@ -77,6 +77,59 @@ function createMockDB() {
       created_by: null
     }
   ]
+  const mockTags = [
+    { username_id: 1, tag_display: 'VIP', tag_normalized: 'vip' },
+    { username_id: 1, tag_display: 'creator', tag_normalized: 'creator' },
+    { username_id: 3, tag_display: 'support', tag_normalized: 'support' }
+  ]
+
+  const filterUsernames = (sql: string, params: any[]) => {
+    let filtered = [...mockResults]
+    const normalizedSql = sql.replace(/\s+/g, ' ').toLowerCase()
+    const hasSearchPattern = sql.includes('LIKE')
+
+    if (hasSearchPattern) {
+      const searchPattern = params[0]
+      if (searchPattern && typeof searchPattern === 'string') {
+        const searchTerm = searchPattern.replace(/%/g, '').replace(/\\/g, '').toLowerCase()
+        if (searchTerm.length > 0) {
+          filtered = filtered.filter((u) => {
+            const tags = mockTags
+              .filter((tag) => tag.username_id === u.id)
+              .flatMap((tag) => [tag.tag_display, tag.tag_normalized])
+            const haystack = [
+              u.name,
+              u.username_display,
+              u.username_canonical,
+              u.pubkey,
+              u.email,
+              u.admin_notes,
+              ...tags
+            ]
+              .filter(Boolean)
+              .map((value) => String(value).toLowerCase())
+
+            return haystack.some((value) => value.includes(searchTerm))
+          })
+        }
+      }
+    }
+
+    const statusParam = params.find((param) => ['active', 'reserved', 'revoked', 'burned', 'recovered'].includes(param))
+    if (typeof statusParam === 'string' && statusParam !== 'recovered') {
+      filtered = filtered.filter((u) => u.status === statusParam)
+    }
+
+    if (normalizedSql.includes('order by created_at asc')) {
+      filtered.sort((a, b) => a.created_at - b.created_at)
+    } else if (normalizedSql.includes('order by updated_at desc')) {
+      filtered.sort((a, b) => b.updated_at - a.updated_at || b.created_at - a.created_at)
+    } else {
+      filtered.sort((a, b) => b.created_at - a.created_at)
+    }
+
+    return filtered
+  }
 
   return {
     prepare: (sql: string) => {
@@ -87,92 +140,28 @@ function createMockDB() {
           boundParams = params
           return {
             first: async () => {
+              if (sql.includes('FROM username_tags') && !sql.includes('FROM usernames')) {
+                return { count: 0 }
+              }
+
               // Mock count query
               if (sql.includes('COUNT(*)')) {
-                // Filter based on bound params
-                let filtered = [...mockResults]
-                
-                // Check if WHERE clause uses LIKE patterns (has search query)
-                // If WHERE clause is "1=1", there's no search pattern
-                const hasSearchPattern = sql.includes('LIKE')
-                
-                if (hasSearchPattern) {
-                  // When there's a LIKE pattern, first 5 params are search patterns (all same value)
-                  // name, username_display, username_canonical, pubkey, email
-                  const searchPattern = boundParams[0]
-                  if (searchPattern && typeof searchPattern === 'string') {
-                    // Remove LIKE wildcards and escape characters to get the actual search term
-                    const searchTerm = searchPattern.replace(/%/g, '').replace(/\\/g, '')
-                    if (searchTerm.length > 0) {
-                      filtered = mockResults.filter(u =>
-                        (u.name && u.name.includes(searchTerm)) ||
-                        (u.username_display && u.username_display.includes(searchTerm)) ||
-                        (u.username_canonical && u.username_canonical.includes(searchTerm)) ||
-                        (u.pubkey && u.pubkey.includes(searchTerm)) ||
-                        (u.email && u.email.includes(searchTerm))
-                      )
-                    }
-                  }
-                  
-                  // Status is at index 5 if search pattern exists (but only if it's not limit/offset)
-                  // Limit and offset are always the last 2 params, so status would be at index 5
-                  // only if boundParams.length > 7 (5 patterns, status, limit, offset)
-                  if (boundParams.length > 7 && typeof boundParams[5] === 'string') {
-                    filtered = filtered.filter(u => u.status === boundParams[5])
-                  }
-                } else {
-                  // No search pattern - check for status filter
-                  // If WHERE is "1=1", no params. If WHERE is "status = ?", param is at index 0
-                  if (sql.includes('status = ?') && boundParams.length > 0 && boundParams[0]) {
-                    filtered = filtered.filter(u => u.status === boundParams[0])
-                  }
-                  // If WHERE is "1=1", no filtering needed - return all
-                }
-
-                return { count: filtered.length }
+                return { count: filterUsernames(sql, boundParams).length }
               }
               return null
             },
             all: async () => {
-              // Mock search query
-              let filtered = [...mockResults]
-              
-              // Check if WHERE clause uses LIKE patterns (has search query)
-              const hasSearchPattern = sql.includes('LIKE')
-              
-              if (hasSearchPattern) {
-                // When there's a LIKE pattern, first 5 params are search patterns (all same value)
-                // name, username_display, username_canonical, pubkey, email
-                // But limit and offset are always last two, so we need to exclude them
-                const searchPattern = boundParams[0]
-                if (searchPattern && typeof searchPattern === 'string') {
-                  // Remove LIKE wildcards and escape characters to get the actual search term
-                  const searchTerm = searchPattern.replace(/%/g, '').replace(/\\/g, '')
-                  if (searchTerm.length > 0) {
-                    filtered = mockResults.filter(u =>
-                      (u.name && u.name.includes(searchTerm)) ||
-                      (u.username_display && u.username_display.includes(searchTerm)) ||
-                      (u.username_canonical && u.username_canonical.includes(searchTerm)) ||
-                      (u.pubkey && u.pubkey.includes(searchTerm)) ||
-                      (u.email && u.email.includes(searchTerm))
-                    )
-                  }
+              if (sql.includes('FROM username_tags') && !sql.includes('FROM usernames')) {
+                const requestedIds = boundParams.filter((param) => typeof param === 'number')
+                return {
+                  results: mockTags
+                    .filter((tag) => requestedIds.length === 0 || requestedIds.includes(tag.username_id))
+                    .map((tag) => ({ username_id: tag.username_id, tag_display: tag.tag_display }))
                 }
-                
-                // Status is at index 5 if search pattern exists (but only if it's not limit/offset)
-                // Limit and offset are always the last 2 params, so status would be at index 5
-                // only if boundParams.length > 7 (5 patterns, status, limit, offset)
-                if (boundParams.length > 7 && typeof boundParams[5] === 'string') {
-                  filtered = filtered.filter(u => u.status === boundParams[5])
-                }
-              } else {
-                // No search pattern - check for status filter
-                // If WHERE is "1=1", no params. If WHERE is "status = ?", param is at index 0
-                if (sql.includes('status = ?') && boundParams.length > 0 && boundParams[0]) {
-                  filtered = filtered.filter(u => u.status === boundParams[0])
-                }
-                // If WHERE is "1=1", no filtering needed - return all
               }
+
+              // Mock search query
+              const filtered = filterUsernames(sql, boundParams)
 
               // Apply pagination
               // Limit and offset are always the last two params
@@ -180,9 +169,7 @@ function createMockDB() {
               const offset = boundParams[boundParams.length - 1] || 0
 
               return {
-                results: filtered
-                  .sort((a, b) => b.created_at - a.created_at)
-                  .slice(offset, offset + limit)
+                results: filtered.slice(offset, offset + limit)
               }
             }
           }
@@ -224,6 +211,16 @@ describe('searchUsernames', () => {
     expect(result.results[0].email).toBe('bob@example.com')
   })
 
+  it('should search by internal notes', async () => {
+    const db = createMockDB()
+    const params = { query: 'VIP' } as SearchParams
+
+    const result = await searchUsernames(db, params)
+
+    expect(result.results).toHaveLength(1)
+    expect(result.results[0].name).toBe('alice')
+  })
+
   it('should filter by status', async () => {
     const db = createMockDB()
     const params: SearchParams = { query: '', status: 'active' }
@@ -251,6 +248,15 @@ describe('searchUsernames', () => {
 
     expect(result.pagination.page).toBe(2)
     expect(result.pagination.limit).toBe(1)
+  })
+
+  it('should support oldest-first sorting', async () => {
+    const db = createMockDB()
+    const params = { query: '', sort: 'oldest' } as SearchParams & { sort: 'oldest' }
+
+    const result = await searchUsernames(db, params)
+
+    expect(result.results.map((username) => username.name)).toEqual(['alice', 'bob', 'charlie'])
   })
 
   it('should calculate total pages correctly', async () => {

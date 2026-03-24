@@ -32,6 +32,57 @@ function createMockDB() {
       admin_notes: null
     }
   ]
+  let mockTags = [
+    { username_id: 1, tag_display: 'VIP', tag_normalized: 'vip' }
+  ]
+
+  const filterUsernames = (sql: string, params: any[]) => {
+    let filtered = [...mockResults]
+    const normalizedSql = sql.replace(/\s+/g, ' ').toLowerCase()
+    const hasSearchPattern = sql.includes('LIKE')
+
+    if (hasSearchPattern) {
+      const searchPattern = params[0]
+      if (searchPattern && typeof searchPattern === 'string') {
+        const searchTerm = searchPattern.replace(/%/g, '').replace(/\\/g, '').toLowerCase()
+        if (searchTerm.length > 0) {
+          filtered = filtered.filter((u) => {
+            const tags = mockTags
+              .filter((tag) => tag.username_id === u.id)
+              .flatMap((tag) => [tag.tag_display, tag.tag_normalized])
+            const haystack = [
+              u.name,
+              u.username_display,
+              u.username_canonical,
+              u.pubkey,
+              u.email,
+              u.admin_notes,
+              ...tags
+            ]
+              .filter(Boolean)
+              .map((value) => String(value).toLowerCase())
+
+            return haystack.some((value) => value.includes(searchTerm))
+          })
+        }
+      }
+    }
+
+    const statusParam = params.find((param) => ['active', 'reserved', 'revoked', 'burned', 'recovered'].includes(param))
+    if (typeof statusParam === 'string' && statusParam !== 'recovered') {
+      filtered = filtered.filter((u) => u.status === statusParam)
+    }
+
+    if (normalizedSql.includes('order by created_at asc')) {
+      filtered.sort((a, b) => a.created_at - b.created_at)
+    } else if (normalizedSql.includes('order by updated_at desc')) {
+      filtered.sort((a, b) => b.updated_at - a.updated_at || b.created_at - a.created_at)
+    } else {
+      filtered.sort((a, b) => b.created_at - a.created_at)
+    }
+
+    return filtered
+  }
 
   return {
     prepare: (sql: string) => {
@@ -41,37 +92,46 @@ function createMockDB() {
           boundParams = params
           return {
             first: async () => {
-              if (sql.includes('COUNT(*)')) {
-                let filtered = [...mockResults]
-                const hasSearchPattern = sql.includes('LIKE')
-                
-                if (hasSearchPattern) {
-                  const searchPattern = boundParams[0]
-                  if (searchPattern && typeof searchPattern === 'string') {
-                    const searchTerm = searchPattern.replace(/%/g, '').replace(/\\/g, '')
-                    if (searchTerm.length > 0) {
-                      filtered = mockResults.filter(u =>
-                        (u.name && u.name.includes(searchTerm)) ||
-                        (u.username_display && u.username_display.includes(searchTerm)) ||
-                        (u.username_canonical && u.username_canonical.includes(searchTerm)) ||
-                        (u.pubkey && u.pubkey.includes(searchTerm)) ||
-                        (u.email && u.email.includes(searchTerm))
-                      )
-                    }
-                  }
-                  
-                  // Status is at index 5 if search pattern exists
-                  if (boundParams.length > 7 && typeof boundParams[5] === 'string') {
-                    filtered = filtered.filter(u => u.status === boundParams[5])
-                  }
-                } else {
-                  // No search pattern - check for status filter
-                  if (sql.includes('status = ?') && boundParams.length > 0 && boundParams[0]) {
-                    filtered = filtered.filter(u => u.status === boundParams[0])
+              if (sql.includes('COUNT(DISTINCT username_id)') && sql.includes('FROM username_tags')) {
+                if (sql.includes('tag_normalized = ?')) {
+                  return {
+                    count: new Set(
+                      mockTags
+                        .filter((tag) => tag.tag_normalized === boundParams[0])
+                        .map((tag) => tag.username_id)
+                    ).size
                   }
                 }
-                
-                return { count: filtered.length }
+
+                return { count: new Set(mockTags.map((tag) => tag.username_id)).size }
+              }
+
+              if (sql.includes('COUNT(*)') && sql.includes('FROM usernames')) {
+                if (sql.includes('admin_notes IS NOT NULL')) {
+                  return {
+                    count: mockResults.filter((u) => typeof u.admin_notes === 'string' && u.admin_notes.trim().length > 0).length
+                  }
+                }
+
+                if (sql.includes('NOT EXISTS')) {
+                  return {
+                    count: mockResults.filter((u) => !mockTags.some((tag) => tag.username_id === u.id)).length
+                  }
+                }
+
+                if (sql.includes('claimed_at IS NOT NULL AND claimed_at >= ?')) {
+                  return {
+                    count: mockResults.filter((u) => typeof u.claimed_at === 'number' && u.claimed_at >= boundParams[0]).length
+                  }
+                }
+
+                if (sql.includes('updated_at >= ?')) {
+                  return {
+                    count: mockResults.filter((u) => u.updated_at >= boundParams[0]).length
+                  }
+                }
+
+                return { count: filterUsernames(sql, boundParams).length }
               }
               
               // Check for existing username lookup
@@ -95,47 +155,61 @@ function createMockDB() {
               if (sql.includes('reserved_words')) {
                 return { results: [] }
               }
-              
-              let filtered = [...mockResults]
-              const hasSearchPattern = sql.includes('LIKE')
-              
-              if (hasSearchPattern) {
-                const searchPattern = boundParams[0]
-                if (searchPattern && typeof searchPattern === 'string') {
-                  const searchTerm = searchPattern.replace(/%/g, '').replace(/\\/g, '')
-                  if (searchTerm.length > 0) {
-                    filtered = mockResults.filter(u =>
-                      (u.name && u.name.includes(searchTerm)) ||
-                      (u.username_display && u.username_display.includes(searchTerm)) ||
-                      (u.username_canonical && u.username_canonical.includes(searchTerm)) ||
-                      (u.pubkey && u.pubkey.includes(searchTerm)) ||
-                      (u.email && u.email.includes(searchTerm))
-                    )
-                  }
+
+              if (sql.includes('FROM username_tags') && sql.includes('GROUP BY tag_normalized')) {
+                const counts = new Map<string, number>()
+                for (const tag of mockTags) {
+                  counts.set(tag.tag_normalized, (counts.get(tag.tag_normalized) || 0) + 1)
                 }
-                
-                // Status is at index 5 if search pattern exists
-                if (boundParams.length > 7 && typeof boundParams[5] === 'string') {
-                  filtered = filtered.filter(u => u.status === boundParams[5])
-                }
-              } else {
-                // No search pattern - check for status filter
-                if (sql.includes('status = ?') && boundParams.length > 0 && boundParams[0]) {
-                  filtered = filtered.filter(u => u.status === boundParams[0])
+
+                return {
+                  results: Array.from(counts.entries()).map(([tag, count]) => ({ tag, count }))
                 }
               }
-              
+
+              if (sql.includes('FROM username_tags') && !sql.includes('FROM usernames')) {
+                const requestedIds = boundParams.filter((param) => typeof param === 'number')
+                return {
+                  results: mockTags
+                    .filter((tag) => requestedIds.length === 0 || requestedIds.includes(tag.username_id))
+                    .map((tag) => ({ username_id: tag.username_id, tag_display: tag.tag_display }))
+                }
+              }
+
+              const filtered = filterUsernames(sql, boundParams)
+
               // Apply pagination
               const limit = boundParams[boundParams.length - 2] || 50
               const offset = boundParams[boundParams.length - 1] || 0
               
               return {
-                results: filtered
-                  .sort((a, b) => b.created_at - a.created_at)
-                  .slice(offset, offset + limit)
+                results: filtered.slice(offset, offset + limit)
               }
             },
             run: async () => {
+              if (sql.includes('UPDATE usernames') && sql.includes('admin_notes = ?')) {
+                const [adminNotes, updatedAt, id] = boundParams
+                const username = mockResults.find((result) => result.id === id)
+                if (username) {
+                  username.admin_notes = adminNotes
+                  username.updated_at = updatedAt
+                }
+              }
+
+              if (sql.includes('DELETE FROM username_tags')) {
+                const usernameId = boundParams[0]
+                mockTags = mockTags.filter((tag) => tag.username_id !== usernameId)
+              }
+
+              if (sql.includes('INSERT INTO username_tags')) {
+                const [usernameId, tagDisplay, tagNormalized] = boundParams
+                mockTags.push({
+                  username_id: usernameId,
+                  tag_display: tagDisplay,
+                  tag_normalized: tagNormalized
+                })
+              }
+
               return { success: true }
             }
           }
@@ -227,6 +301,18 @@ describe('Admin Search Endpoint', () => {
     const json = await res.json() as any
     expect(json.ok).toBe(false)
     expect(json.error).toContain('Invalid status parameter')
+  })
+
+  it('should return 400 if sort parameter is invalid', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/admin/usernames/search?q=test&sort=weird')
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+
+    expect(res.status).toBe(400)
+    const json = await res.json() as any
+    expect(json.ok).toBe(false)
+    expect(json.error).toContain('Invalid sort parameter')
   })
 
   it('should return 400 if page is negative', async () => {
@@ -350,6 +436,61 @@ describe('Admin Search Endpoint', () => {
     const json = await res.json() as any
     expect(json.ok).toBe(true)
     expect(json.results).toBeDefined()
+  })
+})
+
+describe('Admin Username Metadata Endpoints', () => {
+  function createTestApp() {
+    const app = new Hono<{ Bindings: { DB: D1Database } }>()
+    app.route('/admin', admin)
+    return app
+  }
+
+  it('should return username detail by exact name', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/admin/username/testuser')
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.username.name).toBe('testuser')
+  })
+
+  it('should update admin notes and tags for a username', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/admin/username/metadata', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'testuser',
+        admin_notes: 'VIP creator account',
+        tags: ['VIP', 'creator']
+      })
+    })
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.username.admin_notes).toBe('VIP creator account')
+    expect(json.username.tags).toEqual(['VIP', 'creator'])
+  })
+
+  it('should return username stats', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/admin/usernames/stats')
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.totals).toBeDefined()
+    expect(json.metadata).toBeDefined()
+    expect(json.top_tags).toBeDefined()
   })
 })
 

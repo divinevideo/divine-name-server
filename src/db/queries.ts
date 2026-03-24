@@ -2,6 +2,7 @@
 // ABOUTME: Provides type-safe D1 database operations
 
 export type ClaimSource = 'self-service' | 'admin' | 'bulk-upload' | 'vine-import' | 'public-reservation' | 'unknown'
+export type SearchSort = 'relevance' | 'newest' | 'oldest' | 'updated'
 
 export interface Username {
   id: number
@@ -27,6 +28,11 @@ export interface Username {
   created_by: string | null
   atproto_did: string | null
   atproto_state: 'pending' | 'ready' | 'failed' | 'disabled' | null
+  tags?: string[]
+}
+
+export interface UsernameWithTags extends Username {
+  tags: string[]
 }
 
 export interface ReservationToken {
@@ -42,18 +48,42 @@ export interface ReservationToken {
 export interface SearchParams {
   query: string
   status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'recovered'
+  sort?: SearchSort
   page?: number
   limit?: number
 }
 
 export interface SearchResult {
-  results: Username[]
+  results: UsernameWithTags[]
   pagination: {
     page: number
     limit: number
     total: number
     total_pages: number
   }
+}
+
+export interface UsernameStats {
+  totals: {
+    all: number
+    active: number
+    reserved: number
+    revoked: number
+    burned: number
+  }
+  metadata: {
+    with_notes: number
+    with_tags: number
+    untagged: number
+    vip: number
+  }
+  activity: {
+    claimed_7d: number
+    claimed_30d: number
+    updated_7d: number
+    updated_30d: number
+  }
+  top_tags: Array<{ tag: string; count: number }>
 }
 
 export async function isReservedWord(
@@ -89,6 +119,213 @@ export async function getUsernameByPubkey(
   ).bind(pubkey, 'active').first<Username>()
 
   return result
+}
+
+function normalizeTag(tag: string): { display: string; normalized: string } | null {
+  const display = tag.trim().replace(/\s+/g, ' ')
+  if (!display) {
+    return null
+  }
+
+  return {
+    display,
+    normalized: display.toLowerCase()
+  }
+}
+
+function normalizeTags(tags: string[]): Array<{ display: string; normalized: string }> {
+  const deduped = new Map<string, { display: string; normalized: string }>()
+
+  for (const tag of tags) {
+    if (typeof tag !== 'string') {
+      continue
+    }
+
+    const normalizedTag = normalizeTag(tag)
+    if (!normalizedTag) {
+      continue
+    }
+
+    if (!deduped.has(normalizedTag.normalized)) {
+      deduped.set(normalizedTag.normalized, normalizedTag)
+    }
+  }
+
+  return Array.from(deduped.values())
+}
+
+async function getTagsByUsernameIds(
+  db: D1Database,
+  usernameIds: number[]
+): Promise<Map<number, string[]>> {
+  const tagsByUsernameId = new Map<number, string[]>()
+
+  if (usernameIds.length === 0) {
+    return tagsByUsernameId
+  }
+
+  const placeholders = usernameIds.map(() => '?').join(', ')
+  const result = await db.prepare(
+    `SELECT username_id, tag_display
+     FROM username_tags
+     WHERE username_id IN (${placeholders})
+     ORDER BY tag_normalized ASC, tag_display ASC`
+  ).bind(...usernameIds).all<{ username_id: number; tag_display: string }>()
+
+  for (const row of result.results) {
+    const tags = tagsByUsernameId.get(row.username_id) || []
+    tags.push(row.tag_display)
+    tagsByUsernameId.set(row.username_id, tags)
+  }
+
+  return tagsByUsernameId
+}
+
+async function attachTags(
+  db: D1Database,
+  usernames: Username[]
+): Promise<UsernameWithTags[]> {
+  const tagsByUsernameId = await getTagsByUsernameIds(db, usernames.map((username) => username.id))
+
+  return usernames.map((username) => ({
+    ...username,
+    tags: tagsByUsernameId.get(username.id) || []
+  }))
+}
+
+async function countQuery(
+  db: D1Database,
+  sql: string,
+  ...params: unknown[]
+): Promise<number> {
+  const result = await db.prepare(sql).bind(...params).first<{ count: number }>()
+  return result?.count || 0
+}
+
+export async function getUsernameDetail(
+  db: D1Database,
+  name: string
+): Promise<UsernameWithTags | null> {
+  const username = await getUsernameByName(db, name)
+  if (!username) {
+    return null
+  }
+
+  const [withTags] = await attachTags(db, [username])
+  return withTags || null
+}
+
+export async function updateUsernameMetadata(
+  db: D1Database,
+  params: {
+    name: string
+    adminNotes: string | null
+    tags: string[]
+  }
+): Promise<UsernameWithTags | null> {
+  const username = await getUsernameByName(db, params.name)
+  if (!username) {
+    return null
+  }
+
+  const now = Math.floor(Date.now() / 1000)
+  const normalized = normalizeTags(params.tags)
+
+  await db.prepare(
+    `UPDATE usernames
+     SET admin_notes = ?,
+         updated_at = ?
+     WHERE id = ?`
+  ).bind(params.adminNotes, now, username.id).run()
+
+  await db.prepare(
+    'DELETE FROM username_tags WHERE username_id = ?'
+  ).bind(username.id).run()
+
+  for (const tag of normalized) {
+    await db.prepare(
+      `INSERT INTO username_tags (username_id, tag_display, tag_normalized, created_at)
+       VALUES (?, ?, ?, ?)`
+    ).bind(username.id, tag.display, tag.normalized, now).run()
+  }
+
+  return getUsernameDetail(db, username.username_canonical || username.name)
+}
+
+export async function getUsernameStats(
+  db: D1Database
+): Promise<UsernameStats> {
+  const now = Math.floor(Date.now() / 1000)
+  const sevenDaysAgo = now - (7 * 24 * 60 * 60)
+  const thirtyDaysAgo = now - (30 * 24 * 60 * 60)
+
+  const [
+    all,
+    active,
+    reserved,
+    revoked,
+    burned,
+    withNotes,
+    withTags,
+    untagged,
+    vip,
+    claimed7d,
+    claimed30d,
+    updated7d,
+    updated30d,
+    topTagsResult,
+  ] = await Promise.all([
+    countQuery(db, 'SELECT COUNT(*) AS count FROM usernames'),
+    countQuery(db, `SELECT COUNT(*) AS count FROM usernames WHERE status = ?`, 'active'),
+    countQuery(db, `SELECT COUNT(*) AS count FROM usernames WHERE status = ?`, 'reserved'),
+    countQuery(db, `SELECT COUNT(*) AS count FROM usernames WHERE status = ?`, 'revoked'),
+    countQuery(db, `SELECT COUNT(*) AS count FROM usernames WHERE status = ?`, 'burned'),
+    countQuery(db, `SELECT COUNT(*) AS count FROM usernames WHERE admin_notes IS NOT NULL AND TRIM(admin_notes) != ''`),
+    countQuery(db, `SELECT COUNT(DISTINCT username_id) AS count FROM username_tags`),
+    countQuery(
+      db,
+      `SELECT COUNT(*) AS count
+       FROM usernames
+       WHERE NOT EXISTS (
+         SELECT 1 FROM username_tags WHERE username_tags.username_id = usernames.id
+       )`
+    ),
+    countQuery(db, `SELECT COUNT(DISTINCT username_id) AS count FROM username_tags WHERE tag_normalized = ?`, 'vip'),
+    countQuery(db, `SELECT COUNT(*) AS count FROM usernames WHERE claimed_at IS NOT NULL AND claimed_at >= ?`, sevenDaysAgo),
+    countQuery(db, `SELECT COUNT(*) AS count FROM usernames WHERE claimed_at IS NOT NULL AND claimed_at >= ?`, thirtyDaysAgo),
+    countQuery(db, `SELECT COUNT(*) AS count FROM usernames WHERE updated_at >= ?`, sevenDaysAgo),
+    countQuery(db, `SELECT COUNT(*) AS count FROM usernames WHERE updated_at >= ?`, thirtyDaysAgo),
+    db.prepare(
+      `SELECT tag_normalized AS tag, COUNT(*) AS count
+       FROM username_tags
+       GROUP BY tag_normalized
+       ORDER BY count DESC, tag_normalized ASC
+       LIMIT 10`
+    ).bind().all<{ tag: string; count: number }>(),
+  ])
+
+  return {
+    totals: {
+      all,
+      active,
+      reserved,
+      revoked,
+      burned,
+    },
+    metadata: {
+      with_notes: withNotes,
+      with_tags: withTags,
+      untagged,
+      vip,
+    },
+    activity: {
+      claimed_7d: claimed7d,
+      claimed_30d: claimed30d,
+      updated_7d: updated7d,
+      updated_30d: updated30d,
+    },
+    top_tags: topTagsResult.results,
+  }
 }
 
 export async function claimUsername(
@@ -225,43 +462,55 @@ export async function searchUsernames(
   db: D1Database,
   params: SearchParams
 ): Promise<SearchResult> {
-  const { query, status, page = 1, limit = 50 } = params
+  const { query, status, sort = 'relevance', page = 1, limit = 50 } = params
   const offset = (page - 1) * limit
+  const whereParts: string[] = []
+  const queryParams: unknown[] = []
+  const trimmedQuery = query.trim()
+  const normalizedQuery = trimmedQuery.toLowerCase()
 
-  // Build WHERE clause
-  let whereClause = ''
-  const queryParams: any[] = []
-
-  // If query is empty, don't filter by name/pubkey/email
-  if (query && query.length > 0) {
-    const escapedQuery = escapeLikePattern(query)
+  if (trimmedQuery) {
+    const escapedQuery = escapeLikePattern(normalizedQuery)
     const searchPattern = `%${escapedQuery}%`
-    whereClause = `(name LIKE ? OR username_display LIKE ? OR username_canonical LIKE ? OR pubkey LIKE ? OR email LIKE ?)`
-    queryParams.push(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern)
+    whereParts.push(`(
+      LOWER(COALESCE(name, '')) LIKE ? ESCAPE '\\'
+      OR LOWER(COALESCE(username_display, '')) LIKE ? ESCAPE '\\'
+      OR LOWER(COALESCE(username_canonical, '')) LIKE ? ESCAPE '\\'
+      OR LOWER(COALESCE(pubkey, '')) LIKE ? ESCAPE '\\'
+      OR LOWER(COALESCE(email, '')) LIKE ? ESCAPE '\\'
+      OR LOWER(COALESCE(admin_notes, '')) LIKE ? ESCAPE '\\'
+      OR EXISTS (
+        SELECT 1 FROM username_tags ut
+        WHERE ut.username_id = usernames.id
+          AND (
+            LOWER(COALESCE(ut.tag_display, '')) LIKE ? ESCAPE '\\'
+            OR LOWER(COALESCE(ut.tag_normalized, '')) LIKE ? ESCAPE '\\'
+          )
+      )
+    )`)
+    queryParams.push(
+      searchPattern,
+      searchPattern,
+      searchPattern,
+      searchPattern,
+      searchPattern,
+      searchPattern,
+      searchPattern,
+      searchPattern
+    )
   }
 
   // Add status filter if provided
   if (status === 'recovered') {
     // "Recovered" = Vine accounts that have been claimed (active with pubkey, originally from Vine import)
     const recoveredCondition = `status = 'active' AND pubkey IS NOT NULL AND reserved_reason LIKE '%Vine%'`
-    if (whereClause) {
-      whereClause += ` AND ${recoveredCondition}`
-    } else {
-      whereClause = recoveredCondition
-    }
+    whereParts.push(recoveredCondition)
   } else if (status) {
-    if (whereClause) {
-      whereClause += ` AND status = ?`
-    } else {
-      whereClause = `status = ?`
-    }
+    whereParts.push('status = ?')
     queryParams.push(status)
   }
 
-  // If no filters, use WHERE 1=1 to get all results
-  if (!whereClause) {
-    whereClause = '1=1'
-  }
+  const whereClause = whereParts.length > 0 ? whereParts.join(' AND ') : '1=1'
 
   // Get total count
   const countResult = await db.prepare(
@@ -271,16 +520,66 @@ export async function searchUsernames(
   const total = countResult?.count || 0
   const totalPages = Math.ceil(total / limit)
 
+  let orderClause = 'created_at DESC'
+  const orderParams: unknown[] = []
+
+  if (sort === 'oldest') {
+    orderClause = 'created_at ASC'
+  } else if (sort === 'updated') {
+    orderClause = 'updated_at DESC, created_at DESC'
+  } else if (sort === 'newest') {
+    orderClause = 'created_at DESC'
+  } else if (trimmedQuery) {
+    const escapedQuery = escapeLikePattern(normalizedQuery)
+    const prefixPattern = `${escapedQuery}%`
+    const containsPattern = `%${escapedQuery}%`
+    orderClause = `CASE
+      WHEN LOWER(COALESCE(username_canonical, '')) = ? THEN 0
+      WHEN LOWER(COALESCE(username_display, '')) = ? THEN 1
+      WHEN LOWER(COALESCE(username_canonical, '')) LIKE ? ESCAPE '\\' THEN 2
+      WHEN LOWER(COALESCE(username_display, '')) LIKE ? ESCAPE '\\' THEN 3
+      WHEN EXISTS (
+        SELECT 1 FROM username_tags ut
+        WHERE ut.username_id = usernames.id
+          AND LOWER(COALESCE(ut.tag_normalized, '')) = ?
+      ) THEN 4
+      WHEN EXISTS (
+        SELECT 1 FROM username_tags ut
+        WHERE ut.username_id = usernames.id
+          AND LOWER(COALESCE(ut.tag_normalized, '')) LIKE ? ESCAPE '\\'
+      ) THEN 5
+      WHEN LOWER(COALESCE(pubkey, '')) = ? OR LOWER(COALESCE(email, '')) = ? THEN 6
+      WHEN LOWER(COALESCE(pubkey, '')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(email, '')) LIKE ? ESCAPE '\\' THEN 7
+      WHEN LOWER(COALESCE(admin_notes, '')) LIKE ? ESCAPE '\\' THEN 8
+      ELSE 9
+    END, updated_at DESC, created_at DESC`
+    orderParams.push(
+      normalizedQuery,
+      normalizedQuery,
+      prefixPattern,
+      prefixPattern,
+      normalizedQuery,
+      containsPattern,
+      normalizedQuery,
+      normalizedQuery,
+      containsPattern,
+      containsPattern,
+      containsPattern
+    )
+  }
+
   // Get paginated results
   const results = await db.prepare(
     `SELECT * FROM usernames
      WHERE ${whereClause}
-     ORDER BY created_at DESC
+     ORDER BY ${orderClause}
      LIMIT ? OFFSET ?`
-  ).bind(...queryParams, limit, offset).all<Username>()
+  ).bind(...queryParams, ...orderParams, limit, offset).all<Username>()
+
+  const withTags = await attachTags(db, results.results)
 
   return {
-    results: results.results,
+    results: withTags,
     pagination: {
       page,
       limit,

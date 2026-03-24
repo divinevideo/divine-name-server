@@ -5,7 +5,11 @@ import type {
   RevokeResponse,
   ReservedWord,
   BulkReserveResponse,
-  ApiResponse
+  ApiResponse,
+  SearchSort,
+  UsernameDetailResponse,
+  UsernameMetadataResponse,
+  UsernameStatsResponse
 } from '../types'
 
 const API_BASE = '/api/admin'
@@ -13,6 +17,7 @@ const API_BASE = '/api/admin'
 export async function searchUsernames(
   query: string,
   status?: string,
+  sort: SearchSort = 'relevance',
   page = 1,
   limit = 50
 ): Promise<SearchResult> {
@@ -26,10 +31,54 @@ export async function searchUsernames(
     params.set('status', status)
   }
 
+  params.set('sort', sort)
+
   const response = await fetch(`${API_BASE}/usernames/search?${params}`)
 
   if (!response.ok) {
     throw new Error(`Search failed: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+export async function getUsernameDetail(name: string): Promise<UsernameDetailResponse> {
+  const response = await fetch(`${API_BASE}/username/${encodeURIComponent(name)}`)
+
+  if (!response.ok) {
+    throw new Error(`Load username failed: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+export async function updateUsernameMetadata(
+  name: string,
+  adminNotes: string | null,
+  tags: string[]
+): Promise<UsernameMetadataResponse> {
+  const response = await fetch(`${API_BASE}/username/metadata`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name,
+      admin_notes: adminNotes,
+      tags
+    })
+  })
+
+  if (!response.ok) {
+    throw new Error(`Save metadata failed: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+export async function getUsernameStats(): Promise<UsernameStatsResponse> {
+  const response = await fetch(`${API_BASE}/usernames/stats`)
+
+  if (!response.ok) {
+    throw new Error(`Stats failed: ${response.statusText}`)
   }
 
   return response.json()

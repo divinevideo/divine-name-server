@@ -1,7 +1,7 @@
 // ABOUTME: Displays color-coded status badges for username states (active, reserved, revoked, burned, recovered)
 // ABOUTME: Provides visual distinction between different username lifecycle states using Tailwind classes
 interface StatusBadgeProps {
-  status: 'active' | 'reserved' | 'revoked' | 'burned'
+  status: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation'
   isRecovered?: boolean
 }
 
@@ -11,6 +11,7 @@ export default function StatusBadge({ status, isRecovered }: StatusBadgeProps) {
     reserved: 'bg-yellow-100 text-yellow-800',
     revoked: 'bg-gray-100 text-gray-800',
     burned: 'bg-red-100 text-red-800',
+    'pending-confirmation': 'bg-blue-100 text-blue-800',
     recovered: 'bg-purple-100 text-purple-800'
   }
 
