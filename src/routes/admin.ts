@@ -3,7 +3,7 @@
 
 import { Hono } from 'hono'
 import { bech32 } from '@scure/base'
-import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getAllActiveUsernames } from '../db/queries'
+import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getAllActiveUsernames, getUsernameDetail, updateUsernameMetadata, getUsernameStats, type SearchSort } from '../db/queries'
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
 import { syncUsernameToFastly, deleteUsernameFromFastly, bulkSyncToFastly } from '../utils/fastly-sync'
 import { sendAssignmentNotificationEmail } from '../utils/email'
@@ -72,6 +72,7 @@ admin.get('/usernames/search', async (c) => {
   try {
     const query = c.req.query('q')
     const status = c.req.query('status') as 'active' | 'reserved' | 'revoked' | 'burned' | 'recovered' | undefined
+    const sort = c.req.query('sort') as SearchSort | undefined
     const pageStr = c.req.query('page') || '1'
     const limitStr = c.req.query('limit') || '50'
 
@@ -90,6 +91,11 @@ admin.get('/usernames/search', async (c) => {
       return c.json({ ok: false, error: 'Invalid status parameter' }, 400)
     }
 
+    const validSorts: SearchSort[] = ['relevance', 'newest', 'oldest', 'updated']
+    if (sort && !validSorts.includes(sort)) {
+      return c.json({ ok: false, error: 'Invalid sort parameter' }, 400)
+    }
+
     // Validate page parameter
     const page = parseInt(pageStr)
     if (isNaN(page) || page < 1) {
@@ -105,7 +111,7 @@ admin.get('/usernames/search', async (c) => {
     // Cap limit at 100
     const cappedLimit = Math.min(limit, 100)
 
-    const result = await searchUsernames(c.env.DB, { query, status, page, limit: cappedLimit })
+    const result = await searchUsernames(c.env.DB, { query, status, sort, page, limit: cappedLimit })
 
     return c.json({
       ok: true,
@@ -113,6 +119,74 @@ admin.get('/usernames/search', async (c) => {
     })
   } catch (error) {
     console.error('Search error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.get('/usernames/stats', async (c) => {
+  try {
+    const stats = await getUsernameStats(c.env.DB)
+    return c.json({
+      ok: true,
+      ...stats
+    })
+  } catch (error) {
+    console.error('Username stats error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.get('/username/:name', async (c) => {
+  try {
+    const name = c.req.param('name')
+    const username = await getUsernameDetail(c.env.DB, name)
+
+    if (!username) {
+      return c.json({ ok: false, error: 'Username not found' }, 404)
+    }
+
+    return c.json({ ok: true, username })
+  } catch (error) {
+    console.error('Username detail error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.post('/username/metadata', async (c) => {
+  try {
+    const body = await c.req.json<{ name?: string; admin_notes?: string | null; tags?: string[] }>()
+    const { name, admin_notes = null, tags = [] } = body
+
+    if (!name) {
+      return c.json({ ok: false, error: 'Name is required' }, 400)
+    }
+
+    if (admin_notes !== null && typeof admin_notes !== 'string') {
+      return c.json({ ok: false, error: 'admin_notes must be a string or null' }, 400)
+    }
+
+    if (!Array.isArray(tags) || tags.some((tag) => typeof tag !== 'string')) {
+      return c.json({ ok: false, error: 'tags must be an array of strings' }, 400)
+    }
+
+    const usernameData = validateUsername(name)
+    const username = await updateUsernameMetadata(c.env.DB, {
+      name: usernameData.canonical,
+      adminNotes: admin_notes,
+      tags
+    })
+
+    if (!username) {
+      return c.json({ ok: false, error: 'Username not found' }, 404)
+    }
+
+    return c.json({ ok: true, username })
+  } catch (error) {
+    if (error instanceof UsernameValidationError) {
+      return c.json({ ok: false, error: error.message }, 400)
+    }
+
+    console.error('Username metadata error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
   }
 })
