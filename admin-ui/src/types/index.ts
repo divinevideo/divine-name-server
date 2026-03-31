@@ -47,6 +47,10 @@ export interface AssignResponse extends ApiResponse {
   requiresOverride?: boolean
 }
 
+export interface UsernameLookupResponse extends ApiResponse {
+  username?: Username
+}
+
 export interface RevokeResponse extends ApiResponse {
   name?: string
   status?: string

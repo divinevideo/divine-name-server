@@ -2,7 +2,7 @@
 // ABOUTME: Shows all metadata and provides actions like assign, revoke, burn
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { searchUsernames, assignUsername, revokeUsername } from '../api/client'
+import { getUsername, assignUsername, revokeUsername } from '../api/client'
 import type { Username } from '../types'
 import StatusBadge from '../components/StatusBadge'
 
@@ -33,12 +33,11 @@ export default function UsernameDetail() {
     setError(null)
 
     try {
-      const result = await searchUsernames(name)
-      const found = result.results.find(u => u.name === name)
-      if (found) {
-        setUsername(found)
+      const result = await getUsername(name)
+      if (result.ok && result.username) {
+        setUsername(result.username)
       } else {
-        setError('Username not found')
+        setError(result.error || 'Username not found')
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load username')
@@ -135,6 +134,72 @@ export default function UsernameDetail() {
         </p>
       </div>
 
+      {/* Reserved banner with inline assign */}
+      {username.status === 'reserved' && !username.pubkey && (
+        <div className="rounded-lg bg-amber-50 border border-amber-200 p-4 mb-6">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-sm font-medium text-amber-800">
+                Reserved — no account yet
+              </p>
+              <p className="mt-1 text-sm text-amber-700">
+                This name is held but not assigned to anyone. Assign a pubkey to activate it.
+                {username.claim_source === 'vine-import' && ' Originally imported from Vine.'}
+                {username.claim_source === 'admin' && ' Manually reserved by an admin.'}
+              </p>
+            </div>
+            {!showAssign && (
+              <button
+                onClick={() => setShowAssign(true)}
+                className="ml-4 shrink-0 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700"
+              >
+                Assign to Pubkey
+              </button>
+            )}
+          </div>
+          {showAssign && (
+            <form onSubmit={handleAssign} className="mt-3 space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-amber-800">
+                  Pubkey (hex or npub)
+                </label>
+                <input
+                  type="text"
+                  value={assignPubkey}
+                  onChange={(e) => setAssignPubkey(e.target.value)}
+                  required
+                  placeholder="npub1... or 64-character hex"
+                  className="mt-1 block w-full rounded-md border-amber-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2 border font-mono text-xs"
+                />
+              </div>
+              {assignError && (
+                <p className="text-sm text-red-600">{assignError}</p>
+              )}
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  disabled={assignLoading}
+                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {assignLoading ? 'Assigning...' : 'Assign'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAssign(false)
+                    setAssignPubkey('')
+                    setAssignError(null)
+                  }}
+                  className="inline-flex items-center px-3 py-2 border border-amber-300 text-sm font-medium rounded-md shadow-sm text-amber-800 bg-white hover:bg-amber-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      )}
+
       {/* Details Card */}
       <div className="bg-white shadow rounded-lg overflow-hidden mb-6">
         <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
@@ -224,8 +289,8 @@ export default function UsernameDetail() {
           <h3 className="text-lg font-medium text-gray-900">Actions</h3>
         </div>
         <div className="px-6 py-4 space-y-4">
-          {/* Assign Action */}
-          {(username.status === 'reserved' || username.status === 'revoked') && (
+          {/* Assign Action — hidden for reserved+no-pubkey since the banner above handles it */}
+          {(username.status === 'reserved' || username.status === 'revoked') && !(username.status === 'reserved' && !username.pubkey) && (
             <div>
               {!showAssign ? (
                 <button

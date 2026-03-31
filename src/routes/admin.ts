@@ -117,6 +117,25 @@ admin.get('/usernames/search', async (c) => {
   }
 })
 
+admin.get('/username/:name', async (c) => {
+  try {
+    const name = c.req.param('name')
+    if (!name) {
+      return c.json({ ok: false, error: 'Name parameter is required' }, 400)
+    }
+
+    const username = await getUsernameByName(c.env.DB, name)
+    if (!username) {
+      return c.json({ ok: false, error: 'Username not found' }, 404)
+    }
+
+    return c.json({ ok: true, username })
+  } catch (error) {
+    console.error('Username lookup error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
 admin.get('/reserved-words', async (c) => {
   try {
     const words = await getReservedWords(c.env.DB)

@@ -1,5 +1,6 @@
 import type {
   SearchResult,
+  UsernameLookupResponse,
   ReserveResponse,
   AssignResponse,
   RevokeResponse,
@@ -30,6 +31,16 @@ export async function searchUsernames(
 
   if (!response.ok) {
     throw new Error(`Search failed: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+export async function getUsername(name: string): Promise<UsernameLookupResponse> {
+  const response = await fetch(`${API_BASE}/username/${encodeURIComponent(name)}`)
+
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`Lookup failed: ${response.statusText}`)
   }
 
   return response.json()

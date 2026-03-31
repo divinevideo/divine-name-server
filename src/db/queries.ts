@@ -231,10 +231,10 @@ export async function searchUsernames(
   // Build WHERE clause
   let whereClause = ''
   const queryParams: any[] = []
+  const escapedQuery = query && query.length > 0 ? escapeLikePattern(query) : ''
 
   // If query is empty, don't filter by name/pubkey/email
-  if (query && query.length > 0) {
-    const escapedQuery = escapeLikePattern(query)
+  if (escapedQuery) {
     const searchPattern = `%${escapedQuery}%`
     whereClause = `(name LIKE ? OR username_display LIKE ? OR username_canonical LIKE ? OR pubkey LIKE ? OR email LIKE ?)`
     queryParams.push(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern)
@@ -272,12 +272,26 @@ export async function searchUsernames(
   const totalPages = Math.ceil(total / limit)
 
   // Get paginated results
+  // When searching by name, score by match quality: exact > prefix > substring
+  let orderClause = 'created_at DESC'
+  const orderParams: any[] = []
+  if (escapedQuery) {
+    const canonical = query!.toLowerCase()
+    const prefixPattern = `${escapedQuery}%`
+    orderClause = `CASE
+      WHEN username_canonical = ? THEN 0
+      WHEN username_canonical LIKE ? THEN 1
+      ELSE 2
+    END, created_at DESC`
+    orderParams.push(canonical, prefixPattern)
+  }
+
   const results = await db.prepare(
     `SELECT * FROM usernames
      WHERE ${whereClause}
-     ORDER BY created_at DESC
+     ORDER BY ${orderClause}
      LIMIT ? OFFSET ?`
-  ).bind(...queryParams, limit, offset).all<Username>()
+  ).bind(...queryParams, ...orderParams, limit, offset).all<Username>()
 
   return {
     results: results.results,

@@ -60,8 +60,7 @@ function createMockDB() {
                     }
                   }
                   
-                  // Status is at index 5 if search pattern exists
-                  if (boundParams.length > 7 && typeof boundParams[5] === 'string') {
+                  if (sql.includes('status = ?')) {
                     filtered = filtered.filter(u => u.status === boundParams[5])
                   }
                 } else {
@@ -114,12 +113,10 @@ function createMockDB() {
                   }
                 }
                 
-                // Status is at index 5 if search pattern exists
-                if (boundParams.length > 7 && typeof boundParams[5] === 'string') {
+                if (sql.includes('status = ?')) {
                   filtered = filtered.filter(u => u.status === boundParams[5])
                 }
               } else {
-                // No search pattern - check for status filter
                 if (sql.includes('status = ?') && boundParams.length > 0 && boundParams[0]) {
                   filtered = filtered.filter(u => u.status === boundParams[0])
                 }
@@ -750,6 +747,33 @@ describe('Admin Hostname Auth Guard', () => {
     expect(res.status).toBe(200)
     const json = await res.json() as any
     expect(json.ok).toBe(true)
+  })
+
+  describe('GET /api/admin/username/:name (direct lookup)', () => {
+    it('should return username by exact name', async () => {
+      const app = createTestApp()
+
+      const req = new Request('http://localhost/api/admin/username/testuser')
+      const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+
+      expect(res.status).toBe(200)
+      const json = await res.json() as any
+      expect(json.ok).toBe(true)
+      expect(json.username).toBeDefined()
+      expect(json.username.name).toBe('testuser')
+    })
+
+    it('should return 404 for non-existent username', async () => {
+      const app = createTestApp()
+
+      const req = new Request('http://localhost/api/admin/username/nonexistent')
+      const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+
+      expect(res.status).toBe(404)
+      const json = await res.json() as any
+      expect(json.ok).toBe(false)
+      expect(json.error).toContain('not found')
+    })
   })
 
   it('should block admin API requests from names.admin.divine.video without CF Access JWT', async () => {
