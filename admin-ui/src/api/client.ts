@@ -1,5 +1,6 @@
 import type {
   SearchResult,
+  UsernameLookupResponse,
   ReserveResponse,
   AssignResponse,
   RevokeResponse,
@@ -30,6 +31,32 @@ export async function searchUsernames(
 
   if (!response.ok) {
     throw new Error(`Search failed: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+export async function getUsername(name: string): Promise<UsernameLookupResponse> {
+  const response = await fetch(`${API_BASE}/username/${encodeURIComponent(name)}`)
+
+  if (response.status === 404) {
+    const contentType = response.headers.get('content-type') || ''
+    if (contentType.includes('application/json')) {
+      try {
+        return await response.json()
+      } catch {
+        // Fall through to a stable typed 404 payload.
+      }
+    }
+
+    return {
+      ok: false,
+      error: 'Username not found'
+    }
+  }
+
+  if (!response.ok) {
+    throw new Error(`Lookup failed: ${response.statusText}`)
   }
 
   return response.json()

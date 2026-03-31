@@ -114,15 +114,11 @@ function createMockDB() {
                     }
                   }
                   
-                  // Status is at index 5 if search pattern exists (but only if it's not limit/offset)
-                  // Limit and offset are always the last 2 params, so status would be at index 5
-                  // only if boundParams.length > 7 (5 patterns, status, limit, offset)
-                  if (boundParams.length > 7 && typeof boundParams[5] === 'string') {
+                  // Status filter: check if SQL has "AND status = ?" and find the status param
+                  if (sql.includes('status = ?')) {
                     filtered = filtered.filter(u => u.status === boundParams[5])
                   }
                 } else {
-                  // No search pattern - check for status filter
-                  // If WHERE is "1=1", no params. If WHERE is "status = ?", param is at index 0
                   if (sql.includes('status = ?') && boundParams.length > 0 && boundParams[0]) {
                     filtered = filtered.filter(u => u.status === boundParams[0])
                   }
@@ -141,12 +137,8 @@ function createMockDB() {
               const hasSearchPattern = sql.includes('LIKE')
               
               if (hasSearchPattern) {
-                // When there's a LIKE pattern, first 5 params are search patterns (all same value)
-                // name, username_display, username_canonical, pubkey, email
-                // But limit and offset are always last two, so we need to exclude them
                 const searchPattern = boundParams[0]
                 if (searchPattern && typeof searchPattern === 'string') {
-                  // Remove LIKE wildcards and escape characters to get the actual search term
                   const searchTerm = searchPattern.replace(/%/g, '').replace(/\\/g, '')
                   if (searchTerm.length > 0) {
                     filtered = mockResults.filter(u =>
@@ -158,24 +150,19 @@ function createMockDB() {
                     )
                   }
                 }
-                
-                // Status is at index 5 if search pattern exists (but only if it's not limit/offset)
-                // Limit and offset are always the last 2 params, so status would be at index 5
-                // only if boundParams.length > 7 (5 patterns, status, limit, offset)
-                if (boundParams.length > 7 && typeof boundParams[5] === 'string') {
+
+                // Status filter: check if SQL has "AND status = ?" and find the status param
+                // Status is always at index 5 (after 5 search patterns) when present
+                if (sql.includes('status = ?')) {
                   filtered = filtered.filter(u => u.status === boundParams[5])
                 }
               } else {
-                // No search pattern - check for status filter
-                // If WHERE is "1=1", no params. If WHERE is "status = ?", param is at index 0
                 if (sql.includes('status = ?') && boundParams.length > 0 && boundParams[0]) {
                   filtered = filtered.filter(u => u.status === boundParams[0])
                 }
-                // If WHERE is "1=1", no filtering needed - return all
               }
 
-              // Apply pagination
-              // Limit and offset are always the last two params
+              // Limit and offset are always the last two bound params
               const limit = boundParams[boundParams.length - 2] || 50
               const offset = boundParams[boundParams.length - 1] || 0
 
