@@ -290,7 +290,7 @@ export default function UsernameDetail() {
         </div>
         <div className="px-6 py-4 space-y-4">
           {/* Assign Action — hidden for reserved+no-pubkey since the banner above handles it */}
-          {(username.status === 'reserved' || username.status === 'revoked') && !(username.status === 'reserved' && !username.pubkey) && (
+          {(username.status === 'revoked' || (username.status === 'reserved' && username.pubkey)) && (
             <div>
               {!showAssign ? (
                 <button
