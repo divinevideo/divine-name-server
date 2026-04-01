@@ -1,5 +1,5 @@
-// ABOUTME: Shared D1 fake for tests. Operates on in-memory data without
-// ABOUTME: coupling to SQL string shape or bound-parameter positions.
+// ABOUTME: Shared D1 fake for tests. Operates on in-memory data with
+// ABOUTME: lighter SQL-shape coupling and no bound-parameter position indexing.
 
 import type { Username } from './queries'
 
@@ -8,11 +8,12 @@ export type MockRecord = Partial<Username> & { name: string; username_canonical:
 /**
  * Create a fake D1 database backed by in-memory records.
  *
- * Instead of sniffing SQL strings and indexing into bound params, this fake
- * determines the operation from high-level SQL markers and applies filters
- * using the actual data. Tests pass real query functions (searchUsernames,
- * getUsernameByName, etc.) through this fake, validating behavior without
- * coupling to query text or parameter ordering.
+ * Instead of relying on brittle positional indexing into bound params, this
+ * fake uses a few coarse SQL markers to determine the operation and then
+ * filters against in-memory data. Tests pass real query functions
+ * (searchUsernames, getUsernameByName, etc.) through this fake, validating
+ * behavior with less coupling to query text and parameter ordering than the
+ * old duplicated mocks.
  */
 export function createFakeD1(records: MockRecord[]) {
   return {

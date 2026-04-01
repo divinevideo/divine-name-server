@@ -24,6 +24,12 @@ const mockRecords: MockRecord[] = [
     created_at: 1700000200, updated_at: 1700000200, claimed_at: 1700000200,
     reserved_reason: null, claim_source: 'unknown',
   },
+  {
+    id: 4, name: 'vineuser', username_display: 'vineuser', username_canonical: 'vineuser',
+    pubkey: 'vine123', email: 'vine@example.com', status: 'active',
+    created_at: 1700000300, updated_at: 1700000300, claimed_at: 1700000300,
+    reserved_reason: 'Imported from Vine account', claim_source: 'vine-import',
+  },
 ]
 
 describe('searchUsernames', () => {
@@ -79,7 +85,7 @@ describe('searchUsernames', () => {
     const db = createFakeD1(mockRecords)
     const result = await searchUsernames(db, { query: '', limit: 2 })
 
-    expect(result.pagination.total).toBe(3)
+    expect(result.pagination.total).toBe(4)
     expect(result.pagination.total_pages).toBe(2)
   })
 
@@ -108,8 +114,8 @@ describe('searchUsernames', () => {
     const db = createFakeD1(mockRecords)
     const result = await searchUsernames(db, { query: '' })
 
-    expect(result.results.length).toBe(3)
-    expect(result.pagination.total).toBe(3)
+    expect(result.results.length).toBe(4)
+    expect(result.pagination.total).toBe(4)
   })
 
   it('should handle empty query with status filter', async () => {
@@ -117,8 +123,8 @@ describe('searchUsernames', () => {
     const result = await searchUsernames(db, { query: '', status: 'active' })
 
     expect(result.results.every(u => u.status === 'active')).toBe(true)
-    expect(result.results.length).toBe(2)
-    expect(result.pagination.total).toBe(2)
+    expect(result.results.length).toBe(3)
+    expect(result.pagination.total).toBe(3)
   })
 
   it('should handle empty query with reserved status filter', async () => {
@@ -135,7 +141,7 @@ describe('searchUsernames', () => {
     const result = await searchUsernames(db, { query: '', page: 1, limit: 2 })
 
     expect(result.results.length).toBe(2)
-    expect(result.pagination.total).toBe(3)
+    expect(result.pagination.total).toBe(4)
     expect(result.pagination.total_pages).toBe(2)
     expect(result.pagination.page).toBe(1)
     expect(result.pagination.limit).toBe(2)
@@ -145,8 +151,8 @@ describe('searchUsernames', () => {
     const db = createFakeD1(mockRecords)
     const result = await searchUsernames(db, { query: '', page: 2, limit: 2 })
 
-    expect(result.results.length).toBe(1)
-    expect(result.pagination.total).toBe(3)
+    expect(result.results.length).toBe(2)
+    expect(result.pagination.total).toBe(4)
     expect(result.pagination.total_pages).toBe(2)
     expect(result.pagination.page).toBe(2)
   })
@@ -165,6 +171,16 @@ describe('searchUsernames', () => {
     const result = await searchUsernames(db, { query: 'alice', status: 'reserved' })
 
     expect(result.results).toHaveLength(0)
+  })
+
+  it('should apply the recovered filter', async () => {
+    const db = createFakeD1(mockRecords)
+    const result = await searchUsernames(db, { query: '', status: 'recovered' })
+
+    expect(result.results).toHaveLength(1)
+    expect(result.results[0].name).toBe('vineuser')
+    expect(result.results[0].status).toBe('active')
+    expect(result.pagination.total).toBe(1)
   })
 })
 
