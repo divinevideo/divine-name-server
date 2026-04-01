@@ -11,135 +11,17 @@ vi.mock('../utils/email', () => ({
   sendReservationConfirmationEmail: vi.fn().mockResolvedValue(undefined)
 }))
 
-// Mock D1 database
-function createMockDB() {
-  const mockResults = [
-    {
-      id: 1,
-      name: 'testuser',
-      username_display: 'testuser',
-      username_canonical: 'testuser',
-      pubkey: 'abc123',
-      email: 'test@example.com',
-      relays: null,
-      status: 'active',
-      recyclable: 0,
-      created_at: 1700000000,
-      updated_at: 1700000000,
-      claimed_at: 1700000000,
-      revoked_at: null,
-      reserved_reason: null,
-      admin_notes: null
-    }
-  ]
+import { createFakeD1 } from '../db/test-helpers'
 
-  return {
-    prepare: (sql: string) => {
-      let boundParams: any[] = []
-      return {
-        bind: (...params: any[]) => {
-          boundParams = params
-          return {
-            first: async () => {
-              if (sql.includes('COUNT(*)')) {
-                let filtered = [...mockResults]
-                const hasSearchPattern = sql.includes('LIKE')
-                
-                if (hasSearchPattern) {
-                  const searchPattern = boundParams[0]
-                  if (searchPattern && typeof searchPattern === 'string') {
-                    const searchTerm = searchPattern.replace(/%/g, '').replace(/\\/g, '')
-                    if (searchTerm.length > 0) {
-                      filtered = mockResults.filter(u =>
-                        (u.name && u.name.includes(searchTerm)) ||
-                        (u.username_display && u.username_display.includes(searchTerm)) ||
-                        (u.username_canonical && u.username_canonical.includes(searchTerm)) ||
-                        (u.pubkey && u.pubkey.includes(searchTerm)) ||
-                        (u.email && u.email.includes(searchTerm))
-                      )
-                    }
-                  }
-                  
-                  if (sql.includes('status = ?')) {
-                    filtered = filtered.filter(u => u.status === boundParams[5])
-                  }
-                } else {
-                  // No search pattern - check for status filter
-                  if (sql.includes('status = ?') && boundParams.length > 0 && boundParams[0]) {
-                    filtered = filtered.filter(u => u.status === boundParams[0])
-                  }
-                }
-                
-                return { count: filtered.length }
-              }
-              
-              // Check for existing username lookup
-              if (sql.includes('username_canonical = ?') || sql.includes('name = ?')) {
-                const lookupValue = boundParams[0] || boundParams[1]
-                const found = mockResults.find(u => 
-                  u.username_canonical === lookupValue || u.name === lookupValue
-                )
-                return found || null
-              }
-              
-              // Check for reserved_words lookup (in first() - this is for isReservedWord)
-              if (sql.includes('reserved_words') && sql.includes('SELECT 1')) {
-                return null // Not reserved by default
-              }
-              
-              return null
-            },
-            all: async () => {
-              // Handle reserved_words queries
-              if (sql.includes('reserved_words')) {
-                return { results: [] }
-              }
-              
-              let filtered = [...mockResults]
-              const hasSearchPattern = sql.includes('LIKE')
-              
-              if (hasSearchPattern) {
-                const searchPattern = boundParams[0]
-                if (searchPattern && typeof searchPattern === 'string') {
-                  const searchTerm = searchPattern.replace(/%/g, '').replace(/\\/g, '')
-                  if (searchTerm.length > 0) {
-                    filtered = mockResults.filter(u =>
-                      (u.name && u.name.includes(searchTerm)) ||
-                      (u.username_display && u.username_display.includes(searchTerm)) ||
-                      (u.username_canonical && u.username_canonical.includes(searchTerm)) ||
-                      (u.pubkey && u.pubkey.includes(searchTerm)) ||
-                      (u.email && u.email.includes(searchTerm))
-                    )
-                  }
-                }
-                
-                if (sql.includes('status = ?')) {
-                  filtered = filtered.filter(u => u.status === boundParams[5])
-                }
-              } else {
-                if (sql.includes('status = ?') && boundParams.length > 0 && boundParams[0]) {
-                  filtered = filtered.filter(u => u.status === boundParams[0])
-                }
-              }
-              
-              // Apply pagination
-              const limit = boundParams[boundParams.length - 2] || 50
-              const offset = boundParams[boundParams.length - 1] || 0
-              
-              return {
-                results: filtered
-                  .sort((a, b) => b.created_at - a.created_at)
-                  .slice(offset, offset + limit)
-              }
-            },
-            run: async () => {
-              return { success: true }
-            }
-          }
-        }
-      }
+function createMockDB() {
+  return createFakeD1([
+    {
+      id: 1, name: 'testuser', username_display: 'testuser', username_canonical: 'testuser',
+      pubkey: 'abc123', email: 'test@example.com', relays: null, status: 'active',
+      recyclable: 0, created_at: 1700000000, updated_at: 1700000000, claimed_at: 1700000000,
+      revoked_at: null, reserved_reason: null, admin_notes: null,
     }
-  } as unknown as D1Database
+  ])
 }
 
 describe('Admin Search Endpoint', () => {
