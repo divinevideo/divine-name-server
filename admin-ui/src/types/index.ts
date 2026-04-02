@@ -16,6 +16,7 @@ export interface Username {
   admin_notes: string | null
   claim_source: ClaimSource
   created_by: string | null
+  tags?: string[]
 }
 
 export interface SearchResult {

@@ -71,7 +71,7 @@ export default function Dashboard() {
       formatDate(username.created_at),
       username.claim_source,
       username.created_by || '',
-      ((username as any).tags || []).join('|')
+      (username.tags || []).join('|')
     ])
 
     const csvContent = [
@@ -323,7 +323,7 @@ export default function Dashboard() {
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm">
                           <div className="flex flex-wrap gap-1">
-                            {((username as any).tags || []).map((tag: string) => (
+                            {(username.tags || []).map((tag) => (
                               <span key={tag} className="inline-flex px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">
                                 {tag}
                               </span>
