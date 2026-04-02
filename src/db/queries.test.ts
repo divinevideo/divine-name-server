@@ -2,7 +2,7 @@
 // ABOUTME: Validates search functionality with fake D1 database
 
 import { describe, it, expect } from 'vitest'
-import { searchUsernames, claimUsername, createReservation, reserveUsername, type SearchParams } from './queries'
+import { searchUsernames, claimUsername, createReservation, reserveUsername, addTag, removeTag, getTagsForUsername, getTagsForUsernames, getAllTags, type SearchParams } from './queries'
 import { createFakeD1, type MockRecord } from './test-helpers'
 
 const mockRecords: MockRecord[] = [
@@ -251,5 +251,91 @@ describe('createReservation', () => {
     const insertSql = sqlStatements[0]
     expect(insertSql).toContain("'public-reservation'")
     expect(insertSql).toContain('claim_source')
+  })
+})
+
+describe('username tags', () => {
+  it('adds a tag to a username', async () => {
+    const db = createFakeD1([
+      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+    ])
+    await addTag(db, 1, 'vip', 'matthew@divine.video')
+    const tags = await getTagsForUsername(db, 1)
+    expect(tags).toEqual(['vip'])
+  })
+
+  it('normalizes tags to lowercase', async () => {
+    const db = createFakeD1([
+      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+    ])
+    await addTag(db, 1, '  VIP  ', 'matthew@divine.video')
+    const tags = await getTagsForUsername(db, 1)
+    expect(tags).toEqual(['vip'])
+  })
+
+  it('prevents duplicate tags', async () => {
+    const db = createFakeD1([
+      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+    ])
+    await addTag(db, 1, 'vip', 'matthew@divine.video')
+    await addTag(db, 1, 'vip', 'matthew@divine.video')
+    const tags = await getTagsForUsername(db, 1)
+    expect(tags).toEqual(['vip'])
+  })
+
+  it('supports multiple tags per username', async () => {
+    const db = createFakeD1([
+      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+    ])
+    await addTag(db, 1, 'vip', 'matthew@divine.video')
+    await addTag(db, 1, 'vine-legacy', 'matthew@divine.video')
+    const tags = await getTagsForUsername(db, 1)
+    expect(tags).toContain('vip')
+    expect(tags).toContain('vine-legacy')
+  })
+
+  it('removes a tag', async () => {
+    const db = createFakeD1([
+      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+    ])
+    await addTag(db, 1, 'vip', 'matthew@divine.video')
+    await removeTag(db, 1, 'vip')
+    const tags = await getTagsForUsername(db, 1)
+    expect(tags).toEqual([])
+  })
+
+  it('returns all distinct tags with counts', async () => {
+    const db = createFakeD1([
+      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+      { name: 'lelepons', username_canonical: 'lelepons', status: 'reserved', id: 2 },
+    ])
+    await addTag(db, 1, 'vip', 'matthew@divine.video')
+    await addTag(db, 2, 'vip', 'matthew@divine.video')
+    await addTag(db, 1, 'vine-legacy', 'matthew@divine.video')
+    const allTags = await getAllTags(db)
+    expect(allTags).toContainEqual({ tag: 'vip', count: 2 })
+    expect(allTags).toContainEqual({ tag: 'vine-legacy', count: 1 })
+  })
+
+  it('rejects empty tags', async () => {
+    const db = createFakeD1([
+      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+    ])
+    await expect(addTag(db, 1, '', 'matthew@divine.video')).rejects.toThrow()
+    await expect(addTag(db, 1, '   ', 'matthew@divine.video')).rejects.toThrow()
+  })
+
+  it('batch loads tags for multiple usernames', async () => {
+    const db = createFakeD1([
+      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+      { name: 'lelepons', username_canonical: 'lelepons', status: 'reserved', id: 2 },
+      { name: 'notaguser', username_canonical: 'notaguser', status: 'active', id: 3 },
+    ])
+    await addTag(db, 1, 'vip', 'matthew@divine.video')
+    await addTag(db, 2, 'vine-legacy', 'matthew@divine.video')
+    const tagMap = await getTagsForUsernames(db, [1, 2, 3])
+    expect(tagMap.get(1)).toEqual(['vip'])
+    expect(tagMap.get(2)).toEqual(['vine-legacy'])
+    expect(tagMap.has(3)).toBe(false)
   })
 })
