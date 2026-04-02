@@ -42,6 +42,7 @@ export interface ReservationToken {
 export interface SearchParams {
   query: string
   status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'recovered'
+  tag?: string
   page?: number
   limit?: number
 }
@@ -256,6 +257,17 @@ export async function searchUsernames(
       whereClause = `status = ?`
     }
     queryParams.push(status)
+  }
+
+  // Add tag filter if provided
+  if (params.tag) {
+    const tagFilter = `EXISTS (SELECT 1 FROM username_tags ut WHERE ut.username_id = usernames.id AND ut.tag = ?)`
+    if (whereClause) {
+      whereClause += ` AND ${tagFilter}`
+    } else {
+      whereClause = tagFilter
+    }
+    queryParams.push(params.tag.trim().toLowerCase())
   }
 
   // If no filters, use WHERE 1=1 to get all results

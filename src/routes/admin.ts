@@ -105,11 +105,21 @@ admin.get('/usernames/search', async (c) => {
     // Cap limit at 100
     const cappedLimit = Math.min(limit, 100)
 
-    const result = await searchUsernames(c.env.DB, { query, status, page, limit: cappedLimit })
+    const tag = c.req.query('tag')
+    const result = await searchUsernames(c.env.DB, { query, status, tag, page, limit: cappedLimit })
+
+    // Batch-load tags for result set
+    const ids = result.results.map((r: any) => r.id).filter(Boolean)
+    const tagMap = await getTagsForUsernames(c.env.DB, ids)
+    const resultsWithTags = result.results.map((r: any) => ({
+      ...r,
+      tags: tagMap.get(r.id) || []
+    }))
 
     return c.json({
       ok: true,
-      ...result
+      results: resultsWithTags,
+      pagination: result.pagination,
     })
   } catch (error) {
     console.error('Search error:', error)
@@ -129,7 +139,8 @@ admin.get('/username/:name', async (c) => {
       return c.json({ ok: false, error: 'Username not found' }, 404)
     }
 
-    return c.json({ ok: true, username })
+    const tags = await getTagsForUsername(c.env.DB, username.id)
+    return c.json({ ok: true, username: { ...username, tags } })
   } catch (error) {
     console.error('Username lookup error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
@@ -549,11 +560,16 @@ admin.get('/export/csv', async (c) => {
 
     const usernames = await exportUsernamesByStatus(c.env.DB, status)
 
+    // Batch-load tags for all exported usernames
+    const ids = usernames.map((u: any) => u.id).filter(Boolean)
+    const tagMap = await getTagsForUsernames(c.env.DB, ids)
+
     // Build CSV content
-    const headers = ['name', 'pubkey', 'npub', 'status', 'claim_source', 'created_by', 'created_at', 'claimed_at', 'revoked_at', 'reserved_reason']
+    const headers = ['name', 'pubkey', 'npub', 'status', 'claim_source', 'created_by', 'created_at', 'claimed_at', 'revoked_at', 'reserved_reason', 'tags']
     const csvRows = [headers.join(',')]
 
     for (const u of usernames) {
+      const uTags = tagMap.get((u as any).id) || []
       const row = [
         u.name,
         u.pubkey || '',
@@ -564,7 +580,8 @@ admin.get('/export/csv', async (c) => {
         u.created_at ? new Date(u.created_at * 1000).toISOString() : '',
         u.claimed_at ? new Date(u.claimed_at * 1000).toISOString() : '',
         u.revoked_at ? new Date(u.revoked_at * 1000).toISOString() : '',
-        (u.reserved_reason || '').replace(/"/g, '""')
+        (u.reserved_reason || '').replace(/"/g, '""'),
+        uTags.join(';'),
       ]
       // Escape fields that might contain commas or quotes
       const escapedRow = row.map(field => {
