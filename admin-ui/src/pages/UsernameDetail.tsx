@@ -51,7 +51,7 @@ export default function UsernameDetail() {
     setError(null)
 
     try {
-      const result = await getUsername(name) as any
+      const result = await getUsername(name)
       if (result.ok && result.username) {
         setUsername(result.username)
         setTags(result.username.tags || [])

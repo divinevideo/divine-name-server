@@ -571,14 +571,19 @@ export async function getTagsForUsernames(
   usernameIds: number[]
 ): Promise<Map<number, string[]>> {
   if (usernameIds.length === 0) return new Map()
-  const placeholders = usernameIds.map(() => '?').join(',')
-  const result = await db.prepare(
-    `SELECT username_id, tag FROM username_tags WHERE username_id IN (${placeholders}) ORDER BY tag`
-  ).bind(...usernameIds).all<{ username_id: number; tag: string }>()
   const map = new Map<number, string[]>()
-  for (const row of result.results) {
-    if (!map.has(row.username_id)) map.set(row.username_id, [])
-    map.get(row.username_id)!.push(row.tag)
+  // D1 has a 100-parameter bind limit per prepared statement
+  const CHUNK_SIZE = 100
+  for (let i = 0; i < usernameIds.length; i += CHUNK_SIZE) {
+    const chunk = usernameIds.slice(i, i + CHUNK_SIZE)
+    const placeholders = chunk.map(() => '?').join(',')
+    const result = await db.prepare(
+      `SELECT username_id, tag FROM username_tags WHERE username_id IN (${placeholders}) ORDER BY tag`
+    ).bind(...chunk).all<{ username_id: number; tag: string }>()
+    for (const row of result.results) {
+      if (!map.has(row.username_id)) map.set(row.username_id, [])
+      map.get(row.username_id)!.push(row.tag)
+    }
   }
   return map
 }

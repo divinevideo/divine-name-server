@@ -586,7 +586,7 @@ admin.get('/export/csv', async (c) => {
       ]
       // Escape fields that might contain commas or quotes
       const escapedRow = row.map(field => {
-        if (field.includes(',') || field.includes('"') || field.includes('\n')) {
+        if (field.includes(',') || field.includes('"') || field.includes('\n') || field.includes(';')) {
           return `"${field}"`
         }
         return field

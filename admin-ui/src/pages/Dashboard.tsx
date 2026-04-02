@@ -71,7 +71,7 @@ export default function Dashboard() {
       formatDate(username.created_at),
       username.claim_source,
       username.created_by || '',
-      (username.tags || []).join('|')
+      (username.tags || []).join(';')
     ])
 
     const csvContent = [
