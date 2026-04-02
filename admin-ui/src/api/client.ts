@@ -15,7 +15,8 @@ export async function searchUsernames(
   query: string,
   status?: string,
   page = 1,
-  limit = 50
+  limit = 50,
+  tag?: string
 ): Promise<SearchResult> {
   const params = new URLSearchParams({
     q: query,
@@ -25,6 +26,10 @@ export async function searchUsernames(
 
   if (status) {
     params.set('status', status)
+  }
+
+  if (tag) {
+    params.set('tag', tag)
   }
 
   const response = await fetch(`${API_BASE}/usernames/search?${params}`)
@@ -185,6 +190,51 @@ export async function deleteReservedWord(word: string): Promise<ApiResponse> {
 
   if (!response.ok) {
     throw new Error(`Failed to delete reserved word: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+// --- Tags ---
+
+export async function addTagToUsername(
+  name: string,
+  tag: string
+): Promise<ApiResponse & { tags: string[] }> {
+  const response = await fetch(`${API_BASE}/username/${encodeURIComponent(name)}/tags`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tag }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Failed to add tag: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+export async function removeTagFromUsername(
+  name: string,
+  tag: string
+): Promise<ApiResponse & { tags: string[] }> {
+  const response = await fetch(
+    `${API_BASE}/username/${encodeURIComponent(name)}/tags/${encodeURIComponent(tag)}`,
+    { method: 'DELETE' }
+  )
+
+  if (!response.ok) {
+    throw new Error(`Failed to remove tag: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+export async function getAllTags(): Promise<{ tags: { tag: string; count: number }[] }> {
+  const response = await fetch(`${API_BASE}/tags`)
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch tags: ${response.statusText}`)
   }
 
   return response.json()
