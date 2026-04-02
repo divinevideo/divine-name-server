@@ -124,6 +124,12 @@ export default function UsernameDetail() {
 
   const handleRemoveTag = async (tagToRemove: string) => {
     if (!name) return
+    if (tagToRemove === 'vip') {
+      const confirmed = window.confirm(
+        `Remove the "vip" tag from "${name}"? VIP names may have special handling obligations — confirm this removal is intentional.`
+      )
+      if (!confirmed) return
+    }
     try {
       const result = await removeTagFromUsername(name, tagToRemove)
       if (result.ok) {
@@ -477,6 +483,11 @@ export default function UsernameDetail() {
                   <p className="text-sm text-red-800">
                     Are you sure you want to revoke "{username.name}"?
                   </p>
+                  {tags.includes('vip') && (
+                    <p className="text-sm font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                      This username has the "vip" tag — confirm this revocation is intentional.
+                    </p>
+                  )}
                   <div className="flex items-center">
                     <input
                       type="checkbox"
