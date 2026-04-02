@@ -369,7 +369,7 @@ export default function UsernameDetail() {
               type="text"
               value={tagInput}
               onChange={(e) => {
-                setTagInput(e.target.value)
+                setTagInput(e.target.value.toLowerCase())
                 setShowSuggestions(true)
               }}
               onFocus={() => setShowSuggestions(true)}
