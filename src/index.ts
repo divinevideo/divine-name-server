@@ -37,7 +37,7 @@ app.route('', subdomain)
 app.route('', publicRoutes)
 
 // Service info fallback for non-public, non-admin hostnames
-app.get('/', (c, next) => {
+app.use('/', async (c, next) => {
   const hostname = new URL(c.req.url).hostname
   if (hostname === 'names.admin.divine.video') {
     return next() // Let admin SPA catch-all handle it

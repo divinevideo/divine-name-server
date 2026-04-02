@@ -41,6 +41,11 @@ export default function Dashboard() {
     performSearch()
   }, [query, status, currentPage, tagFilter, performSearch])
 
+  // Loads all distinct tags once at mount for the filter dropdown.
+  // This works as long as the tag vocabulary stays small and admin-curated (~20 values).
+  // If tags become free-form or proliferate beyond that, replace this dropdown with
+  // a search/autocomplete — the <select> model breaks before the query does.
+  // Counts shown per tag are stale after the initial load; that's acceptable here.
   useEffect(() => {
     getAllTags().then(data => setAvailableTags(data.tags || [])).catch(() => {})
   }, [])
@@ -57,7 +62,7 @@ export default function Dashboard() {
   const downloadSearchResultsCSV = () => {
     if (results.length === 0) return
 
-    const headers = ['Username', 'Pubkey', 'Email', 'Status', 'Created', 'Source', 'Created By']
+    const headers = ['Username', 'Pubkey', 'Email', 'Status', 'Created', 'Source', 'Created By', 'Tags']
     const rows = results.map((username: Username) => [
       username.name,
       username.pubkey || '',
@@ -65,7 +70,8 @@ export default function Dashboard() {
       username.status,
       formatDate(username.created_at),
       username.claim_source,
-      username.created_by || ''
+      username.created_by || '',
+      ((username as any).tags || []).join('|')
     ])
 
     const csvContent = [

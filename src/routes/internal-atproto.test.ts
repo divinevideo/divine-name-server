@@ -107,7 +107,7 @@ describe('internal atproto sync route', () => {
         FASTLY_API_TOKEN: 'fastly-token',
         FASTLY_STORE_ID: 'store-id',
       } as any,
-      { waitUntil: () => {}, passThroughOnException: () => {} } as ExecutionContext
+      { waitUntil: () => {}, passThroughOnException: () => {}, props: {} } as ExecutionContext
     )
 
     expect(response.status).toBe(200)
@@ -139,7 +139,7 @@ describe('internal atproto sync route', () => {
         ASSETS: { fetch: async () => new Response('not found', { status: 404 }) },
         ATPROTO_SYNC_TOKEN: 'test-sync-token',
       } as any,
-      { waitUntil: () => {}, passThroughOnException: () => {} } as ExecutionContext
+      { waitUntil: () => {}, passThroughOnException: () => {}, props: {} } as ExecutionContext
     )
 
     expect(response.status).toBe(401)
@@ -167,7 +167,7 @@ describe('internal atproto sync route', () => {
         ASSETS: { fetch: async () => new Response('not found', { status: 404 }) },
         ATPROTO_SYNC_TOKEN: 'test-sync-token',
       } as any,
-      { waitUntil: () => {}, passThroughOnException: () => {} } as ExecutionContext
+      { waitUntil: () => {}, passThroughOnException: () => {}, props: {} } as ExecutionContext
     )
 
     expect(response.status).toBe(404)
@@ -209,7 +209,7 @@ describe('internal atproto sync route', () => {
         ASSETS: { fetch: async () => new Response('not found', { status: 404 }) },
         ATPROTO_SYNC_TOKEN: 'test-sync-token',
       } as any,
-      { waitUntil: () => {}, passThroughOnException: () => {} } as ExecutionContext
+      { waitUntil: () => {}, passThroughOnException: () => {}, props: {} } as ExecutionContext
     )
 
     expect(response.status).toBe(400)
@@ -251,7 +251,7 @@ describe('internal atproto sync route', () => {
         ASSETS: { fetch: async () => new Response('not found', { status: 404 }) },
         ATPROTO_SYNC_TOKEN: 'test-sync-token',
       } as any,
-      { waitUntil: () => {}, passThroughOnException: () => {} } as ExecutionContext
+      { waitUntil: () => {}, passThroughOnException: () => {}, props: {} } as ExecutionContext
     )
 
     expect(response.status).toBe(400)

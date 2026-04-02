@@ -1,6 +1,6 @@
 // ABOUTME: Username detail page for viewing and managing individual usernames
 // ABOUTME: Shows all metadata and provides actions like assign, revoke, burn
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { getUsername, assignUsername, revokeUsername, addTagToUsername, removeTagFromUsername, getAllTags } from '../api/client'
 import type { Username } from '../types'
@@ -28,11 +28,22 @@ export default function UsernameDetail() {
   const [tagInput, setTagInput] = useState('')
   const [showSuggestions, setShowSuggestions] = useState(false)
   const [allKnownTags, setAllKnownTags] = useState<{ tag: string; count: number }[]>([])
+  const tagContainerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     loadUsername()
     getAllTags().then(data => setAllKnownTags(data.tags || [])).catch(() => {})
   }, [name])
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (tagContainerRef.current && !tagContainerRef.current.contains(e.target as Node)) {
+        setShowSuggestions(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
 
   const loadUsername = async () => {
     if (!name) return
@@ -327,7 +338,10 @@ export default function UsernameDetail() {
       {/* Tags Card */}
       <div className="bg-white shadow rounded-lg overflow-hidden mb-6">
         <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
-          <h3 className="text-lg font-medium text-gray-900">Tags</h3>
+          <div className="flex items-baseline justify-between">
+            <h3 className="text-lg font-medium text-gray-900">Tags</h3>
+            <span className="text-xs text-gray-400">Internal labels only — not visible to users or sent to any external service</span>
+          </div>
         </div>
         <div className="px-6 py-4">
           <div className="flex flex-wrap gap-2 mb-3">
@@ -350,7 +364,7 @@ export default function UsernameDetail() {
               <span className="text-sm text-gray-400 italic">No tags</span>
             )}
           </div>
-          <div className="relative">
+          <div className="relative" ref={tagContainerRef}>
             <input
               type="text"
               value={tagInput}
@@ -363,9 +377,12 @@ export default function UsernameDetail() {
                 if (e.key === 'Enter' && tagInput.trim()) {
                   e.preventDefault()
                   handleAddTag(tagInput)
+                } else if (e.key === 'Escape') {
+                  setShowSuggestions(false)
                 }
               }}
               placeholder="Add a tag..."
+              maxLength={50}
               className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2 border"
             />
             {showSuggestions && filteredSuggestions.length > 0 && (

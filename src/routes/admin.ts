@@ -105,7 +105,8 @@ admin.get('/usernames/search', async (c) => {
     // Cap limit at 100
     const cappedLimit = Math.min(limit, 100)
 
-    const tag = c.req.query('tag')
+    const tagRaw = c.req.query('tag')
+    const tag = tagRaw && tagRaw.length <= 50 ? tagRaw : undefined
     const result = await searchUsernames(c.env.DB, { query, status, tag, page, limit: cappedLimit })
 
     // Batch-load tags for result set
@@ -767,7 +768,13 @@ admin.post('/username/set-atproto', async (c) => {
 
 admin.post('/username/:name/tags', async (c) => {
   const name = c.req.param('name')
-  const { tag } = await c.req.json<{ tag: string }>()
+  const body = await c.req.json<{ tag?: string }>()
+  const { tag } = body
+
+  if (!tag || typeof tag !== 'string') {
+    return c.json({ ok: false, error: 'tag is required' }, 400)
+  }
+
   const createdBy = c.req.header('Cf-Access-Authenticated-User-Email') || 'unknown'
 
   const username = await getUsernameByName(c.env.DB, name)
@@ -796,8 +803,13 @@ admin.delete('/username/:name/tags/:tag', async (c) => {
 })
 
 admin.get('/tags', async (c) => {
-  const tags = await getAllTags(c.env.DB)
-  return c.json({ tags })
+  try {
+    const tags = await getAllTags(c.env.DB)
+    return c.json({ ok: true, tags })
+  } catch (error) {
+    console.error('Get tags error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
 })
 
 export default admin

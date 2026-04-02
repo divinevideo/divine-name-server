@@ -539,6 +539,7 @@ export async function addTag(
 ): Promise<void> {
   const normalized = tag.trim().toLowerCase()
   if (!normalized) throw new Error('Tag cannot be empty')
+  if (normalized.length > 50) throw new Error('Tag too long (max 50 characters)')
   await db.prepare(
     'INSERT OR IGNORE INTO username_tags (username_id, tag, created_at, created_by) VALUES (?, ?, ?, ?)'
   ).bind(usernameId, normalized, Math.floor(Date.now() / 1000), createdBy || null).run()
