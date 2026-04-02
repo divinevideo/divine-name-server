@@ -2,7 +2,7 @@
 // ABOUTME: Shows all metadata and provides actions like assign, revoke, burn
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { getUsername, assignUsername, revokeUsername } from '../api/client'
+import { getUsername, assignUsername, revokeUsername, addTagToUsername, removeTagFromUsername, getAllTags } from '../api/client'
 import type { Username } from '../types'
 import StatusBadge from '../components/StatusBadge'
 
@@ -23,8 +23,15 @@ export default function UsernameDetail() {
   const [burnOnRevoke, setBurnOnRevoke] = useState(false)
   const [revokeLoading, setRevokeLoading] = useState(false)
 
+  // Tag states
+  const [tags, setTags] = useState<string[]>([])
+  const [tagInput, setTagInput] = useState('')
+  const [showSuggestions, setShowSuggestions] = useState(false)
+  const [allKnownTags, setAllKnownTags] = useState<{ tag: string; count: number }[]>([])
+
   useEffect(() => {
     loadUsername()
+    getAllTags().then(data => setAllKnownTags(data.tags || [])).catch(() => {})
   }, [name])
 
   const loadUsername = async () => {
@@ -33,9 +40,10 @@ export default function UsernameDetail() {
     setError(null)
 
     try {
-      const result = await getUsername(name)
+      const result = await getUsername(name) as any
       if (result.ok && result.username) {
         setUsername(result.username)
+        setTags(result.username.tags || [])
       } else {
         setError(result.error || 'Username not found')
       }
@@ -86,6 +94,39 @@ export default function UsernameDetail() {
       setRevokeLoading(false)
     }
   }
+
+  const handleAddTag = async (tagToAdd: string) => {
+    if (!name || !tagToAdd.trim()) return
+    try {
+      const result = await addTagToUsername(name, tagToAdd.trim())
+      if (result.ok) {
+        setTags(result.tags)
+        setTagInput('')
+        setShowSuggestions(false)
+        // Refresh known tags
+        getAllTags().then(data => setAllKnownTags(data.tags || [])).catch(() => {})
+      }
+    } catch (err) {
+      console.error('Failed to add tag:', err)
+    }
+  }
+
+  const handleRemoveTag = async (tagToRemove: string) => {
+    if (!name) return
+    try {
+      const result = await removeTagFromUsername(name, tagToRemove)
+      if (result.ok) {
+        setTags(result.tags)
+        getAllTags().then(data => setAllKnownTags(data.tags || [])).catch(() => {})
+      }
+    } catch (err) {
+      console.error('Failed to remove tag:', err)
+    }
+  }
+
+  const filteredSuggestions = allKnownTags
+    .filter(t => !tags.includes(t.tag))
+    .filter(t => !tagInput || t.tag.includes(tagInput.toLowerCase()))
 
   const formatDate = (timestamp: number | null) => {
     if (!timestamp) return '-'
@@ -280,6 +321,68 @@ export default function UsernameDetail() {
               <p className="mt-1 text-sm text-gray-900">{username.created_by}</p>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Tags Card */}
+      <div className="bg-white shadow rounded-lg overflow-hidden mb-6">
+        <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
+          <h3 className="text-lg font-medium text-gray-900">Tags</h3>
+        </div>
+        <div className="px-6 py-4">
+          <div className="flex flex-wrap gap-2 mb-3">
+            {tags.map(tag => (
+              <span
+                key={tag}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800"
+              >
+                {tag}
+                <button
+                  onClick={() => handleRemoveTag(tag)}
+                  className="ml-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full text-blue-400 hover:bg-blue-200 hover:text-blue-600"
+                  title={`Remove ${tag}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            {tags.length === 0 && (
+              <span className="text-sm text-gray-400 italic">No tags</span>
+            )}
+          </div>
+          <div className="relative">
+            <input
+              type="text"
+              value={tagInput}
+              onChange={(e) => {
+                setTagInput(e.target.value)
+                setShowSuggestions(true)
+              }}
+              onFocus={() => setShowSuggestions(true)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && tagInput.trim()) {
+                  e.preventDefault()
+                  handleAddTag(tagInput)
+                }
+              }}
+              placeholder="Add a tag..."
+              className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2 border"
+            />
+            {showSuggestions && filteredSuggestions.length > 0 && (
+              <div className="absolute z-10 mt-1 w-full bg-white shadow-lg rounded-md border border-gray-200 max-h-40 overflow-auto">
+                {filteredSuggestions.map(s => (
+                  <button
+                    key={s.tag}
+                    onClick={() => handleAddTag(s.tag)}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 flex justify-between items-center"
+                  >
+                    <span>{s.tag}</span>
+                    <span className="text-gray-400 text-xs">{s.count} names</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
