@@ -42,6 +42,7 @@ export interface ReservationToken {
 export interface SearchParams {
   query: string
   status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'recovered'
+  tag?: string
   page?: number
   limit?: number
 }
@@ -256,6 +257,17 @@ export async function searchUsernames(
       whereClause = `status = ?`
     }
     queryParams.push(status)
+  }
+
+  // Add tag filter if provided
+  if (params.tag) {
+    const tagFilter = `EXISTS (SELECT 1 FROM username_tags ut WHERE ut.username_id = usernames.id AND ut.tag = ?)`
+    if (whereClause) {
+      whereClause += ` AND ${tagFilter}`
+    } else {
+      whereClause = tagFilter
+    }
+    queryParams.push(params.tag.trim().toLowerCase())
   }
 
   // If no filters, use WHERE 1=1 to get all results
@@ -515,4 +527,72 @@ export async function expireStaleReservations(
   ).bind(now, now, now).run()
 
   return result.meta?.changes ?? 0
+}
+
+// --- Tag functions ---
+
+export async function addTag(
+  db: D1Database,
+  usernameId: number,
+  tag: string,
+  createdBy?: string
+): Promise<void> {
+  const normalized = tag.trim().toLowerCase()
+  if (!normalized) throw new Error('Tag cannot be empty')
+  if (normalized.length > 50) throw new Error('Tag too long (max 50 characters)')
+  await db.prepare(
+    'INSERT OR IGNORE INTO username_tags (username_id, tag, created_at, created_by) VALUES (?, ?, ?, ?)'
+  ).bind(usernameId, normalized, Math.floor(Date.now() / 1000), createdBy || null).run()
+}
+
+export async function removeTag(
+  db: D1Database,
+  usernameId: number,
+  tag: string
+): Promise<void> {
+  const normalized = tag.trim().toLowerCase()
+  await db.prepare(
+    'DELETE FROM username_tags WHERE username_id = ? AND tag = ?'
+  ).bind(usernameId, normalized).run()
+}
+
+export async function getTagsForUsername(
+  db: D1Database,
+  usernameId: number
+): Promise<string[]> {
+  const result = await db.prepare(
+    'SELECT tag FROM username_tags WHERE username_id = ? ORDER BY tag'
+  ).bind(usernameId).all<{ tag: string }>()
+  return result.results.map(r => r.tag)
+}
+
+export async function getTagsForUsernames(
+  db: D1Database,
+  usernameIds: number[]
+): Promise<Map<number, string[]>> {
+  if (usernameIds.length === 0) return new Map()
+  const map = new Map<number, string[]>()
+  // D1 has a 100-parameter bind limit per prepared statement
+  const CHUNK_SIZE = 100
+  for (let i = 0; i < usernameIds.length; i += CHUNK_SIZE) {
+    const chunk = usernameIds.slice(i, i + CHUNK_SIZE)
+    const placeholders = chunk.map(() => '?').join(',')
+    const result = await db.prepare(
+      `SELECT username_id, tag FROM username_tags WHERE username_id IN (${placeholders}) ORDER BY tag`
+    ).bind(...chunk).all<{ username_id: number; tag: string }>()
+    for (const row of result.results) {
+      if (!map.has(row.username_id)) map.set(row.username_id, [])
+      map.get(row.username_id)!.push(row.tag)
+    }
+  }
+  return map
+}
+
+export async function getAllTags(
+  db: D1Database
+): Promise<{ tag: string; count: number }[]> {
+  const result = await db.prepare(
+    'SELECT tag, COUNT(*) as count FROM username_tags GROUP BY tag ORDER BY tag'
+  ).bind().all<{ tag: string; count: number }>()
+  return result.results
 }

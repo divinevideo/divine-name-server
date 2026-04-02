@@ -256,7 +256,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: 'MrBeast' })
     })
     
-    const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -278,7 +278,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: 'MrBeast' })
     })
 
-    const res1 = await app.fetch(req1, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res1 = await app.fetch(req1, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
     expect(res1.status).toBe(200)
 
     // Second claim: mrbeast (should fail)
@@ -292,7 +292,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: 'mrbeast' })
     })
 
-    const res2 = await app.fetch(req2, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res2 = await app.fetch(req2, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
     expect(res2.status).toBe(409) // Conflict
     const json2 = await res2.json() as any
     expect(json2.error).toBe('That username is already taken')
@@ -311,7 +311,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: 'alice_123' })
     })
     
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
     expect(res.status).toBe(400)
     const json = await res.json() as any
     expect(json.error).toContain('underscores')
@@ -329,7 +329,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: '-alice' })
     })
 
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
     expect(res.status).toBe(400)
     const json = await res.json() as any
     expect(json.error).toContain("can't start or end with a hyphen")
@@ -347,7 +347,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: 'alice-' })
     })
 
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
     expect(res.status).toBe(400)
     const json = await res.json() as any
     expect(json.error).toContain("can't start or end with a hyphen")
@@ -366,7 +366,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: 'm-r-beast-123' })
     })
     
-    const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
     expect(res.status).toBe(200)
     const json = await res.json() as any
     expect(json.name).toBe('m-r-beast-123')
@@ -385,7 +385,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: 'a' })
     })
 
-    const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
     expect(res.status).toBe(200)
   })
 
@@ -402,7 +402,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: longName })
     })
 
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
     expect(res.status).toBe(400)
     const json = await res.json() as any
     expect(json.error).toContain('1–63 characters')
@@ -423,7 +423,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: 'oldname' })
     })
 
-    await app.fetch(req1, { DB: db }, { waitUntil: (p: Promise<any>) => { waitUntilCalls.push(p) }, passThroughOnException: () => {} })
+    await app.fetch(req1, { DB: db }, { waitUntil: (p: Promise<any>) => { waitUntilCalls.push(p) }, passThroughOnException: () => {}, props: {} })
 
     // Second claim: "newname" (same pubkey)
     const { deleteUsernameFromFastly } = await import('../utils/fastly-sync')
@@ -438,7 +438,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: 'newname' })
     })
 
-    const res2 = await app.fetch(req2, { DB: db }, { waitUntil: (p: Promise<any>) => { waitUntilCalls.push(p) }, passThroughOnException: () => {} })
+    const res2 = await app.fetch(req2, { DB: db }, { waitUntil: (p: Promise<any>) => { waitUntilCalls.push(p) }, passThroughOnException: () => {}, props: {} })
     expect(res2.status).toBe(200)
 
     // Verify deleteUsernameFromFastly was called with the old name
@@ -465,7 +465,7 @@ describe('Public Username Endpoints', () => {
         method: 'GET'
       })
 
-      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
       expect(res.status).toBe(200)
       const json = await res.json() as any
       expect(json.ok).toBe(true)
@@ -482,7 +482,7 @@ describe('Public Username Endpoints', () => {
         method: 'GET'
       })
 
-      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
       expect(res.status).toBe(200)
       const json = await res.json() as any
       expect(json.ok).toBe(true)
@@ -503,7 +503,7 @@ describe('Public Username Endpoints', () => {
         method: 'GET'
       })
 
-      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
       expect(res.status).toBe(200)
       const json = await res.json() as any
       expect(json.ok).toBe(true)
@@ -526,7 +526,7 @@ describe('Public Username Endpoints', () => {
         method: 'GET'
       })
 
-      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
       expect(res.status).toBe(200)
       const json = await res.json() as any
       expect(json.ok).toBe(true)
@@ -546,7 +546,7 @@ describe('Public Username Endpoints', () => {
         method: 'GET'
       })
 
-      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
       expect(res.status).toBe(200)
       const json = await res.json() as any
       expect(json.ok).toBe(true)
@@ -579,7 +579,7 @@ describe('Public Username Endpoints', () => {
         method: 'GET'
       })
 
-      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
       expect(res.status).toBe(200)
       const json = await res.json() as any
       expect(json.ok).toBe(true)
@@ -596,7 +596,7 @@ describe('Public Username Endpoints', () => {
         method: 'GET'
       })
 
-      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
       expect(res.status).toBe(200)
       const json = await res.json() as any
       expect(json.name).toBe('MrBeast')
@@ -614,7 +614,7 @@ describe('Public Username Endpoints', () => {
         method: 'GET'
       })
 
-      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
       expect(res.status).toBe(200)
       const json = await res.json() as any
       expect(json.ok).toBe(true)
@@ -630,7 +630,7 @@ describe('Public Username Endpoints', () => {
         method: 'GET'
       })
 
-      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
       expect(res.status).toBe(400)
       const json = await res.json() as any
       expect(json.ok).toBe(false)
@@ -657,7 +657,7 @@ describe('Public Name Reservation', () => {
     return `cashuA${b64}`
   }
 
-  const mockEnv = { waitUntil: () => {}, passThroughOnException: () => {} }
+  const mockEnv = { waitUntil: () => {}, passThroughOnException: () => {}, props: {} }
 
   describe('POST /reserve - Reserve username with email', () => {
     it('should create a reservation for an available username', async () => {

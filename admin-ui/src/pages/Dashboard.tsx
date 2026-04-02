@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { searchUsernames } from '../api/client'
+import { searchUsernames, getAllTags } from '../api/client'
 import type { Username } from '../types'
 import StatusBadge from '../components/StatusBadge'
 import Pagination from '../components/Pagination'
@@ -18,12 +18,14 @@ export default function Dashboard() {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [tagFilter, setTagFilter] = useState<string>('')
+  const [availableTags, setAvailableTags] = useState<{ tag: string; count: number }[]>([])
 
   const performSearch = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const data = await searchUsernames(query, status || undefined, currentPage, 50)
+      const data = await searchUsernames(query, status || undefined, currentPage, 50, tagFilter || undefined)
       setResults(data.results)
       setTotalPages(data.pagination.total_pages)
       setTotal(data.pagination.total)
@@ -33,11 +35,20 @@ export default function Dashboard() {
     } finally {
       setLoading(false)
     }
-  }, [query, status, currentPage])
+  }, [query, status, currentPage, tagFilter])
 
   useEffect(() => {
     performSearch()
-  }, [query, status, currentPage, performSearch])
+  }, [query, status, currentPage, tagFilter, performSearch])
+
+  // Loads all distinct tags once at mount for the filter dropdown.
+  // This works as long as the tag vocabulary stays small and admin-curated (~20 values).
+  // If tags become free-form or proliferate beyond that, replace this dropdown with
+  // a search/autocomplete — the <select> model breaks before the query does.
+  // Counts shown per tag are stale after the initial load; that's acceptable here.
+  useEffect(() => {
+    getAllTags().then(data => setAvailableTags(data.tags || [])).catch(() => {})
+  }, [])
 
   const truncate = (str: string | null, len: number) => {
     if (!str) return '-'
@@ -51,7 +62,7 @@ export default function Dashboard() {
   const downloadSearchResultsCSV = () => {
     if (results.length === 0) return
 
-    const headers = ['Username', 'Pubkey', 'Email', 'Status', 'Created', 'Source', 'Created By']
+    const headers = ['Username', 'Pubkey', 'Email', 'Status', 'Created', 'Source', 'Created By', 'Tags']
     const rows = results.map((username: Username) => [
       username.name,
       username.pubkey || '',
@@ -59,7 +70,8 @@ export default function Dashboard() {
       username.status,
       formatDate(username.created_at),
       username.claim_source,
-      username.created_by || ''
+      username.created_by || '',
+      (username.tags || []).join(';')
     ])
 
     const csvContent = [
@@ -88,7 +100,7 @@ export default function Dashboard() {
       </div>
 
       <div className="bg-white shadow rounded-lg p-6">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div>
             <label htmlFor="search" className="block text-sm font-medium text-gray-700">
               Search Query
@@ -125,6 +137,28 @@ export default function Dashboard() {
               <option value="recovered">Recovered (Vine)</option>
               <option value="revoked">Revoked</option>
               <option value="burned">Burned</option>
+            </select>
+          </div>
+
+          <div>
+            <label htmlFor="tag" className="block text-sm font-medium text-gray-700">
+              Tag Filter
+            </label>
+            <select
+              id="tag"
+              value={tagFilter}
+              onChange={(e) => {
+                setTagFilter(e.target.value)
+                setCurrentPage(1)
+              }}
+              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2 border"
+            >
+              <option value="">All Tags</option>
+              {availableTags.map(t => (
+                <option key={t.tag} value={t.tag}>
+                  {t.tag} ({t.count})
+                </option>
+              ))}
             </select>
           </div>
         </div>
@@ -255,6 +289,9 @@ export default function Dashboard() {
                         Source
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Tags
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Created
                       </th>
                     </tr>
@@ -283,6 +320,15 @@ export default function Dashboard() {
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                           {username.claim_source}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          <div className="flex flex-wrap gap-1">
+                            {(username.tags || []).map((tag) => (
+                              <span key={tag} className="inline-flex px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">
+                                {tag}
+                              </span>
+                            ))}
+                          </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                           {formatDate(username.created_at)}

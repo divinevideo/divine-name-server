@@ -16,6 +16,8 @@ export type MockRecord = Partial<Username> & { name: string; username_canonical:
  * old duplicated mocks.
  */
 export function createFakeD1(records: MockRecord[]) {
+  const tags: { username_id: number; tag: string; created_at: number; created_by: string }[] = []
+
   return {
     prepare: (sql: string) => {
       let boundParams: any[] = []
@@ -117,6 +119,29 @@ export function createFakeD1(records: MockRecord[]) {
             },
 
             all: async () => {
+              // Tag queries
+              if (sql.includes('username_tags')) {
+                // SELECT tag FROM username_tags WHERE username_id = ?
+                if (sql.includes('WHERE username_id = ?') && !sql.includes('IN (')) {
+                  const uid = boundParams[0]
+                  return { results: tags.filter(t => t.username_id === uid).sort((a, b) => a.tag.localeCompare(b.tag)) }
+                }
+                // SELECT username_id, tag FROM username_tags WHERE username_id IN (...)
+                if (sql.includes('IN (')) {
+                  const ids = boundParams.filter(p => typeof p === 'number')
+                  return { results: tags.filter(t => ids.includes(t.username_id)).sort((a, b) => a.tag.localeCompare(b.tag)) }
+                }
+                // SELECT tag, COUNT(*) as count FROM username_tags GROUP BY tag
+                if (sql.includes('COUNT(*)') || sql.includes('GROUP BY')) {
+                  const counts = new Map<string, number>()
+                  for (const t of tags) {
+                    counts.set(t.tag, (counts.get(t.tag) || 0) + 1)
+                  }
+                  return { results: Array.from(counts.entries()).map(([tag, count]) => ({ tag, count })).sort((a, b) => a.tag.localeCompare(b.tag)) }
+                }
+                return { results: [] }
+              }
+
               // Reserved words list
               if (sql.includes('reserved_words')) {
                 return { results: [] }
@@ -131,6 +156,15 @@ export function createFakeD1(records: MockRecord[]) {
                 filtered = applyStatusFilter(filtered)
               }
 
+              // Tag filter via EXISTS subquery
+              if (sql.includes('username_tags') && sql.includes('EXISTS')) {
+                const tagParam = boundParams.find(p => typeof p === 'string' && !p.includes('%'))
+                if (tagParam) {
+                  const taggedIds = new Set(tags.filter(t => t.tag === tagParam).map(t => t.username_id))
+                  filtered = filtered.filter(u => u.id != null && taggedIds.has(u.id))
+                }
+              }
+
               const { limit, offset } = extractPagination()
 
               return {
@@ -140,7 +174,24 @@ export function createFakeD1(records: MockRecord[]) {
               }
             },
 
-            run: async () => ({ success: true, meta: { changes: 1 } }),
+            run: async () => {
+              // Tag INSERT
+              if (sql.includes('INSERT') && sql.includes('username_tags')) {
+                const [username_id, tag, created_at, created_by] = boundParams
+                if (!tags.some(t => t.username_id === username_id && t.tag === tag)) {
+                  tags.push({ username_id, tag, created_at, created_by })
+                }
+                return { success: true, meta: { changes: 1 } }
+              }
+              // Tag DELETE
+              if (sql.includes('DELETE') && sql.includes('username_tags')) {
+                const [username_id, tag] = boundParams
+                const idx = tags.findIndex(t => t.username_id === username_id && t.tag === tag)
+                if (idx >= 0) tags.splice(idx, 1)
+                return { success: true, meta: { changes: idx >= 0 ? 1 : 0 } }
+              }
+              return { success: true, meta: { changes: 1 } }
+            },
           }
         },
       }
