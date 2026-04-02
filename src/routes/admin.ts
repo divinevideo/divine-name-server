@@ -3,7 +3,7 @@
 
 import { Hono } from 'hono'
 import { bech32 } from '@scure/base'
-import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getAllActiveUsernames } from '../db/queries'
+import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getAllActiveUsernames, addTag, removeTag, getTagsForUsername, getTagsForUsernames, getAllTags } from '../db/queries'
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
 import { syncUsernameToFastly, deleteUsernameFromFastly, bulkSyncToFastly } from '../utils/fastly-sync'
 import { sendAssignmentNotificationEmail } from '../utils/email'
@@ -744,6 +744,43 @@ admin.post('/username/set-atproto', async (c) => {
     console.error('Set ATProto error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
   }
+})
+
+// --- Tags ---
+
+admin.post('/username/:name/tags', async (c) => {
+  const name = c.req.param('name')
+  const { tag } = await c.req.json<{ tag: string }>()
+  const createdBy = c.req.header('Cf-Access-Authenticated-User-Email') || 'unknown'
+
+  const username = await getUsernameByName(c.env.DB, name)
+  if (!username) return c.json({ ok: false, error: 'Username not found' }, 404)
+
+  try {
+    await addTag(c.env.DB, username.id, tag, createdBy)
+  } catch (e: any) {
+    return c.json({ ok: false, error: e.message }, 400)
+  }
+
+  const tags = await getTagsForUsername(c.env.DB, username.id)
+  return c.json({ ok: true, tags })
+})
+
+admin.delete('/username/:name/tags/:tag', async (c) => {
+  const name = c.req.param('name')
+  const tag = c.req.param('tag')
+
+  const username = await getUsernameByName(c.env.DB, name)
+  if (!username) return c.json({ ok: false, error: 'Username not found' }, 404)
+
+  await removeTag(c.env.DB, username.id, tag)
+  const tags = await getTagsForUsername(c.env.DB, username.id)
+  return c.json({ ok: true, tags })
+})
+
+admin.get('/tags', async (c) => {
+  const tags = await getAllTags(c.env.DB)
+  return c.json({ tags })
 })
 
 export default admin

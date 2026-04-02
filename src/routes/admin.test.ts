@@ -676,3 +676,103 @@ describe('Admin Hostname Auth Guard', () => {
     expect(res.status).toBe(200)
   })
 })
+
+describe('Admin Tag Endpoints', () => {
+  function createTestApp() {
+    const app = new Hono<{ Bindings: { DB: D1Database } }>()
+    app.route('/admin', admin)
+    return app
+  }
+
+  function createTagMockDB() {
+    return createFakeD1([
+      {
+        id: 1, name: 'kingbach', username_display: 'KingBach', username_canonical: 'kingbach',
+        pubkey: null, email: null, relays: null, status: 'reserved',
+        recyclable: 1, created_at: 1700000000, updated_at: 1700000000,
+        reserved_reason: 'Brand protection', admin_notes: null,
+      },
+      {
+        id: 2, name: 'lelepons', username_display: 'LelePons', username_canonical: 'lelepons',
+        pubkey: null, email: null, relays: null, status: 'reserved',
+        recyclable: 1, created_at: 1700000100, updated_at: 1700000100,
+        reserved_reason: 'Brand protection', admin_notes: null,
+      },
+    ])
+  }
+
+  it('POST /admin/username/:name/tags adds a tag', async () => {
+    const app = createTestApp()
+    const db = createTagMockDB()
+
+    const req = new Request('http://localhost/admin/username/kingbach/tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
+      body: JSON.stringify({ tag: 'vip' }),
+    })
+    const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.tags).toContain('vip')
+  })
+
+  it('DELETE /admin/username/:name/tags/:tag removes a tag', async () => {
+    const app = createTestApp()
+    const db = createTagMockDB()
+
+    // Add a tag first
+    await app.fetch(new Request('http://localhost/admin/username/kingbach/tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
+      body: JSON.stringify({ tag: 'vip' }),
+    }), { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+
+    // Then remove it
+    const res = await app.fetch(new Request('http://localhost/admin/username/kingbach/tags/vip', {
+      method: 'DELETE',
+      headers: { 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
+    }), { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.tags).not.toContain('vip')
+  })
+
+  it('GET /admin/tags returns all tags with counts', async () => {
+    const app = createTestApp()
+    const db = createTagMockDB()
+
+    // Add tags
+    await app.fetch(new Request('http://localhost/admin/username/kingbach/tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
+      body: JSON.stringify({ tag: 'vip' }),
+    }), { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+
+    await app.fetch(new Request('http://localhost/admin/username/lelepons/tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
+      body: JSON.stringify({ tag: 'vip' }),
+    }), { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+
+    const res = await app.fetch(new Request('http://localhost/admin/tags', {
+      method: 'GET',
+    }), { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.tags).toContainEqual({ tag: 'vip', count: 2 })
+  })
+
+  it('returns 404 for tags on nonexistent username', async () => {
+    const app = createTestApp()
+    const db = createTagMockDB()
+
+    const res = await app.fetch(new Request('http://localhost/admin/username/doesnotexist/tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
+      body: JSON.stringify({ tag: 'vip' }),
+    }), { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    expect(res.status).toBe(404)
+  })
+})
