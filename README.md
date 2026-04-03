@@ -2,6 +2,8 @@
 
 Cloudflare Worker that enables username-based Nostr identities at Divine.Video with NIP-05 verification and subdomain profile routing.
 
+This is part of the public edge, not the ArgoCD-managed GKE stack. Production ATProto rollout depends on this worker being deployed alongside `divine-router`, `pds.divine.video`, and `entryway.divine.video`.
+
 ## Features
 
 - **Username Claiming**: Users claim usernames via NIP-98 signed HTTP requests proving key ownership
@@ -76,6 +78,8 @@ npx wrangler d1 migrations apply divine-name-server-db --remote
 # Deploy worker to Cloudflare
 npx wrangler deploy
 ```
+
+Deploy this after the GKE services are healthy, because it publishes the public read model that `divine-router` and ATProto handle discovery consume.
 
 ## API Endpoints
 
