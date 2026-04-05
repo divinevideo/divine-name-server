@@ -6,7 +6,8 @@ import type {
   RevokeResponse,
   ReservedWord,
   BulkReserveResponse,
-  ApiResponse
+  ApiResponse,
+  TagDetail
 } from '../types'
 
 const API_BASE = '/api/admin'
@@ -200,7 +201,7 @@ export async function deleteReservedWord(word: string): Promise<ApiResponse> {
 export async function addTagToUsername(
   name: string,
   tag: string
-): Promise<ApiResponse & { tags: string[] }> {
+): Promise<ApiResponse & { tags: string[]; tag_details: TagDetail[] }> {
   const response = await fetch(`${API_BASE}/username/${encodeURIComponent(name)}/tags`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -217,7 +218,7 @@ export async function addTagToUsername(
 export async function removeTagFromUsername(
   name: string,
   tag: string
-): Promise<ApiResponse & { tags: string[] }> {
+): Promise<ApiResponse & { tags: string[]; tag_details: TagDetail[] }> {
   const response = await fetch(
     `${API_BASE}/username/${encodeURIComponent(name)}/tags/${encodeURIComponent(tag)}`,
     { method: 'DELETE' }
