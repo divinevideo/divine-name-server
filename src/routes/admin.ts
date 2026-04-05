@@ -3,7 +3,7 @@
 
 import { Hono } from 'hono'
 import { bech32 } from '@scure/base'
-import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getAllActiveUsernames, addTag, removeTag, getTagsForUsername, getTagsForUsernames, getAllTags } from '../db/queries'
+import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getAllActiveUsernames, addTag, removeTag, getTagsForUsername, getTagDetailsForUsername, getTagsForUsernames, getAllTags } from '../db/queries'
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
 import { syncUsernameToFastly, deleteUsernameFromFastly, bulkSyncToFastly } from '../utils/fastly-sync'
 import { sendAssignmentNotificationEmail } from '../utils/email'
@@ -141,7 +141,8 @@ admin.get('/username/:name', async (c) => {
     }
 
     const tags = await getTagsForUsername(c.env.DB, username.id)
-    return c.json({ ok: true, username: { ...username, tags } })
+    const tagDetails = await getTagDetailsForUsername(c.env.DB, username.id)
+    return c.json({ ok: true, username: { ...username, tags, tag_details: tagDetails } })
   } catch (error) {
     console.error('Username lookup error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
@@ -787,7 +788,8 @@ admin.post('/username/:name/tags', async (c) => {
   }
 
   const tags = await getTagsForUsername(c.env.DB, username.id)
-  return c.json({ ok: true, tags })
+  const tagDetails = await getTagDetailsForUsername(c.env.DB, username.id)
+  return c.json({ ok: true, tags, tag_details: tagDetails })
 })
 
 admin.delete('/username/:name/tags/:tag', async (c) => {
@@ -799,7 +801,8 @@ admin.delete('/username/:name/tags/:tag', async (c) => {
 
   await removeTag(c.env.DB, username.id, tag)
   const tags = await getTagsForUsername(c.env.DB, username.id)
-  return c.json({ ok: true, tags })
+  const tagDetails = await getTagDetailsForUsername(c.env.DB, username.id)
+  return c.json({ ok: true, tags, tag_details: tagDetails })
 })
 
 admin.get('/tags', async (c) => {
