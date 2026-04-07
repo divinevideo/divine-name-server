@@ -1,9 +1,11 @@
 // ABOUTME: Main layout component providing navigation bar and routing container for admin UI
 // ABOUTME: Uses React Router Outlet to render child pages (Search, Reserve, Assign, Revoke, Reserved Words)
 import { Link, Outlet, useLocation } from 'react-router-dom'
+import { useAuth } from '../context/AuthContext'
 
 export default function Layout() {
   const location = useLocation()
+  const { email, logout } = useAuth()
 
   const isActive = (path: string) => location.pathname === path
 
@@ -119,7 +121,7 @@ export default function Layout() {
                 Name Server Admin
               </h1>
             </div>
-            <div className="flex space-x-4">
+            <div className="flex items-center space-x-4">
               <Link to="/" className={navLinkClass('/')}>
                 Search
               </Link>
@@ -135,6 +137,17 @@ export default function Layout() {
               <Link to="/reserved-words" className={navLinkClass('/reserved-words')}>
                 Reserved Words
               </Link>
+              {email && (
+                <span className="text-blue-200 text-xs border-l border-blue-400 pl-4 ml-2">
+                  {email}
+                </span>
+              )}
+              <button
+                onClick={logout}
+                className="text-blue-200 hover:text-white text-xs"
+              >
+                Logout
+              </button>
             </div>
           </div>
         </div>
