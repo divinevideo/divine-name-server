@@ -6,7 +6,7 @@ import username from './routes/username'
 import nip05 from './routes/nip05'
 import subdomain from './routes/subdomain'
 import admin from './routes/admin'
-import authRoutes from './routes/auth'
+// Auth routes are mounted inside admin.ts (same Hono app, exempt from auth middleware)
 import publicRoutes from './routes/public'
 import internalAtproto from './routes/internal-atproto'
 import { getAllActiveUsernames, expireStaleReservations } from './db/queries'
@@ -55,11 +55,10 @@ app.use('/', async (c, next) => {
 // Username API
 app.route('/api/username', username)
 
-// Auth API (Keycast OAuth, must be before /api/admin to match first)
-app.route('/api/admin/auth', authRoutes)
-
 // Admin API (protected by Cloudflare Access or Keycast session)
+// Auth routes are mounted inside admin.ts, exempted from auth check
 app.route('/api/admin', admin)
+
 
 // Internal service API (service-authenticated bearer token)
 app.route('/api/internal', internalAtproto)

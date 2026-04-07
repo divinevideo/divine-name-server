@@ -9,6 +9,7 @@ import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, sea
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
 import { syncUsernameToFastly, deleteUsernameFromFastly, bulkSyncToFastly } from '../utils/fastly-sync'
 import { sendAssignmentNotificationEmail } from '../utils/email'
+import authRoutes from './auth'
 
 /** Convert a 64-char hex pubkey to npub bech32 format */
 function hexToNpub(hex: string): string {
@@ -47,19 +48,28 @@ type Bindings = {
 
 const admin = new Hono<{ Bindings: Bindings }>()
 
+// Auth routes mounted first -- they handle their own hostname guard
+// and must be accessible without an existing session (chicken-and-egg).
+admin.route('/auth', authRoutes)
+
 // Defense-in-depth: verify requests are authenticated.
 // Accepts CF Access JWT (edge-injected) or Keycast OAuth session cookie.
 // The worker is reachable via names.divine.video (no Access policy),
 // so the hostname guard blocks that bypass regardless of auth method.
 admin.use('*', async (c, next) => {
   const url = new URL(c.req.url)
-
   // Only allow admin API on the admin subdomain (and localhost for dev)
   const isAdminHost = url.hostname === 'names.admin.divine.video'
   const isLocalDev = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
 
   if (!isAdminHost && !isLocalDev) {
     return c.json({ ok: false, error: 'Unauthorized' }, 403)
+  }
+
+  // Auth routes handle their own security (hostname guard only).
+  // Skip the auth check so unauthenticated users can start the OAuth flow.
+  if (c.req.path.startsWith('/api/admin/auth/')) {
+    return next()
   }
 
   // Dev bypass
@@ -71,7 +81,7 @@ admin.use('*', async (c, next) => {
   // Path 1: CF Access JWT (existing, edge-injected)
   const cfJwt = c.req.header('Cf-Access-Jwt-Assertion')
   if (cfJwt) {
-    const email = (c.get('adminEmail' as never) as string) || 'unknown'
+    const email = c.req.header('Cf-Access-Authenticated-User-Email') || 'unknown'
     c.set('adminEmail' as never, email as never)
     return next()
   }
