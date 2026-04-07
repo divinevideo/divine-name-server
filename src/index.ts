@@ -59,7 +59,6 @@ app.route('/api/username', username)
 // Auth routes are mounted inside admin.ts, exempted from auth check
 app.route('/api/admin', admin)
 
-
 // Internal service API (service-authenticated bearer token)
 app.route('/api/internal', internalAtproto)
 

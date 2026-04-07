@@ -33,9 +33,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       })
       .catch(() => {
-        // Auth check failed -- might be CF Access handling it, try loading normally
-        setState('authenticated')
-        setEmail('')
+        setState('unauthenticated')
       })
   }, [])
 
