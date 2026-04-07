@@ -21,6 +21,9 @@ routes = [
 [vars]
 KEYCAST_URL = "https://login.divine.video"
 KEYCAST_CLIENT_ID = "divine-name-server"
+# Comma-separated hex pubkeys authorized for Keycast OAuth admin access.
+# CF Access users are authorized by the Access policy; this only applies to Keycast sessions.
+ADMIN_PUBKEYS = "81549bc0b5153b4b970fe4a3892ad185698b8b8b26ec69321a527d0644cd2898"
 # FASTLY_STORE_ID = "your-store-id" # Set as secret in production
 # ALLOWED_MINTS = "https://8333.space:3338,https://mint.minibits.cash/Bitcoin"
 # NAME_PRICE_SATS = "1000"

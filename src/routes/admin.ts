@@ -39,11 +39,18 @@ function hexToNpub(hex: string): string {
 type Bindings = {
   DB: D1Database
   SESSION_KV?: KVNamespace
+  ADMIN_PUBKEYS?: string
   FASTLY_API_TOKEN?: string
   FASTLY_STORE_ID?: string
   SENDGRID_API_KEY?: string
   KEYCAST_URL?: string
   KEYCAST_CLIENT_ID?: string
+}
+
+/** Check if a pubkey is in the comma-separated ADMIN_PUBKEYS allowlist. */
+function isAdminPubkey(pubkey: string | null, adminPubkeys: string | undefined): boolean {
+  if (!pubkey || !adminPubkeys) return false
+  return adminPubkeys.split(',').map(p => p.trim().toLowerCase()).includes(pubkey.toLowerCase())
 }
 
 const admin = new Hono<{ Bindings: Bindings }>()
@@ -91,6 +98,11 @@ admin.use('*', async (c, next) => {
   if (sessionId && c.env.SESSION_KV) {
     const session = await getSession(c.env.SESSION_KV, sessionId)
     if (session) {
+      // Authorization: check pubkey against admin allowlist
+      // Pattern from divine-invite-darshan (Daniel's admin_pubkeys config)
+      if (!isAdminPubkey(session.pubkey, c.env.ADMIN_PUBKEYS)) {
+        return c.json({ ok: false, error: 'Forbidden: not an admin' }, 403)
+      }
       c.set('adminEmail' as never, session.email as never)
       return next()
     }

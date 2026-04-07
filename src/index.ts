@@ -16,6 +16,7 @@ type Bindings = {
   DB: D1Database
   ASSETS: Fetcher
   SESSION_KV?: KVNamespace
+  ADMIN_PUBKEYS?: string
   FASTLY_API_TOKEN?: string
   FASTLY_STORE_ID?: string
   ATPROTO_SYNC_TOKEN?: string

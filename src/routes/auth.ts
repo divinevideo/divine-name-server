@@ -80,7 +80,7 @@ auth.get('/callback', async (c) => {
   }
 
   try {
-    const { sessionId } = await exchangeCodeForToken(
+    const { sessionId, session } = await exchangeCodeForToken(
       c.env.SESSION_KV,
       c.env.KEYCAST_URL,
       c.env.KEYCAST_CLIENT_ID,
@@ -88,12 +88,15 @@ auth.get('/callback', async (c) => {
       state,
     )
 
+    // Cookie maxAge matches KV session TTL (both derived from token expiry).
+    // Cap at 24 hours so sessions don't outlive a workday.
+    const maxAge = Math.min(session.expires_at - Date.now(), 86400 * 1000) / 1000
     setCookie(c, '__session', sessionId, {
       path: '/',
       httpOnly: true,
       secure: true,
       sameSite: 'Lax',
-      maxAge: 86400, // 24 hours
+      maxAge: Math.floor(maxAge),
     })
 
     return c.redirect('/?auth_success=true')
