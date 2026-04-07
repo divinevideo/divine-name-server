@@ -6,6 +6,7 @@ import username from './routes/username'
 import nip05 from './routes/nip05'
 import subdomain from './routes/subdomain'
 import admin from './routes/admin'
+import authRoutes from './routes/auth'
 import publicRoutes from './routes/public'
 import internalAtproto from './routes/internal-atproto'
 import { getAllActiveUsernames, expireStaleReservations } from './db/queries'
@@ -14,9 +15,12 @@ import { bulkSyncToFastly, parseRelayHints } from './utils/fastly-sync'
 type Bindings = {
   DB: D1Database
   ASSETS: Fetcher
+  SESSION_KV?: KVNamespace
   FASTLY_API_TOKEN?: string
   FASTLY_STORE_ID?: string
   ATPROTO_SYNC_TOKEN?: string
+  KEYCAST_URL?: string
+  KEYCAST_CLIENT_ID?: string
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
@@ -51,7 +55,10 @@ app.use('/', async (c, next) => {
 // Username API
 app.route('/api/username', username)
 
-// Admin API (protected by Cloudflare Access)
+// Auth API (Keycast OAuth, must be before /api/admin to match first)
+app.route('/api/admin/auth', authRoutes)
+
+// Admin API (protected by Cloudflare Access or Keycast session)
 app.route('/api/admin', admin)
 
 // Internal service API (service-authenticated bearer token)

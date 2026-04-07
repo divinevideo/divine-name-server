@@ -658,13 +658,13 @@ describe('Admin Hostname Auth Guard', () => {
     })
   })
 
-  it('should block admin API requests from names.admin.divine.video without CF Access JWT', async () => {
+  it('should block admin API requests from names.admin.divine.video without auth', async () => {
     const app = createTestApp()
 
     const req = new Request('https://names.admin.divine.video/api/admin/usernames/search?q=test')
     const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(401)
   })
 
   it('should allow admin API requests from localhost for local dev', async () => {
