@@ -2,7 +2,7 @@
 // ABOUTME: Shows all metadata and provides actions like assign, revoke, burn
 import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { getUsername, assignUsername, revokeUsername, addTagToUsername, removeTagFromUsername, getAllTags } from '../api/client'
+import { getUsername, assignUsername, revokeUsername, addTagToUsername, removeTagFromUsername, getAllTags, updateAdminNotes } from '../api/client'
 import type { Username, TagDetail } from '../types'
 import StatusBadge from '../components/StatusBadge'
 
@@ -31,6 +31,12 @@ export default function UsernameDetail() {
   const [allKnownTags, setAllKnownTags] = useState<{ tag: string; count: number }[]>([])
   const tagContainerRef = useRef<HTMLDivElement>(null)
 
+  // Notes states
+  const [draftNotes, setDraftNotes] = useState('')
+  const [notesSaving, setNotesSaving] = useState(false)
+  const [notesError, setNotesError] = useState<string | null>(null)
+  const [notesSuccess, setNotesSuccess] = useState<string | null>(null)
+
   useEffect(() => {
     loadUsername()
     getAllTags().then(data => setAllKnownTags(data.tags || [])).catch(() => {})
@@ -57,6 +63,7 @@ export default function UsernameDetail() {
         setUsername(result.username)
         setTags(result.username.tags || [])
         setTagDetails(result.username.tag_details || [])
+        setDraftNotes(result.username.admin_notes || '')
       } else {
         setError(result.error || 'Username not found')
       }
@@ -152,6 +159,30 @@ export default function UsernameDetail() {
     const date = new Date(detail.created_at * 1000).toLocaleDateString()
     const who = detail.created_by || 'unknown'
     return `Added by ${who} on ${date}`
+  }
+
+  const handleSaveNotes = async () => {
+    if (!name) return
+    setNotesSaving(true)
+    setNotesError(null)
+    setNotesSuccess(null)
+    try {
+      const result = await updateAdminNotes(name, draftNotes.trim() || null)
+      if (result.ok) {
+        const savedNotes = result.admin_notes || ''
+        setDraftNotes(savedNotes)
+        setNotesSuccess('Notes saved.')
+        if (username) {
+          setUsername({ ...username, admin_notes: result.admin_notes })
+        }
+      } else {
+        setNotesError(result.error || 'Save failed')
+      }
+    } catch (err) {
+      setNotesError(err instanceof Error ? err.message : 'Save failed')
+    } finally {
+      setNotesSaving(false)
+    }
   }
 
   const filteredSuggestions = allKnownTags
@@ -333,13 +364,6 @@ export default function UsernameDetail() {
             </div>
           )}
 
-          {username.admin_notes && (
-            <div>
-              <p className="text-sm font-medium text-gray-500">Admin Notes</p>
-              <p className="mt-1 text-sm text-gray-900">{username.admin_notes}</p>
-            </div>
-          )}
-
           <div>
             <p className="text-sm font-medium text-gray-500">Source</p>
             <p className="mt-1 text-sm text-gray-900">{username.claim_source}</p>
@@ -351,6 +375,41 @@ export default function UsernameDetail() {
               <p className="mt-1 text-sm text-gray-900">{username.created_by}</p>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Internal Notes Card */}
+      <div className="bg-white shadow rounded-lg overflow-hidden mb-6">
+        <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
+          <h3 className="text-lg font-medium text-gray-900">Internal Notes</h3>
+        </div>
+        <div className="px-6 py-4 space-y-3">
+          <textarea
+            rows={4}
+            value={draftNotes}
+            onChange={(e) => {
+              setDraftNotes(e.target.value)
+              setNotesSuccess(null)
+            }}
+            placeholder="Add internal context for trust and safety, support, or outreach..."
+            className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
+          />
+          {notesError && (
+            <p className="text-sm text-red-600">{notesError}</p>
+          )}
+          {notesSuccess && (
+            <p className="text-sm text-green-600">{notesSuccess}</p>
+          )}
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={handleSaveNotes}
+              disabled={notesSaving}
+              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+            >
+              {notesSaving ? 'Saving...' : 'Save Notes'}
+            </button>
+          </div>
         </div>
       </div>
 

@@ -108,6 +108,18 @@ describe('Admin Search Endpoint', () => {
     expect(json.error).toContain('Invalid status parameter')
   })
 
+  it('should return 400 if sort parameter is invalid', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/admin/usernames/search?q=test&sort=weird')
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(400)
+    const json = await res.json() as any
+    expect(json.ok).toBe(false)
+    expect(json.error).toContain('Invalid sort parameter')
+  })
+
   it('should return 400 if page is negative', async () => {
     const app = createTestApp()
 
@@ -947,5 +959,66 @@ describe('Admin Tag Endpoints', () => {
     const json = await res.json() as any
     expect(json.ok).toBe(false)
     expect(json.error).toContain('50')
+  })
+})
+
+describe('Admin Stats Endpoint', () => {
+  function createTestApp() {
+    const app = new Hono<{ Bindings: { DB: D1Database } }>()
+    app.route('/admin', admin)
+    return app
+  }
+
+  it('should return stats', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/admin/usernames/stats')
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.totals).toBeDefined()
+    expect(json.totals.pending_confirmation).toBeDefined()
+    expect(json.metadata).toBeDefined()
+    expect(json.activity).toBeDefined()
+    expect(json.top_tags).toBeDefined()
+  })
+})
+
+describe('Admin Notes Endpoint', () => {
+  function createTestApp() {
+    const app = new Hono<{ Bindings: { DB: D1Database } }>()
+    app.route('/admin', admin)
+    return app
+  }
+
+  it('should update admin notes for existing username', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/admin/username/testuser/notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ admin_notes: 'VIP creator account' }),
+    })
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.admin_notes).toBe('VIP creator account')
+  })
+
+  it('should return 404 for non-existent username', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/admin/username/doesnotexist/notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ admin_notes: 'test' }),
+    })
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(404)
   })
 })

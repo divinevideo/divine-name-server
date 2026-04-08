@@ -1,5 +1,6 @@
 import type {
   SearchResult,
+  SearchSort,
   UsernameLookupResponse,
   ReserveResponse,
   AssignResponse,
@@ -7,7 +8,8 @@ import type {
   ReservedWord,
   BulkReserveResponse,
   ApiResponse,
-  TagDetail
+  TagDetail,
+  UsernameStatsResponse
 } from '../types'
 
 const API_BASE = '/api/admin'
@@ -17,7 +19,8 @@ export async function searchUsernames(
   status?: string,
   page = 1,
   limit = 50,
-  tag?: string
+  tag?: string,
+  sort?: SearchSort
 ): Promise<SearchResult> {
   const params = new URLSearchParams({
     q: query,
@@ -31,6 +34,10 @@ export async function searchUsernames(
 
   if (tag) {
     params.set('tag', tag)
+  }
+
+  if (sort) {
+    params.set('sort', sort)
   }
 
   const response = await fetch(`${API_BASE}/usernames/search?${params}`)
@@ -236,6 +243,37 @@ export async function getAllTags(): Promise<{ tags: { tag: string; count: number
 
   if (!response.ok) {
     throw new Error(`Failed to fetch tags: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+// --- Stats ---
+
+export async function getUsernameStats(): Promise<UsernameStatsResponse> {
+  const response = await fetch(`${API_BASE}/usernames/stats`)
+
+  if (!response.ok) {
+    throw new Error(`Stats failed: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+// --- Notes ---
+
+export async function updateAdminNotes(
+  name: string,
+  adminNotes: string | null
+): Promise<ApiResponse & { admin_notes: string | null }> {
+  const response = await fetch(`${API_BASE}/username/${encodeURIComponent(name)}/notes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ admin_notes: adminNotes }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Update notes failed: ${response.statusText}`)
   }
 
   return response.json()

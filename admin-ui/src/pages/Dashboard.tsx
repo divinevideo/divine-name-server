@@ -3,16 +3,25 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { searchUsernames, getAllTags } from '../api/client'
-import type { Username } from '../types'
+import { searchUsernames, getAllTags, getUsernameStats } from '../api/client'
+import type { SearchSort, Username, UsernameStats } from '../types'
 import StatusBadge from '../components/StatusBadge'
 import Pagination from '../components/Pagination'
+
+const SORT_OPTIONS: Array<{ value: SearchSort; label: string }> = [
+  { value: 'relevance', label: 'Best Match' },
+  { value: 'updated', label: 'Recently Updated' },
+  { value: 'newest', label: 'Newest' },
+  { value: 'oldest', label: 'Oldest' },
+]
 
 export default function Dashboard() {
   const navigate = useNavigate()
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState<string>('')
+  const [sort, setSort] = useState<SearchSort>('relevance')
   const [results, setResults] = useState<Username[]>([])
+  const [stats, setStats] = useState<UsernameStats | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(0)
   const [total, setTotal] = useState(0)
@@ -25,7 +34,7 @@ export default function Dashboard() {
     setLoading(true)
     setError(null)
     try {
-      const data = await searchUsernames(query, status || undefined, currentPage, 50, tagFilter || undefined)
+      const data = await searchUsernames(query, status || undefined, currentPage, 50, tagFilter || undefined, sort)
       setResults(data.results)
       setTotalPages(data.pagination.total_pages)
       setTotal(data.pagination.total)
@@ -35,11 +44,15 @@ export default function Dashboard() {
     } finally {
       setLoading(false)
     }
-  }, [query, status, currentPage, tagFilter])
+  }, [query, status, currentPage, tagFilter, sort])
 
   useEffect(() => {
     performSearch()
-  }, [query, status, currentPage, tagFilter, performSearch])
+  }, [query, status, currentPage, tagFilter, sort, performSearch])
+
+  useEffect(() => {
+    getUsernameStats().then(data => setStats(data)).catch(() => {})
+  }, [])
 
   // Loads all distinct tags once at mount for the filter dropdown.
   // This works as long as the tag vocabulary stays small and admin-curated (~20 values).
@@ -95,12 +108,33 @@ export default function Dashboard() {
       <div>
         <h2 className="text-2xl font-bold text-gray-900">Search Usernames</h2>
         <p className="mt-1 text-sm text-gray-600">
-          Search by username, pubkey, or email
+          Search by username, pubkey, email, tags, or internal notes
         </p>
       </div>
 
+      {stats && (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {[
+            { label: 'All Names', value: stats.totals.all, tone: 'bg-slate-50 border-slate-200 text-slate-900' },
+            { label: 'Active', value: stats.totals.active, tone: 'bg-green-50 border-green-200 text-green-900' },
+            { label: 'Reserved', value: stats.totals.reserved, tone: 'bg-yellow-50 border-yellow-200 text-yellow-900' },
+            { label: 'Pending Confirm.', value: stats.totals.pending_confirmation, tone: 'bg-cyan-50 border-cyan-200 text-cyan-900' },
+            { label: 'With Notes', value: stats.metadata.with_notes, tone: 'bg-blue-50 border-blue-200 text-blue-900' },
+            { label: 'With Tags', value: stats.metadata.with_tags, tone: 'bg-indigo-50 border-indigo-200 text-indigo-900' },
+            { label: 'Untagged', value: stats.metadata.untagged, tone: 'bg-orange-50 border-orange-200 text-orange-900' },
+            { label: 'VIP', value: stats.metadata.vip, tone: 'bg-purple-50 border-purple-200 text-purple-900' },
+            { label: 'Updated 30d', value: stats.activity.updated_30d, tone: 'bg-emerald-50 border-emerald-200 text-emerald-900' },
+          ].map((card) => (
+            <div key={card.label} className={`rounded-lg border p-4 ${card.tone}`}>
+              <p className="text-xs font-semibold uppercase tracking-wider">{card.label}</p>
+              <p className="mt-2 text-2xl font-bold">{card.value.toLocaleString()}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="bg-white shadow rounded-lg p-6">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
           <div>
             <label htmlFor="search" className="block text-sm font-medium text-gray-700">
               Search Query
@@ -158,6 +192,25 @@ export default function Dashboard() {
                 <option key={t.tag} value={t.tag}>
                   {t.tag} ({t.count})
                 </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label htmlFor="sort" className="block text-sm font-medium text-gray-700">
+              Sort
+            </label>
+            <select
+              id="sort"
+              value={sort}
+              onChange={(e) => {
+                setSort(e.target.value as SearchSort)
+                setCurrentPage(1)
+              }}
+              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2 border"
+            >
+              {SORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
               ))}
             </select>
           </div>

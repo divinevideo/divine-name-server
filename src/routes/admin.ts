@@ -5,7 +5,7 @@ import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
 import { bech32 } from '@scure/base'
 import { getSession } from '../auth/keycast-oauth'
-import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getAllActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags } from '../db/queries'
+import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getAllActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags, getUsernameStats, updateAdminNotes, type SearchSort } from '../db/queries'
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
 import { syncUsernameToFastly, deleteUsernameFromFastly, bulkSyncToFastly } from '../utils/fastly-sync'
 import { sendAssignmentNotificationEmail } from '../utils/email'
@@ -119,6 +119,7 @@ admin.get('/usernames/search', async (c) => {
   try {
     const query = c.req.query('q')
     const status = c.req.query('status') as 'active' | 'reserved' | 'revoked' | 'burned' | 'recovered' | undefined
+    const sort = c.req.query('sort') as SearchSort | undefined
     const pageStr = c.req.query('page') || '1'
     const limitStr = c.req.query('limit') || '50'
 
@@ -135,6 +136,12 @@ admin.get('/usernames/search', async (c) => {
     const validStatuses = ['active', 'reserved', 'revoked', 'burned', 'recovered']
     if (status && !validStatuses.includes(status)) {
       return c.json({ ok: false, error: 'Invalid status parameter' }, 400)
+    }
+
+    // Validate sort parameter
+    const validSorts: SearchSort[] = ['relevance', 'newest', 'oldest', 'updated']
+    if (sort && !validSorts.includes(sort)) {
+      return c.json({ ok: false, error: 'Invalid sort parameter' }, 400)
     }
 
     // Validate page parameter
@@ -154,7 +161,7 @@ admin.get('/usernames/search', async (c) => {
 
     const tagRaw = c.req.query('tag')
     const tag = tagRaw && tagRaw.length <= 50 ? tagRaw : undefined
-    const result = await searchUsernames(c.env.DB, { query, status, tag, page, limit: cappedLimit })
+    const result = await searchUsernames(c.env.DB, { query, status, tag, sort, page, limit: cappedLimit })
 
     // Batch-load tags for result set
     const ids = result.results.map((r: any) => r.id).filter(Boolean)
@@ -171,6 +178,16 @@ admin.get('/usernames/search', async (c) => {
     })
   } catch (error) {
     console.error('Search error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.get('/usernames/stats', async (c) => {
+  try {
+    const stats = await getUsernameStats(c.env.DB)
+    return c.json({ ok: true, ...stats })
+  } catch (error) {
+    console.error('Username stats error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
   }
 })
@@ -192,6 +209,29 @@ admin.get('/username/:name', async (c) => {
     return c.json({ ok: true, username: { ...username, tags, tag_details: tagDetails } })
   } catch (error) {
     console.error('Username lookup error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.post('/username/:name/notes', async (c) => {
+  try {
+    const name = c.req.param('name')
+    if (!name) {
+      return c.json({ ok: false, error: 'Name parameter is required' }, 400)
+    }
+
+    const body = await c.req.json<{ admin_notes?: string | null }>()
+    const adminNotes = body.admin_notes !== undefined ? body.admin_notes : null
+    const trimmed = typeof adminNotes === 'string' && adminNotes.trim() ? adminNotes.trim() : null
+
+    const updated = await updateAdminNotes(c.env.DB, name, trimmed)
+    if (!updated) {
+      return c.json({ ok: false, error: 'Username not found' }, 404)
+    }
+
+    return c.json({ ok: true, admin_notes: trimmed })
+  } catch (error) {
+    console.error('Update notes error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
   }
 })

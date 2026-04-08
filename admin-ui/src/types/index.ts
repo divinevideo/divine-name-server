@@ -1,4 +1,5 @@
 export type ClaimSource = 'self-service' | 'admin' | 'bulk-upload' | 'vine-import' | 'public-reservation' | 'unknown'
+export type SearchSort = 'relevance' | 'newest' | 'oldest' | 'updated'
 
 export interface TagDetail {
   tag: string
@@ -85,3 +86,29 @@ export interface BulkReserveResponse extends ApiResponse {
   failed?: number
   results?: BulkReserveResult[]
 }
+
+export interface UsernameStats {
+  totals: {
+    all: number
+    active: number
+    reserved: number
+    revoked: number
+    burned: number
+    pending_confirmation: number
+  }
+  metadata: {
+    with_notes: number
+    with_tags: number
+    untagged: number
+    vip: number
+  }
+  activity: {
+    claimed_7d: number
+    claimed_30d: number
+    updated_7d: number
+    updated_30d: number
+  }
+  top_tags: Array<{ tag: string; count: number }>
+}
+
+export interface UsernameStatsResponse extends ApiResponse, UsernameStats {}
