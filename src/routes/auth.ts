@@ -111,6 +111,14 @@ auth.get('/callback', async (c) => {
  * Check current session status.
  */
 auth.get('/status', async (c) => {
+  // Path 1: CF Access (edge-injected headers)
+  const cfJwt = c.req.header('Cf-Access-Jwt-Assertion')
+  if (cfJwt) {
+    const email = c.req.header('Cf-Access-Authenticated-User-Email') || 'unknown'
+    return c.json({ authenticated: true, email, pubkey: null, method: 'cf-access' })
+  }
+
+  // Path 2: Keycast session cookie
   if (!c.env.SESSION_KV) {
     return c.json({ authenticated: false })
   }
@@ -129,6 +137,7 @@ auth.get('/status', async (c) => {
     authenticated: true,
     email: session.email,
     pubkey: session.pubkey,
+    method: 'keycast',
   })
 })
 

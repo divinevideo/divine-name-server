@@ -8,9 +8,7 @@ const OAUTH_STATE_TTL = 300 // 5 minutes
 export interface OAuthSession {
   email: string
   pubkey: string | null
-  access_token: string
   expires_at: number
-  refresh_token: string | null
 }
 
 /**
@@ -123,9 +121,7 @@ export async function exchangeCodeForToken(
   const session: OAuthSession = {
     email,
     pubkey,
-    access_token: tokenData.access_token || '',
     expires_at: Date.now() + tokenData.expires_in * 1000,
-    refresh_token: tokenData.refresh_token || null,
   }
 
   // Store session keyed by random ID
