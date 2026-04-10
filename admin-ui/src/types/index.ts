@@ -1,5 +1,11 @@
 export type ClaimSource = 'self-service' | 'admin' | 'bulk-upload' | 'vine-import' | 'public-reservation' | 'unknown'
 
+export interface TagDetail {
+  tag: string
+  created_at: number
+  created_by: string | null
+}
+
 export interface Username {
   id: number
   name: string
@@ -17,6 +23,7 @@ export interface Username {
   claim_source: ClaimSource
   created_by: string | null
   tags?: string[]
+  tag_details?: TagDetail[]
 }
 
 export interface SearchResult {

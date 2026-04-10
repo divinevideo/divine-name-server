@@ -2,7 +2,7 @@
 // ABOUTME: Validates search functionality with fake D1 database
 
 import { describe, it, expect } from 'vitest'
-import { searchUsernames, claimUsername, createReservation, reserveUsername, addTag, removeTag, getTagsForUsername, getTagsForUsernames, getAllTags, type SearchParams } from './queries'
+import { searchUsernames, claimUsername, createReservation, reserveUsername, addTag, removeTag, getTagsForUsername, getTagDetailsForUsername, getTagsForUsernames, getAllTags, type SearchParams } from './queries'
 import { createFakeD1, type MockRecord } from './test-helpers'
 
 const mockRecords: MockRecord[] = [
@@ -323,6 +323,23 @@ describe('username tags', () => {
     ])
     await expect(addTag(db, 1, '', 'matthew@divine.video')).rejects.toThrow()
     await expect(addTag(db, 1, '   ', 'matthew@divine.video')).rejects.toThrow()
+  })
+
+  it('returns tag details with created_by and created_at', async () => {
+    const db = createFakeD1([
+      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+    ])
+    await addTag(db, 1, 'vip', 'matthew@divine.video')
+    await addTag(db, 1, 'vine-legacy', 'liz@divine.video')
+    const details = await getTagDetailsForUsername(db, 1)
+    expect(details).toHaveLength(2)
+    const vip = details.find(d => d.tag === 'vip')
+    expect(vip).toBeDefined()
+    expect(vip!.created_by).toBe('matthew@divine.video')
+    expect(typeof vip!.created_at).toBe('number')
+    const legacy = details.find(d => d.tag === 'vine-legacy')
+    expect(legacy).toBeDefined()
+    expect(legacy!.created_by).toBe('liz@divine.video')
   })
 
   it('batch loads tags for multiple usernames', async () => {

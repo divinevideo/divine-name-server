@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { getUsername, assignUsername, revokeUsername, addTagToUsername, removeTagFromUsername, getAllTags } from '../api/client'
-import type { Username } from '../types'
+import type { Username, TagDetail } from '../types'
 import StatusBadge from '../components/StatusBadge'
 
 export default function UsernameDetail() {
@@ -25,6 +25,7 @@ export default function UsernameDetail() {
 
   // Tag states
   const [tags, setTags] = useState<string[]>([])
+  const [tagDetails, setTagDetails] = useState<TagDetail[]>([])
   const [tagInput, setTagInput] = useState('')
   const [showSuggestions, setShowSuggestions] = useState(false)
   const [allKnownTags, setAllKnownTags] = useState<{ tag: string; count: number }[]>([])
@@ -55,6 +56,7 @@ export default function UsernameDetail() {
       if (result.ok && result.username) {
         setUsername(result.username)
         setTags(result.username.tags || [])
+        setTagDetails(result.username.tag_details || [])
       } else {
         setError(result.error || 'Username not found')
       }
@@ -112,6 +114,7 @@ export default function UsernameDetail() {
       const result = await addTagToUsername(name, tagToAdd.trim())
       if (result.ok) {
         setTags(result.tags)
+        setTagDetails(result.tag_details || [])
         setTagInput('')
         setShowSuggestions(false)
         // Refresh known tags
@@ -134,11 +137,21 @@ export default function UsernameDetail() {
       const result = await removeTagFromUsername(name, tagToRemove)
       if (result.ok) {
         setTags(result.tags)
+        setTagDetails(result.tag_details || [])
         getAllTags().then(data => setAllKnownTags(data.tags || [])).catch(() => {})
       }
     } catch (err) {
       console.error('Failed to remove tag:', err)
     }
+  }
+
+  const getTagDetail = (tag: string): TagDetail | undefined =>
+    tagDetails.find(td => td.tag === tag)
+
+  const formatTagMeta = (detail: TagDetail): string => {
+    const date = new Date(detail.created_at * 1000).toLocaleDateString()
+    const who = detail.created_by || 'unknown'
+    return `Added by ${who} on ${date}`
   }
 
   const filteredSuggestions = allKnownTags
@@ -351,21 +364,30 @@ export default function UsernameDetail() {
         </div>
         <div className="px-6 py-4">
           <div className="flex flex-wrap gap-2 mb-3">
-            {tags.map(tag => (
-              <span
-                key={tag}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800"
-              >
-                {tag}
-                <button
-                  onClick={() => handleRemoveTag(tag)}
-                  className="ml-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full text-blue-400 hover:bg-blue-200 hover:text-blue-600"
-                  title={`Remove ${tag}`}
+            {tags.map(tag => {
+              const detail = getTagDetail(tag)
+              return (
+                <span
+                  key={tag}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800"
+                  title={detail ? formatTagMeta(detail) : undefined}
                 >
-                  ×
-                </button>
-              </span>
-            ))}
+                  {tag}
+                  {detail && (
+                    <span className="text-blue-500 text-xs font-normal ml-1">
+                      by {detail.created_by || 'unknown'}
+                    </span>
+                  )}
+                  <button
+                    onClick={() => handleRemoveTag(tag)}
+                    className="ml-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full text-blue-400 hover:bg-blue-200 hover:text-blue-600"
+                    title={`Remove ${tag}`}
+                  >
+                    ×
+                  </button>
+                </span>
+              )
+            })}
             {tags.length === 0 && (
               <span className="text-sm text-gray-400 italic">No tags</span>
             )}

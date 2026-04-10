@@ -556,6 +556,12 @@ export async function removeTag(
   ).bind(usernameId, normalized).run()
 }
 
+export interface TagDetail {
+  tag: string
+  created_at: number
+  created_by: string | null
+}
+
 export async function getTagsForUsername(
   db: D1Database,
   usernameId: number
@@ -564,6 +570,16 @@ export async function getTagsForUsername(
     'SELECT tag FROM username_tags WHERE username_id = ? ORDER BY tag'
   ).bind(usernameId).all<{ tag: string }>()
   return result.results.map(r => r.tag)
+}
+
+export async function getTagDetailsForUsername(
+  db: D1Database,
+  usernameId: number
+): Promise<TagDetail[]> {
+  const result = await db.prepare(
+    'SELECT tag, created_at, created_by FROM username_tags WHERE username_id = ? ORDER BY tag'
+  ).bind(usernameId).all<TagDetail>()
+  return result.results
 }
 
 export async function getTagsForUsernames(
