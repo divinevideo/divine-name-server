@@ -1,8 +1,45 @@
-// ABOUTME: Tests for Keycast UCAN access-token helpers
-// ABOUTME: Pins UCAN fact-array shape so Keycast-authed admins keep a real email
+// ABOUTME: Tests for Keycast OAuth flow helpers
+// ABOUTME: Covers PKCE start, code-for-token exchange, session storage, and UCAN parsing
 
-import { describe, it, expect } from 'vitest'
-import { extractEmailFromUcan } from './keycast-oauth'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import {
+  deleteSession,
+  exchangeCodeForToken,
+  extractEmailFromUcan,
+  generatePkceChallenge,
+  getSession,
+  OAUTH_STATE_PREFIX,
+  OAUTH_STATE_TTL,
+  SESSION_PREFIX,
+  startOAuthFlow,
+  type OAuthSession,
+} from './keycast-oauth'
+
+/** Minimal in-memory KV double for tests. Honors put/get/delete; TTL is captured but not auto-expired. */
+function createFakeKv() {
+  const store = new Map<string, { value: string; expirationTtl?: number }>()
+  const kv = {
+    async get(key: string) {
+      const entry = store.get(key)
+      return entry ? entry.value : null
+    },
+    async put(key: string, value: string, options?: { expirationTtl?: number }) {
+      store.set(key, { value, expirationTtl: options?.expirationTtl })
+    },
+    async delete(key: string) {
+      store.delete(key)
+    },
+    _store: store,
+    _ttl(key: string): number | undefined {
+      return store.get(key)?.expirationTtl
+    },
+  }
+  return kv as KVNamespace & { _store: typeof store; _ttl: (k: string) => number | undefined }
+}
+
+function base64UrlEncode(s: string): string {
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
 
 /** Build a fake UCAN-shaped JWT. Signature segment is irrelevant for decoding. */
 function buildUcan(payload: Record<string, unknown>): string {
@@ -11,8 +48,19 @@ function buildUcan(payload: Record<string, unknown>): string {
   return `${header}.${body}.sig`
 }
 
-function base64UrlEncode(s: string): string {
-  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+function buildTokenResponse(overrides: Partial<{
+  access_token: string
+  bunker_url: string
+  expires_in: number
+  refresh_token: string
+}> = {}) {
+  return {
+    access_token: buildUcan({ fct: [{ email: 'admin@divine.video', tenant_id: 1 }] }),
+    bunker_url:
+      'bunker://aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899?relay=wss%3A%2F%2Frelay.example.com',
+    expires_in: 3600,
+    ...overrides,
+  }
 }
 
 describe('extractEmailFromUcan', () => {
@@ -81,5 +129,235 @@ describe('extractEmailFromUcan', () => {
     // Payload with chars that force + / = in standard base64 before URL-safe substitution
     const token = buildUcan({ fct: [{ email: 'pädding+test@example.com' }] })
     expect(extractEmailFromUcan(token)).toBe('pädding+test@example.com')
+  })
+})
+
+describe('generatePkceChallenge', () => {
+  it('produces a verifier and an S256 challenge derived from it', async () => {
+    const { verifier, challenge } = await generatePkceChallenge()
+    // Both must be URL-safe base64 (no +, /, =)
+    expect(verifier).toMatch(/^[A-Za-z0-9_-]+$/)
+    expect(challenge).toMatch(/^[A-Za-z0-9_-]+$/)
+
+    // Challenge must equal base64url(sha256(verifier))
+    const encoded = new TextEncoder().encode(verifier)
+    const digest = await crypto.subtle.digest('SHA-256', encoded)
+    const bytes = new Uint8Array(digest)
+    const expected = btoa(String.fromCharCode(...bytes))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '')
+    expect(challenge).toBe(expected)
+  })
+
+  it('produces a fresh verifier per call', async () => {
+    const a = await generatePkceChallenge()
+    const b = await generatePkceChallenge()
+    expect(a.verifier).not.toBe(b.verifier)
+  })
+})
+
+describe('startOAuthFlow', () => {
+  it('stores state with the configured TTL and returns an authorize URL with all required params', async () => {
+    const kv = createFakeKv()
+    const { authorizeUrl } = await startOAuthFlow(
+      kv,
+      'https://login.example.com',
+      'test-client',
+      'https://app.example.com/callback',
+    )
+
+    expect(authorizeUrl.startsWith('https://login.example.com/api/oauth/authorize?')).toBe(true)
+
+    const params = new URL(authorizeUrl).searchParams
+    expect(params.get('client_id')).toBe('test-client')
+    expect(params.get('redirect_uri')).toBe('https://app.example.com/callback')
+    expect(params.get('response_type')).toBe('code')
+    expect(params.get('code_challenge_method')).toBe('S256')
+    expect(params.get('scope')).toBe('policy:full')
+    expect(params.get('code_challenge')).toMatch(/^[A-Za-z0-9_-]+$/)
+
+    const state = params.get('state')
+    expect(state).toBeTruthy()
+
+    // State entry exists under the prefix with the OAuth state TTL, carrying the verifier + redirect
+    const stateKey = OAUTH_STATE_PREFIX + state!
+    expect(kv._ttl(stateKey)).toBe(OAUTH_STATE_TTL)
+    const stored = JSON.parse((await kv.get(stateKey)) ?? 'null')
+    expect(stored.redirect_uri).toBe('https://app.example.com/callback')
+    expect(typeof stored.code_verifier).toBe('string')
+    expect(stored.code_verifier.length).toBeGreaterThan(0)
+  })
+
+  it('uses a random state value per call', async () => {
+    const kv = createFakeKv()
+    const a = await startOAuthFlow(kv, 'https://k', 'c', 'https://r')
+    const b = await startOAuthFlow(kv, 'https://k', 'c', 'https://r')
+    const stateA = new URL(a.authorizeUrl).searchParams.get('state')
+    const stateB = new URL(b.authorizeUrl).searchParams.get('state')
+    expect(stateA).not.toBe(stateB)
+  })
+})
+
+describe('exchangeCodeForToken', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  async function primeState(kv: KVNamespace, state: string, verifier = 'test-verifier', redirect = 'https://app.example.com/callback') {
+    await kv.put(
+      OAUTH_STATE_PREFIX + state,
+      JSON.stringify({ code_verifier: verifier, redirect_uri: redirect }),
+    )
+  }
+
+  it('posts the correct body to Keycast and returns a populated session', async () => {
+    const kv = createFakeKv()
+    await primeState(kv, 'the-state')
+
+    const tokenBody = buildTokenResponse()
+    fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify(tokenBody), { status: 200 }))
+
+    const { sessionId, session } = await exchangeCodeForToken(
+      kv,
+      'https://login.example.com',
+      'test-client',
+      'the-code',
+      'the-state',
+    )
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    const [calledUrl, init] = fetchSpy.mock.calls[0]
+    expect(calledUrl).toBe('https://login.example.com/api/oauth/token')
+    expect(init.method).toBe('POST')
+    expect(init.headers['Content-Type']).toBe('application/json')
+    const sent = JSON.parse(init.body as string)
+    expect(sent).toEqual({
+      grant_type: 'authorization_code',
+      code: 'the-code',
+      redirect_uri: 'https://app.example.com/callback',
+      code_verifier: 'test-verifier',
+      client_id: 'test-client',
+    })
+
+    expect(sessionId).toMatch(/^[0-9a-f-]{36}$/) // crypto.randomUUID
+    expect(session.email).toBe('admin@divine.video')
+    expect(session.pubkey).toBe(
+      'aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899',
+    )
+    expect(session.expires_at).toBeGreaterThan(Date.now())
+    expect(session.expires_at).toBeLessThanOrEqual(Date.now() + 3600 * 1000)
+
+    // Session persisted under SESSION_PREFIX with the KV TTL mirroring expires_in
+    const storedRaw = await kv.get(SESSION_PREFIX + sessionId)
+    expect(storedRaw).not.toBeNull()
+    expect(JSON.parse(storedRaw!)).toMatchObject({ email: 'admin@divine.video' })
+  })
+
+  it('consumes state so it cannot be replayed', async () => {
+    const kv = createFakeKv()
+    await primeState(kv, 'single-use')
+    fetchSpy.mockResolvedValue(new Response(JSON.stringify(buildTokenResponse()), { status: 200 }))
+
+    await exchangeCodeForToken(kv, 'https://k', 'c', 'code', 'single-use')
+
+    await expect(
+      exchangeCodeForToken(kv, 'https://k', 'c', 'code', 'single-use'),
+    ).rejects.toThrow(/Invalid OAuth state/)
+  })
+
+  it('throws when state is missing', async () => {
+    const kv = createFakeKv()
+    fetchSpy.mockResolvedValue(new Response('{}', { status: 200 }))
+
+    await expect(
+      exchangeCodeForToken(kv, 'https://k', 'c', 'code', 'never-stored'),
+    ).rejects.toThrow(/Invalid OAuth state/)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('throws when the token endpoint returns a non-2xx response, including the upstream body', async () => {
+    const kv = createFakeKv()
+    await primeState(kv, 'bad')
+    fetchSpy.mockResolvedValue(new Response('invalid_grant', { status: 400 }))
+
+    await expect(
+      exchangeCodeForToken(kv, 'https://k', 'c', 'code', 'bad'),
+    ).rejects.toThrow(/Token exchange failed: 400 invalid_grant/)
+  })
+
+  it("falls back to 'keycast-user' when the UCAN carries no email", async () => {
+    const kv = createFakeKv()
+    await primeState(kv, 's')
+    const tokenBody = buildTokenResponse({
+      access_token: buildUcan({ fct: [{ tenant_id: 1 }] }),
+    })
+    fetchSpy.mockResolvedValue(new Response(JSON.stringify(tokenBody), { status: 200 }))
+
+    const { session } = await exchangeCodeForToken(kv, 'https://k', 'c', 'code', 's')
+    expect(session.email).toBe('keycast-user')
+  })
+
+  it('sets pubkey to null when bunker_url is malformed', async () => {
+    const kv = createFakeKv()
+    await primeState(kv, 's')
+    const tokenBody = buildTokenResponse({ bunker_url: 'not-a-bunker-url' })
+    fetchSpy.mockResolvedValue(new Response(JSON.stringify(tokenBody), { status: 200 }))
+
+    const { session } = await exchangeCodeForToken(kv, 'https://k', 'c', 'code', 's')
+    expect(session.pubkey).toBeNull()
+  })
+})
+
+describe('getSession / deleteSession', () => {
+  it('returns the stored session when not expired', async () => {
+    const kv = createFakeKv()
+    const session: OAuthSession = {
+      email: 'x@example.com',
+      pubkey: 'a'.repeat(64),
+      expires_at: Date.now() + 60_000,
+    }
+    await kv.put(SESSION_PREFIX + 'sid', JSON.stringify(session))
+
+    const got = await getSession(kv, 'sid')
+    expect(got).toEqual(session)
+  })
+
+  it('returns null when the session is missing', async () => {
+    const kv = createFakeKv()
+    expect(await getSession(kv, 'nope')).toBeNull()
+  })
+
+  it('returns null when expires_at is in the past', async () => {
+    const kv = createFakeKv()
+    const expired: OAuthSession = {
+      email: 'x@example.com',
+      pubkey: null,
+      expires_at: Date.now() - 1_000,
+    }
+    await kv.put(SESSION_PREFIX + 'sid', JSON.stringify(expired))
+
+    expect(await getSession(kv, 'sid')).toBeNull()
+  })
+
+  it('deleteSession removes the session', async () => {
+    const kv = createFakeKv()
+    const session: OAuthSession = {
+      email: 'x@example.com',
+      pubkey: null,
+      expires_at: Date.now() + 60_000,
+    }
+    await kv.put(SESSION_PREFIX + 'sid', JSON.stringify(session))
+
+    await deleteSession(kv, 'sid')
+    expect(await kv.get(SESSION_PREFIX + 'sid')).toBeNull()
+    expect(await getSession(kv, 'sid')).toBeNull()
   })
 })

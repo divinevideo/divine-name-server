@@ -1,9 +1,9 @@
 // ABOUTME: Keycast OAuth PKCE flow for admin authentication
 // ABOUTME: Session-ID-based sessions stored in KV, consumed via HTTP-only cookie
 
-const OAUTH_STATE_PREFIX = 'nameserver:oauth-state:'
-const SESSION_PREFIX = 'nameserver:session:'
-const OAUTH_STATE_TTL = 300 // 5 minutes
+export const OAUTH_STATE_PREFIX = 'nameserver:oauth-state:'
+export const SESSION_PREFIX = 'nameserver:session:'
+export const OAUTH_STATE_TTL = 300 // 5 minutes
 
 export interface OAuthSession {
   email: string
