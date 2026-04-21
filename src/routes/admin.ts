@@ -45,6 +45,7 @@ type Bindings = {
   SENDGRID_API_KEY?: string
   KEYCAST_URL?: string
   KEYCAST_CLIENT_ID?: string
+  BYPASS_LOCAL_AUTH?: string
 }
 
 /** Check if a pubkey is in the comma-separated ADMIN_PUBKEYS allowlist. */
@@ -79,8 +80,10 @@ admin.use('*', async (c, next) => {
     return next()
   }
 
-  // Dev bypass
-  if (isLocalDev) {
+  // Dev bypass, opt-in via BYPASS_LOCAL_AUTH=true in .dev.vars.
+  // Default is off so wrangler dev can exercise the real CF Access / Keycast paths
+  // against a locally-running Keycast stack.
+  if (isLocalDev && c.env.BYPASS_LOCAL_AUTH === 'true') {
     c.set('adminEmail' as never, 'dev@local' as never)
     return next()
   }
