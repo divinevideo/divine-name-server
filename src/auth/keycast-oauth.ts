@@ -174,16 +174,26 @@ function extractPubkeyFromBunkerUrl(bunkerUrl: string): string | null {
 }
 
 /**
- * Try to extract email from UCAN/JWT access token.
- * UCANs are JWTs -- decode the payload and look for common email claims.
+ * Extract email from a Keycast UCAN access token.
+ *
+ * Keycast UCANs (see keycast api/src/api/http/auth.rs::generate_server_signed_ucan)
+ * place email inside the UCAN facts array (`fct`) per the UCAN 0.10 spec, not as a
+ * top-level JWT claim. Decoding as `payload.email` misses it and every Keycast-authed
+ * admin falls through to the generic fallback in exchangeCodeForToken().
  */
-function extractEmailFromUcan(token: string | undefined): string | null {
+export function extractEmailFromUcan(token: string | undefined): string | null {
   if (!token) return null
   try {
     const parts = token.split('.')
     if (parts.length < 2) return null
     const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')))
-    return payload.email || payload.sub_email || null
+    const facts = Array.isArray(payload.fct) ? payload.fct : []
+    for (const fact of facts) {
+      if (fact && typeof fact.email === 'string' && fact.email.length > 0) {
+        return fact.email
+      }
+    }
+    return null
   } catch {
     return null
   }
