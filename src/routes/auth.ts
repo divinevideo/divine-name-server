@@ -19,6 +19,44 @@ type Bindings = {
 
 const auth = new Hono<{ Bindings: Bindings }>()
 
+/**
+ * Accept HTTPS everywhere, or http:// only for localhost variants
+ * (bare `localhost`, IPv4 / IPv6 loopback, or any `*.localhost` per RFC 6761).
+ */
+function isAllowedKeycastUrl(rawUrl: string): boolean {
+  try {
+    const url = new URL(rawUrl)
+    if (url.protocol === 'https:') return true
+    if (url.protocol !== 'http:') return false
+    return isLoopbackHost(url.hostname)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The callback origin override is only honored when it points at a
+ * localhost variant, so an accidental prod setting can't redirect OAuth.
+ */
+function isLocalDevCallbackOrigin(rawOrigin: string): boolean {
+  try {
+    const url = new URL(rawOrigin)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
+    return isLoopbackHost(url.hostname)
+  } catch {
+    return false
+  }
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  return (
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '::1' ||
+    (hostname.endsWith('.localhost') && hostname.length > '.localhost'.length)
+  )
+}
+
 // Hostname guard only -- no CF Access or session check.
 // Auth routes must be accessible to unauthenticated users.
 auth.use('*', async (c, next) => {
@@ -46,10 +84,25 @@ auth.post('/start', async (c) => {
     return c.json({ error: 'Session storage not configured' }, 503)
   }
 
+  // KEYCAST_URL must be HTTPS outside local dev. A misconfigured http:// Keycast
+  // would leak the OAuth state parameter over cleartext on the authorize redirect.
+  if (!isAllowedKeycastUrl(c.env.KEYCAST_URL)) {
+    console.error('[auth/start] rejecting non-HTTPS KEYCAST_URL:', c.env.KEYCAST_URL)
+    return c.json({ error: 'OAuth misconfigured: KEYCAST_URL must be HTTPS outside local dev' }, 503)
+  }
+
   // OAUTH_CALLBACK_BASE_URL lets local dev override the callback origin because
   // Miniflare strips the port under `wrangler dev --host`. In production the
   // computed origin from c.req.url is correct and the override stays unset.
-  const origin = c.env.OAUTH_CALLBACK_BASE_URL ?? new URL(c.req.url).origin
+  // Only accept overrides pointing at localhost variants so a prod misconfig
+  // (e.g., accidental `OAUTH_CALLBACK_BASE_URL` in production `[vars]`) can't
+  // redirect OAuth through an attacker-controlled host.
+  const override = c.env.OAUTH_CALLBACK_BASE_URL
+  if (override && !isLocalDevCallbackOrigin(override)) {
+    console.error('[auth/start] rejecting non-localhost OAUTH_CALLBACK_BASE_URL:', override)
+    return c.json({ error: 'OAuth misconfigured: OAUTH_CALLBACK_BASE_URL must be a localhost origin' }, 503)
+  }
+  const origin = override ?? new URL(c.req.url).origin
   const redirectUri = `${origin}/api/admin/auth/callback`
 
   const { authorizeUrl } = await startOAuthFlow(
@@ -93,8 +146,13 @@ auth.get('/callback', async (c) => {
     )
 
     // Cookie maxAge matches KV session TTL (both derived from token expiry).
-    // Cap at 24 hours so sessions don't outlive a workday.
-    const maxAge = Math.min(session.expires_at - Date.now(), 86400 * 1000) / 1000
+    // Cap at 24 hours so sessions don't outlive a workday. Math.max(0, ...)
+    // guards against a malformed Keycast response that returns a past expiry,
+    // which would otherwise compute a negative maxAge.
+    const maxAge = Math.max(
+      0,
+      Math.min(session.expires_at - Date.now(), 86400 * 1000) / 1000,
+    )
     setCookie(c, '__session', sessionId, {
       path: '/',
       httpOnly: true,

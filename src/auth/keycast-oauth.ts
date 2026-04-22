@@ -122,6 +122,11 @@ export async function exchangeCodeForToken(
   // did:key (secp256k1 multicodec + base58), which is what authorization checks
   // like ADMIN_PUBKEYS need to compare against.
   const pubkey = extractPubkeyFromUcan(tokenData.access_token)
+  if (pubkey === null) {
+    // Surfaces Keycast DID-format changes early; without this the session
+    // silently gets null pubkey and every admin call fails with "not an admin".
+    console.warn('[keycast-oauth] extractPubkeyFromUcan returned null — aud claim missing, wrong shape, or non-secp256k1 multicodec')
+  }
   const email = extractEmailFromUcan(tokenData.access_token) || 'keycast-user'
 
   const session: OAuthSession = {

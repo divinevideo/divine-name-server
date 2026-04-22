@@ -708,6 +708,118 @@ describe('Admin Hostname Auth Guard', () => {
   })
 })
 
+describe('OAuth Start Config Validation', () => {
+  function createFakeKv(): KVNamespace {
+    const store = new Map<string, string>()
+    return {
+      async get(key: string) { return store.get(key) ?? null },
+      async put(key: string, value: string) { store.set(key, value) },
+      async delete(key: string) { store.delete(key) },
+    } as unknown as KVNamespace
+  }
+
+  function createTestApp() {
+    const app = new Hono<{
+      Bindings: {
+        DB: D1Database
+        SESSION_KV: KVNamespace
+        KEYCAST_URL?: string
+        KEYCAST_CLIENT_ID?: string
+        OAUTH_CALLBACK_BASE_URL?: string
+      }
+    }>()
+    app.route('/api/admin', admin)
+    return app
+  }
+
+  const baseEnv = () => ({
+    DB: createMockDB(),
+    SESSION_KV: createFakeKv(),
+    KEYCAST_CLIENT_ID: 'test-client',
+  })
+
+  it('rejects non-HTTPS KEYCAST_URL pointing at a public host', async () => {
+    const app = createTestApp()
+    const req = new Request('https://names.admin.divine.video/api/admin/auth/start', { method: 'POST' })
+    const env = { ...baseEnv(), KEYCAST_URL: 'http://login.example.com' }
+    const res = await app.fetch(req, env, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(503)
+    const json = await res.json() as any
+    expect(json.error).toContain('KEYCAST_URL must be HTTPS')
+  })
+
+  it('accepts https:// KEYCAST_URL', async () => {
+    const app = createTestApp()
+    const req = new Request('https://names.admin.divine.video/api/admin/auth/start', { method: 'POST' })
+    const env = { ...baseEnv(), KEYCAST_URL: 'https://login.divine.video' }
+    const res = await app.fetch(req, env, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(200)
+  })
+
+  it('accepts http://localhost KEYCAST_URL for local dev', async () => {
+    const app = createTestApp()
+    const req = new Request('http://localhost/api/admin/auth/start', { method: 'POST' })
+    const env = { ...baseEnv(), KEYCAST_URL: 'http://localhost:3000' }
+    const res = await app.fetch(req, env, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(200)
+  })
+
+  it('accepts http://*.localhost KEYCAST_URL for local dev', async () => {
+    const app = createTestApp()
+    const req = new Request('http://localhost/api/admin/auth/start', { method: 'POST' })
+    const env = { ...baseEnv(), KEYCAST_URL: 'http://login.localhost:3000' }
+    const res = await app.fetch(req, env, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(200)
+  })
+
+  it('rejects OAUTH_CALLBACK_BASE_URL pointing at a non-localhost host', async () => {
+    const app = createTestApp()
+    const req = new Request('https://names.admin.divine.video/api/admin/auth/start', { method: 'POST' })
+    const env = {
+      ...baseEnv(),
+      KEYCAST_URL: 'https://login.divine.video',
+      OAUTH_CALLBACK_BASE_URL: 'https://evil.example.com',
+    }
+    const res = await app.fetch(req, env, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(503)
+    const json = await res.json() as any
+    expect(json.error).toContain('OAUTH_CALLBACK_BASE_URL')
+  })
+
+  it('accepts OAUTH_CALLBACK_BASE_URL=http://admin.localhost:8787', async () => {
+    const app = createTestApp()
+    const req = new Request('http://localhost/api/admin/auth/start', { method: 'POST' })
+    const env = {
+      ...baseEnv(),
+      KEYCAST_URL: 'http://localhost:3000',
+      OAUTH_CALLBACK_BASE_URL: 'http://admin.localhost:8787',
+    }
+    const res = await app.fetch(req, env, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.authorize_url).toContain('admin.localhost%3A8787')
+  })
+
+  it('rejects OAUTH_CALLBACK_BASE_URL with a non-http(s) scheme', async () => {
+    const app = createTestApp()
+    const req = new Request('https://names.admin.divine.video/api/admin/auth/start', { method: 'POST' })
+    const env = {
+      ...baseEnv(),
+      KEYCAST_URL: 'https://login.divine.video',
+      OAUTH_CALLBACK_BASE_URL: 'javascript:void(0)',
+    }
+    const res = await app.fetch(req, env, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(503)
+  })
+})
+
 describe('Admin Tag Endpoints', () => {
   function createTestApp() {
     const app = new Hono<{ Bindings: { DB: D1Database; BYPASS_LOCAL_AUTH?: string } }>()
