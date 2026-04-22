@@ -66,9 +66,10 @@ admin.route('/auth', authRoutes)
 // so the hostname guard blocks that bypass regardless of auth method.
 admin.use('*', async (c, next) => {
   const url = new URL(c.req.url)
-  // Only allow admin API on the admin subdomain (and localhost for dev)
-  const isAdminHost = url.hostname === 'names.admin.divine.video'
-  const isLocalDev = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
+  // Only allow admin API on the admin subdomain (and localhost for dev).
+  // admin.localhost resolves to 127.0.0.1 via RFC 6761 and mirrors prod routing locally.
+  const isAdminHost = url.hostname === 'names.admin.divine.video' || url.hostname === 'admin.localhost'
+  const isLocalDev = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === 'admin.localhost'
 
   if (!isAdminHost && !isLocalDev) {
     return c.json({ ok: false, error: 'Unauthorized' }, 403)

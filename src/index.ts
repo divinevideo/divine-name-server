@@ -44,7 +44,7 @@ app.route('', publicRoutes)
 // Service info fallback for non-public, non-admin hostnames
 app.use('/', async (c, next) => {
   const hostname = new URL(c.req.url).hostname
-  if (hostname === 'names.admin.divine.video') {
+  if (hostname === 'names.admin.divine.video' || hostname === 'admin.localhost') {
     return next() // Let admin SPA catch-all handle it
   }
   return c.json({
@@ -70,8 +70,8 @@ app.route('', nip05)
 app.get('*', async (c) => {
   const url = new URL(c.req.url)
 
-  // Only handle admin subdomain SPA routes
-  if (url.hostname === 'names.admin.divine.video') {
+  // Only handle admin subdomain SPA routes (plus admin.localhost for local dev)
+  if (url.hostname === 'names.admin.divine.video' || url.hostname === 'admin.localhost') {
     // Don't intercept API routes
     if (url.pathname.startsWith('/api/')) {
       return c.notFound()

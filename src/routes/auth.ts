@@ -14,6 +14,7 @@ type Bindings = {
   SESSION_KV: KVNamespace
   KEYCAST_URL?: string
   KEYCAST_CLIENT_ID?: string
+  OAUTH_CALLBACK_BASE_URL?: string
 }
 
 const auth = new Hono<{ Bindings: Bindings }>()
@@ -22,8 +23,8 @@ const auth = new Hono<{ Bindings: Bindings }>()
 // Auth routes must be accessible to unauthenticated users.
 auth.use('*', async (c, next) => {
   const url = new URL(c.req.url)
-  const isAdminHost = url.hostname === 'names.admin.divine.video'
-  const isLocalDev = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
+  const isAdminHost = url.hostname === 'names.admin.divine.video' || url.hostname === 'admin.localhost'
+  const isLocalDev = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === 'admin.localhost'
 
   if (!isAdminHost && !isLocalDev) {
     return c.json({ ok: false, error: 'Unauthorized' }, 403)
@@ -45,7 +46,10 @@ auth.post('/start', async (c) => {
     return c.json({ error: 'Session storage not configured' }, 503)
   }
 
-  const origin = new URL(c.req.url).origin
+  // OAUTH_CALLBACK_BASE_URL lets local dev override the callback origin because
+  // Miniflare strips the port under `wrangler dev --host`. In production the
+  // computed origin from c.req.url is correct and the override stays unset.
+  const origin = c.env.OAUTH_CALLBACK_BASE_URL ?? new URL(c.req.url).origin
   const redirectUri = `${origin}/api/admin/auth/callback`
 
   const { authorizeUrl } = await startOAuthFlow(
