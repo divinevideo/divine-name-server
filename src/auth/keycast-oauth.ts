@@ -1,6 +1,8 @@
 // ABOUTME: Keycast OAuth PKCE flow for admin authentication
 // ABOUTME: Session-ID-based sessions stored in KV, consumed via HTTP-only cookie
 
+import { base58 } from '@scure/base'
+
 export const OAUTH_STATE_PREFIX = 'nameserver:oauth-state:'
 export const SESSION_PREFIX = 'nameserver:session:'
 export const OAUTH_STATE_TTL = 300 // 5 minutes
@@ -114,8 +116,12 @@ export async function exchangeCodeForToken(
     refresh_token?: string
   }
 
-  // Extract identity from the response
-  const pubkey = extractPubkeyFromBunkerUrl(tokenData.bunker_url)
+  // Extract identity from the UCAN, not from bunker_url. The bunker_url encodes
+  // a derived bunker pubkey (keycast::bunker_key::derive_bunker_keys), not the
+  // user's Nostr pubkey. The user pubkey lives in the UCAN `aud` claim as a
+  // did:key (secp256k1 multicodec + base58), which is what authorization checks
+  // like ADMIN_PUBKEYS need to compare against.
+  const pubkey = extractPubkeyFromUcan(tokenData.access_token)
   const email = extractEmailFromUcan(tokenData.access_token) || 'keycast-user'
 
   const session: OAuthSession = {
@@ -162,12 +168,27 @@ export async function deleteSession(
 }
 
 /**
- * Extract pubkey from bunker URL: bunker://{hex-pubkey}?relay=...
+ * Extract the user's Nostr pubkey from a Keycast UCAN.
+ *
+ * The UCAN `aud` claim is a did:key of the form `did:key:z<base58>` where the
+ * decoded base58 bytes are the 0xe7 0x01 secp256k1 multicodec prefix followed
+ * by the 32-byte Nostr pubkey. See keycast `nostr_pubkey_to_did`.
  */
-function extractPubkeyFromBunkerUrl(bunkerUrl: string): string | null {
+export function extractPubkeyFromUcan(token: string | undefined): string | null {
+  if (!token) return null
   try {
-    const match = bunkerUrl.match(/^bunker:\/\/([0-9a-f]{64})/)
-    return match ? match[1] : null
+    const parts = token.split('.')
+    if (parts.length < 2) return null
+    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')))
+    const aud = typeof payload.aud === 'string' ? payload.aud : null
+    if (!aud || !aud.startsWith('did:key:z')) return null
+
+    const bytes = base58.decode(aud.slice('did:key:z'.length))
+    if (bytes.length !== 34 || bytes[0] !== 0xe7 || bytes[1] !== 0x01) return null
+
+    return Array.from(bytes.slice(2))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('')
   } catch {
     return null
   }

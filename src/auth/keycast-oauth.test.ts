@@ -2,10 +2,12 @@
 // ABOUTME: Covers PKCE start, code-for-token exchange, session storage, and UCAN parsing
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { base58 } from '@scure/base'
 import {
   deleteSession,
   exchangeCodeForToken,
   extractEmailFromUcan,
+  extractPubkeyFromUcan,
   generatePkceChallenge,
   getSession,
   OAUTH_STATE_PREFIX,
@@ -14,6 +16,16 @@ import {
   startOAuthFlow,
   type OAuthSession,
 } from './keycast-oauth'
+
+/** Encode a hex pubkey as a Keycast-shape did:key (secp256k1 multicodec + base58). */
+function pubkeyToDidKey(hexPubkey: string): string {
+  const pubkeyBytes = new Uint8Array(hexPubkey.match(/.{2}/g)!.map(b => parseInt(b, 16)))
+  const bytes = new Uint8Array(34)
+  bytes[0] = 0xe7
+  bytes[1] = 0x01
+  bytes.set(pubkeyBytes, 2)
+  return `did:key:z${base58.encode(bytes)}`
+}
 
 /** Minimal in-memory KV double for tests. Honors put/get/delete; TTL is captured but not auto-expired. */
 function createFakeKv() {
@@ -48,6 +60,9 @@ function buildUcan(payload: Record<string, unknown>): string {
   return `${header}.${body}.sig`
 }
 
+const TEST_USER_PUBKEY = '97f5edd026071916a50012333a379c976896469d5e77061982721d51baea2f33'
+const TEST_BUNKER_PUBKEY = 'aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899'
+
 function buildTokenResponse(overrides: Partial<{
   access_token: string
   bunker_url: string
@@ -55,9 +70,11 @@ function buildTokenResponse(overrides: Partial<{
   refresh_token: string
 }> = {}) {
   return {
-    access_token: buildUcan({ fct: [{ email: 'admin@divine.video', tenant_id: 1 }] }),
-    bunker_url:
-      'bunker://aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899?relay=wss%3A%2F%2Frelay.example.com',
+    access_token: buildUcan({
+      aud: pubkeyToDidKey(TEST_USER_PUBKEY),
+      fct: [{ email: 'admin@divine.video', tenant_id: 1 }],
+    }),
+    bunker_url: `bunker://${TEST_BUNKER_PUBKEY}?relay=wss%3A%2F%2Frelay.example.com`,
     expires_in: 3600,
     ...overrides,
   }
@@ -249,9 +266,9 @@ describe('exchangeCodeForToken', () => {
 
     expect(sessionId).toMatch(/^[0-9a-f-]{36}$/) // crypto.randomUUID
     expect(session.email).toBe('admin@divine.video')
-    expect(session.pubkey).toBe(
-      'aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899',
-    )
+    // pubkey must come from UCAN aud (user pubkey), not bunker_url (derived bunker pubkey)
+    expect(session.pubkey).toBe(TEST_USER_PUBKEY)
+    expect(session.pubkey).not.toBe(TEST_BUNKER_PUBKEY)
     expect(session.expires_at).toBeGreaterThan(Date.now())
     expect(session.expires_at).toBeLessThanOrEqual(Date.now() + 3600 * 1000)
 
@@ -305,14 +322,63 @@ describe('exchangeCodeForToken', () => {
     expect(session.email).toBe('keycast-user')
   })
 
-  it('sets pubkey to null when bunker_url is malformed', async () => {
+  it('sets pubkey to null when the UCAN aud is missing', async () => {
     const kv = createFakeKv()
     await primeState(kv, 's')
-    const tokenBody = buildTokenResponse({ bunker_url: 'not-a-bunker-url' })
+    const tokenBody = buildTokenResponse({
+      access_token: buildUcan({ fct: [{ email: 'x@y' }] }),
+    })
     fetchSpy.mockResolvedValue(new Response(JSON.stringify(tokenBody), { status: 200 }))
 
     const { session } = await exchangeCodeForToken(kv, 'https://k', 'c', 'code', 's')
     expect(session.pubkey).toBeNull()
+  })
+})
+
+describe('extractPubkeyFromUcan', () => {
+  it('decodes a Keycast did:key aud to hex pubkey', () => {
+    const token = buildUcan({ aud: pubkeyToDidKey(TEST_USER_PUBKEY) })
+    expect(extractPubkeyFromUcan(token)).toBe(TEST_USER_PUBKEY)
+  })
+
+  it('returns null when aud is missing', () => {
+    const token = buildUcan({ fct: [{ email: 'x@y' }] })
+    expect(extractPubkeyFromUcan(token)).toBeNull()
+  })
+
+  it('returns null when aud is not a did:key', () => {
+    const token = buildUcan({ aud: 'did:web:example.com' })
+    expect(extractPubkeyFromUcan(token)).toBeNull()
+  })
+
+  it('returns null when the multicodec prefix is not secp256k1 (0xe7 0x01)', () => {
+    // Build a did:key with an Ed25519 multicodec prefix (0xed 0x01) instead
+    const bytes = new Uint8Array(34)
+    bytes[0] = 0xed
+    bytes[1] = 0x01
+    bytes.set(new Uint8Array(32).fill(0xaa), 2)
+    const token = buildUcan({ aud: `did:key:z${base58.encode(bytes)}` })
+    expect(extractPubkeyFromUcan(token)).toBeNull()
+  })
+
+  it('returns null when the decoded payload is the wrong length', () => {
+    // 33 bytes instead of 34 (missing one byte of the pubkey)
+    const bytes = new Uint8Array(33)
+    bytes[0] = 0xe7
+    bytes[1] = 0x01
+    const token = buildUcan({ aud: `did:key:z${base58.encode(bytes)}` })
+    expect(extractPubkeyFromUcan(token)).toBeNull()
+  })
+
+  it('returns null when aud cannot be base58 decoded', () => {
+    const token = buildUcan({ aud: 'did:key:z0OIl' }) // contains 0 and O which are not in base58 alphabet
+    expect(extractPubkeyFromUcan(token)).toBeNull()
+  })
+
+  it('returns null on malformed tokens', () => {
+    expect(extractPubkeyFromUcan(undefined)).toBeNull()
+    expect(extractPubkeyFromUcan('')).toBeNull()
+    expect(extractPubkeyFromUcan('one.bad.token')).toBeNull()
   })
 })
 
