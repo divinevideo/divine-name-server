@@ -1,9 +1,12 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import Login from '../pages/Login'
 
+type AuthMethod = 'cf-access' | 'keycast'
+
 interface AuthState {
   email: string
   pubkey: string | null
+  method: AuthMethod | null
   logout: () => void
 }
 
@@ -19,6 +22,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<'loading' | 'authenticated' | 'unauthenticated'>('loading')
   const [email, setEmail] = useState('')
   const [pubkey, setPubkey] = useState<string | null>(null)
+  const [method, setMethod] = useState<AuthMethod | null>(null)
 
   useEffect(() => {
     fetch('/api/admin/auth/status')
@@ -28,6 +32,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setState('authenticated')
           setEmail(data.email || '')
           setPubkey(data.pubkey || null)
+          setMethod(data.method || null)
         } else {
           setState('unauthenticated')
         }
@@ -38,11 +43,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const logout = () => {
+    // CF Access sessions are JWTs injected by the edge; only Cloudflare can clear them.
+    // Redirect the browser to CF Access's own logout endpoint; it tears down the
+    // Access session cookie and bounces back. The Keycast session cookie (if any)
+    // stays; we clear it server-side below as a belt-and-suspenders step first.
+    if (method === 'cf-access') {
+      fetch('/api/admin/auth/logout', { method: 'POST' }).finally(() => {
+        window.location.href = '/cdn-cgi/access/logout'
+      })
+      return
+    }
+
     fetch('/api/admin/auth/logout', { method: 'POST' })
       .then(() => {
         setState('unauthenticated')
         setEmail('')
         setPubkey(null)
+        setMethod(null)
       })
   }
 
@@ -59,7 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ email, pubkey, logout }}>
+    <AuthContext.Provider value={{ email, pubkey, method, logout }}>
       {children}
     </AuthContext.Provider>
   )

@@ -1,8 +1,34 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+
+const AUTH_ERROR_MESSAGES: Record<string, string> = {
+  missing_params: 'OAuth callback was missing required parameters. Try signing in again.',
+  not_configured: 'OAuth is not configured on this environment. Contact an administrator.',
+  token_exchange_failed: 'Sign-in failed at the token exchange step. The state may have expired; try again.',
+  access_denied: 'You declined the sign-in request.',
+}
+
+function describeAuthError(code: string): string {
+  return AUTH_ERROR_MESSAGES[code] ?? `Sign-in failed: ${code}`
+}
 
 export default function Login() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Surface OAuth callback errors that land in the URL as ?auth_error=<code>.
+  // Clean the query string after reading so a refresh doesn't re-show a stale error.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const code = params.get('auth_error')
+    if (code) {
+      setError(describeAuthError(code))
+      params.delete('auth_error')
+      params.delete('auth_success')
+      const cleanSearch = params.toString()
+      const cleanUrl = `${window.location.pathname}${cleanSearch ? `?${cleanSearch}` : ''}${window.location.hash}`
+      window.history.replaceState({}, '', cleanUrl)
+    }
+  }, [])
 
   const handleLogin = async () => {
     setLoading(true)
