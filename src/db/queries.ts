@@ -123,6 +123,7 @@ export async function claimUsername(
        status = 'active',
        claim_source = 'self-service',
        created_by = NULL,
+       revoked_at = NULL,
        updated_at = excluded.updated_at,
        claimed_at = excluded.claimed_at`
   ).bind(nameCanonical, nameDisplay, nameCanonical, pubkey, relaysJson, now, now, now).run()
@@ -158,6 +159,7 @@ export async function reserveUsername(
        reserved_reason = excluded.reserved_reason,
        claim_source = excluded.claim_source,
        created_by = excluded.created_by,
+       revoked_at = NULL,
        updated_at = excluded.updated_at`
   ).bind(nameCanonical, nameDisplay, nameCanonical, reason, claimSource, createdBy, now, now).run()
 }
@@ -212,6 +214,7 @@ export async function assignUsername(
        status = 'active',
        claim_source = excluded.claim_source,
        created_by = excluded.created_by,
+       revoked_at = NULL,
        updated_at = excluded.updated_at,
        claimed_at = excluded.claimed_at`
   ).bind(nameCanonical, nameDisplay, nameCanonical, pubkey, claimSource, createdBy, now, now, now).run()
@@ -415,6 +418,7 @@ export async function createReservation(
        status = 'pending-confirmation',
        claim_source = 'public-reservation',
        created_by = NULL,
+       revoked_at = NULL,
        reservation_email = excluded.reservation_email,
        confirmation_token = excluded.confirmation_token,
        reservation_expires_at = excluded.reservation_expires_at,
