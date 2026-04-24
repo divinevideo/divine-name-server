@@ -2,7 +2,7 @@
 // ABOUTME: Validates search functionality with fake D1 database
 
 import { describe, it, expect } from 'vitest'
-import { searchUsernames, claimUsername, createReservation, reserveUsername, addTag, removeTag, getTagsForUsername, getTagDetailsForUsername, getTagsForUsernames, getAllTags, type SearchParams } from './queries'
+import { searchUsernames, claimUsername, assignUsername, createReservation, reserveUsername, revokeUsername, addTag, removeTag, getTagsForUsername, getTagDetailsForUsername, getTagsForUsernames, getAllTags, type SearchParams, type Username } from './queries'
 import { createFakeD1, type MockRecord } from './test-helpers'
 
 const mockRecords: MockRecord[] = [
@@ -204,6 +204,48 @@ describe('claimUsername', () => {
     expect(insertSql).toContain("'self-service'")
     expect(insertSql).toContain('claim_source')
   })
+
+  it('should clear revoked_at in ON CONFLICT clause', async () => {
+    const sqlStatements: string[] = []
+    const mockDB = {
+      prepare: (sql: string) => {
+        sqlStatements.push(sql)
+        return {
+          bind: (..._params: any[]) => ({
+            run: async () => ({ success: true }),
+          }),
+        }
+      },
+    } as unknown as D1Database
+
+    await claimUsername(mockDB, 'TestUser', 'testuser', 'abc123', null)
+
+    const insertSql = sqlStatements[1]
+    expect(insertSql).toContain('ON CONFLICT')
+    expect(insertSql).toContain('revoked_at = NULL')
+  })
+})
+
+describe('assignUsername', () => {
+  it('should clear revoked_at in ON CONFLICT clause', async () => {
+    const sqlStatements: string[] = []
+    const mockDB = {
+      prepare: (sql: string) => {
+        sqlStatements.push(sql)
+        return {
+          bind: (..._params: any[]) => ({
+            run: async () => ({ success: true }),
+          }),
+        }
+      },
+    } as unknown as D1Database
+
+    await assignUsername(mockDB, 'TestUser', 'testuser', 'abc123', 'admin', 'matt@divine.video')
+
+    const insertSql = sqlStatements[1]
+    expect(insertSql).toContain('ON CONFLICT')
+    expect(insertSql).toContain('revoked_at = NULL')
+  })
 })
 
 describe('reserveUsername', () => {
@@ -230,6 +272,25 @@ describe('reserveUsername', () => {
     expect(allParams).toContain('matt@divine.video')
     expect(allParams).toContain('admin')
   })
+
+  it('should clear revoked_at in ON CONFLICT clause', async () => {
+    const sqlStatements: string[] = []
+    const mockDB = {
+      prepare: (sql: string) => {
+        sqlStatements.push(sql)
+        return {
+          bind: (..._params: any[]) => ({
+            run: async () => ({ success: true }),
+          }),
+        }
+      },
+    } as unknown as D1Database
+
+    await reserveUsername(mockDB, 'TestName', 'testname', 'brand protection', 'admin', 'matt@divine.video')
+
+    expect(sqlStatements[0]).toContain('ON CONFLICT')
+    expect(sqlStatements[0]).toContain('revoked_at = NULL')
+  })
 })
 
 describe('createReservation', () => {
@@ -251,6 +312,266 @@ describe('createReservation', () => {
     const insertSql = sqlStatements[0]
     expect(insertSql).toContain("'public-reservation'")
     expect(insertSql).toContain('claim_source')
+  })
+
+  it('should clear revoked_at in ON CONFLICT clause', async () => {
+    const sqlStatements: string[] = []
+    const mockDB = {
+      prepare: (sql: string) => {
+        sqlStatements.push(sql)
+        return {
+          bind: (..._params: any[]) => ({
+            run: async () => ({ success: true }),
+          }),
+        }
+      },
+    } as unknown as D1Database
+
+    await createReservation(mockDB, 'TestUser', 'testuser', 'test@example.com', 'token123', 9999999999)
+
+    const insertSql = sqlStatements[0]
+    expect(insertSql).toContain('ON CONFLICT')
+    expect(insertSql).toContain('revoked_at = NULL')
+  })
+})
+
+// Stateful mock that faithfully tracks revoked_at through the revoke-then-upsert flow.
+// Reproduces the ericartell bug: claimUsername on a name the same pubkey already owns
+// should NOT leave revoked_at set.
+function createStatefulMockDB(initialRecords: Partial<Username>[] = []) {
+  const records: Partial<Username>[] = [...initialRecords]
+
+  return {
+    _records: records,
+    prepare: (sql: string) => {
+      let boundParams: any[] = []
+      return {
+        bind: (...params: any[]) => {
+          boundParams = params
+          return {
+            first: async <T>(): Promise<T | null> => {
+              if (sql.includes('username_canonical = ?') || sql.includes('name = ?')) {
+                const lookupValues = boundParams.filter(p => typeof p === 'string')
+                return (records.find(r =>
+                  lookupValues.includes(r.username_canonical as string) ||
+                  lookupValues.includes(r.name as string)
+                ) as T) || null
+              }
+              if (sql.includes('pubkey = ?') && sql.includes('status = ?')) {
+                const pubkey = boundParams[0]
+                const status = boundParams[1]
+                return (records.find(r => r.pubkey === pubkey && r.status === status) as T) || null
+              }
+              return null
+            },
+            all: async () => ({ results: records }),
+            run: async () => {
+              // UPDATE ... SET status = 'revoked', revoked_at = ? ... WHERE pubkey = ? AND status = 'active'
+              if (sql.includes("SET status = 'revoked'") && sql.includes('WHERE pubkey = ?')) {
+                const revokedAt = boundParams[0]
+                const updatedAt = boundParams[1]
+                const pubkey = boundParams[2]
+                for (const r of records) {
+                  if (r.pubkey === pubkey && r.status === 'active') {
+                    r.status = 'revoked'
+                    r.revoked_at = revokedAt
+                    r.updated_at = updatedAt
+                  }
+                }
+                return { success: true, meta: { changes: 1 } }
+              }
+
+              // UPDATE ... SET status = ?, recyclable = ?, revoked_at = ? ... WHERE username_canonical = ?
+              if (sql.includes('SET status = ?') && sql.includes('recyclable = ?') && sql.includes('revoked_at = ?')) {
+                const status = boundParams[0]
+                const recyclable = boundParams[1]
+                const revokedAt = boundParams[2]
+                const updatedAt = boundParams[3]
+                const canonical = boundParams[4]
+                const name = boundParams[5]
+                for (const r of records) {
+                  if (r.username_canonical === canonical || r.name === name) {
+                    r.status = status
+                    r.recyclable = recyclable
+                    r.revoked_at = revokedAt
+                    r.updated_at = updatedAt
+                  }
+                }
+                return { success: true, meta: { changes: 1 } }
+              }
+
+              // INSERT ... ON CONFLICT DO UPDATE (claimUsername / assignUsername / reserveUsername / createReservation)
+              if (sql.includes('INSERT INTO usernames') && sql.includes('ON CONFLICT')) {
+                const canonical = boundParams[2]
+                const existing = records.find(r => r.username_canonical === canonical)
+
+                if (existing) {
+                  // ON CONFLICT path: apply the SET clauses
+                  if (sql.includes("status = 'active'")) {
+                    existing.status = 'active'
+                    existing.pubkey = boundParams[3]
+                    existing.claimed_at = boundParams[boundParams.length - 1]
+                  } else if (sql.includes("status = 'reserved'")) {
+                    existing.status = 'reserved'
+                  } else if (sql.includes("status = 'pending-confirmation'")) {
+                    existing.status = 'pending-confirmation' as any
+                  }
+                  existing.updated_at = boundParams[boundParams.length - 2] || Math.floor(Date.now() / 1000)
+                  // The critical part: does the SQL clear revoked_at?
+                  if (sql.includes('revoked_at = NULL')) {
+                    existing.revoked_at = null
+                  }
+                  // If sql does NOT include 'revoked_at = NULL', revoked_at stays as-is (the bug)
+                } else {
+                  // Fresh INSERT
+                  records.push({
+                    id: records.length + 1,
+                    name: boundParams[0],
+                    username_display: boundParams[1],
+                    username_canonical: boundParams[2],
+                    pubkey: boundParams[3] || null,
+                    status: 'active',
+                    revoked_at: null,
+                    created_at: Math.floor(Date.now() / 1000),
+                    updated_at: Math.floor(Date.now() / 1000),
+                    claimed_at: Math.floor(Date.now() / 1000),
+                  })
+                }
+                return { success: true, meta: { changes: 1 } }
+              }
+
+              return { success: true, meta: { changes: 0 } }
+            },
+          }
+        },
+      }
+    },
+  } as unknown as D1Database & { _records: Partial<Username>[] }
+}
+
+describe('revoked_at clearing (ericartell bug)', () => {
+  it('claimUsername: re-claiming same name should clear revoked_at', async () => {
+    const db = createStatefulMockDB([{
+      id: 1, name: 'ericartell', username_display: 'EricArtell', username_canonical: 'ericartell',
+      pubkey: 'aaa111', status: 'active', revoked_at: null,
+      created_at: 1700000000, updated_at: 1700000000, claimed_at: 1700000000,
+    }])
+
+    // Same pubkey re-claims the same name (e.g., updating relays)
+    await claimUsername(db, 'EricArtell', 'ericartell', 'aaa111', ['wss://relay.divine.video'])
+
+    const record = db._records.find(r => r.username_canonical === 'ericartell')!
+    expect(record.status).toBe('active')
+    expect(record.revoked_at).toBeNull()
+  })
+
+  it('claimUsername: claiming a previously-revoked name should clear revoked_at', async () => {
+    const db = createStatefulMockDB([{
+      id: 1, name: 'oldname', username_display: 'oldname', username_canonical: 'oldname',
+      pubkey: 'bbb222', status: 'revoked', revoked_at: 1700000000,
+      created_at: 1699000000, updated_at: 1700000000,
+    }])
+
+    // New user claims the revoked name
+    await claimUsername(db, 'oldname', 'oldname', 'ccc333', null)
+
+    const record = db._records.find(r => r.username_canonical === 'oldname')!
+    expect(record.status).toBe('active')
+    expect(record.pubkey).toBe('ccc333')
+    expect(record.revoked_at).toBeNull()
+  })
+
+  it('claimUsername: claiming a reserved Vine import name should clear revoked_at', async () => {
+    const db = createStatefulMockDB([{
+      id: 1, name: 'vinestar', username_display: 'VineStar', username_canonical: 'vinestar',
+      pubkey: null, status: 'revoked', revoked_at: 1690000000,
+      reserved_reason: 'Imported from Vine account', claim_source: 'vine-import',
+      created_at: 1680000000, updated_at: 1690000000,
+    }])
+
+    await claimUsername(db, 'VineStar', 'vinestar', 'newowner999', ['wss://relay.divine.video'])
+
+    const record = db._records.find(r => r.username_canonical === 'vinestar')!
+    expect(record.status).toBe('active')
+    expect(record.pubkey).toBe('newowner999')
+    expect(record.revoked_at).toBeNull()
+  })
+
+  it('claimUsername: switching names should revoke old and activate new cleanly', async () => {
+    const db = createStatefulMockDB([{
+      id: 1, name: 'firstname', username_display: 'FirstName', username_canonical: 'firstname',
+      pubkey: 'user123', status: 'active', revoked_at: null,
+      created_at: 1700000000, updated_at: 1700000000, claimed_at: 1700000000,
+    }])
+
+    // User claims a different name -- old one gets revoked, new one is fresh INSERT
+    await claimUsername(db, 'SecondName', 'secondname', 'user123', null)
+
+    const oldRecord = db._records.find(r => r.username_canonical === 'firstname')!
+    expect(oldRecord.status).toBe('revoked')
+    expect(oldRecord.revoked_at).not.toBeNull()
+
+    const newRecord = db._records.find(r => r.username_canonical === 'secondname')!
+    expect(newRecord.status).toBe('active')
+    expect(newRecord.revoked_at).toBeNull()
+  })
+
+  it('assignUsername: assigning over a revoked record should clear revoked_at', async () => {
+    const db = createStatefulMockDB([{
+      id: 1, name: 'adminassign', username_display: 'AdminAssign', username_canonical: 'adminassign',
+      pubkey: null, status: 'revoked', revoked_at: 1700000000,
+      created_at: 1699000000, updated_at: 1700000000,
+    }])
+
+    await assignUsername(db, 'AdminAssign', 'adminassign', 'assigned123', 'admin', 'matt@divine.video')
+
+    const record = db._records.find(r => r.username_canonical === 'adminassign')!
+    expect(record.status).toBe('active')
+    expect(record.pubkey).toBe('assigned123')
+    expect(record.revoked_at).toBeNull()
+  })
+
+  it('reserveUsername: re-reserving a revoked name should clear revoked_at', async () => {
+    const db = createStatefulMockDB([{
+      id: 1, name: 'brandname', username_display: 'BrandName', username_canonical: 'brandname',
+      pubkey: 'old999', status: 'revoked', revoked_at: 1700000000,
+      created_at: 1699000000, updated_at: 1700000000,
+    }])
+
+    await reserveUsername(db, 'BrandName', 'brandname', 'brand protection', 'admin', 'matt@divine.video')
+
+    const record = db._records.find(r => r.username_canonical === 'brandname')!
+    expect(record.status).toBe('reserved')
+    expect(record.revoked_at).toBeNull()
+  })
+
+  it('createReservation: reserving over a revoked name should clear revoked_at', async () => {
+    const db = createStatefulMockDB([{
+      id: 1, name: 'expiredres', username_display: 'ExpiredRes', username_canonical: 'expiredres',
+      pubkey: null, status: 'revoked', revoked_at: 1700000000,
+      created_at: 1699000000, updated_at: 1700000000,
+    }])
+
+    await createReservation(db, 'ExpiredRes', 'expiredres', 'user@example.com', 'token123', 9999999999)
+
+    const record = db._records.find(r => r.username_canonical === 'expiredres')!
+    expect(record.status).toBe('pending-confirmation')
+    expect(record.revoked_at).toBeNull()
+  })
+
+  it('revokeUsername: should set revoked_at when revoking', async () => {
+    const db = createStatefulMockDB([{
+      id: 1, name: 'tobanned', username_display: 'ToBanned', username_canonical: 'tobanned',
+      pubkey: 'user999', status: 'active', revoked_at: null,
+      created_at: 1700000000, updated_at: 1700000000,
+    }])
+
+    await revokeUsername(db, 'tobanned', false)
+
+    const record = db._records.find(r => r.username_canonical === 'tobanned')!
+    expect(record.status).toBe('revoked')
+    expect(record.revoked_at).not.toBeNull()
+    expect(typeof record.revoked_at).toBe('number')
   })
 })
 
