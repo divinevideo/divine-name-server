@@ -114,9 +114,8 @@ function createE2EMockDB(initialUsernames: Partial<MockUsername>[] = []) {
 
               // Username lookup by canonical name or legacy name column
               if (sql.includes('username_canonical = ?') || sql.includes('name = ?')) {
-                const lookupValue = boundParams[0]
                 const found = mockUsernames.find(
-                  u => u.username_canonical === lookupValue || u.name === lookupValue
+                  u => u.username_canonical === boundParams[0] || u.name === boundParams[1]
                 )
                 return found ?? null
               }
@@ -184,7 +183,7 @@ function createE2EMockDB(initialUsernames: Partial<MockUsername>[] = []) {
               // INSERT INTO usernames (name, username_display, username_canonical, pubkey, ...)
               //   VALUES (?, ?, ?, ?, ?, 'active', 'self-service', ?, ?, ?)
               //   ON CONFLICT(username_canonical) DO UPDATE SET ... revoked_at = NULL
-              // Bound: [name(0), display(1), canonical(2), pubkey(3), relays(4), now(5), now(6), now(7)]
+              // Bound: [canonical(0), display(1), canonical(2), pubkey(3), relays(4), now(5), now(6), now(7)]
               // -------------------------------------------------------------------
               if (sql.includes('INSERT INTO usernames') && sql.includes('ON CONFLICT')) {
                 const name = boundParams[0]
