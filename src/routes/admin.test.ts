@@ -112,7 +112,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=test&sort=weird')
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -973,7 +973,7 @@ describe('Admin Stats Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/stats')
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -1001,7 +1001,7 @@ describe('Admin Notes Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ admin_notes: 'VIP creator account' }),
     })
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -1017,7 +1017,7 @@ describe('Admin Notes Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ admin_notes: 'test' }),
     })
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(404)
   })
