@@ -19,10 +19,19 @@ routes = [
 # INVITE_FAUCET_URL: base URL of the invite code faucet service (e.g. "https://faucet.example.com")
 # Set via wrangler secret put SENDGRID_API_KEY
 [vars]
+KEYCAST_URL = "https://login.divine.video"
+KEYCAST_CLIENT_ID = "divine-name-server"
+# Comma-separated hex pubkeys authorized for Keycast OAuth admin access.
+# CF Access users are authorized by the Access policy; this only applies to Keycast sessions.
+ADMIN_PUBKEYS = "81549bc0b5153b4b970fe4a3892ad185698b8b8b26ec69321a527d0644cd2898"
 # FASTLY_STORE_ID = "your-store-id" # Set as secret in production
 # ALLOWED_MINTS = "https://8333.space:3338,https://mint.minibits.cash/Bitcoin"
 # NAME_PRICE_SATS = "1000"
 # INVITE_FAUCET_URL = "https://faucet.divine.video"
+
+[[kv_namespaces]]
+binding = "SESSION_KV"
+id = "f134d6b3b36b4890a0a272e6ca392bcd"
 
 [[d1_databases]]
 binding = "DB"

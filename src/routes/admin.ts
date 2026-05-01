@@ -1,12 +1,15 @@
 // ABOUTME: Admin endpoints for username management
-// ABOUTME: Protected by Cloudflare Access, handles reserve/revoke/burn/assign
+// ABOUTME: Protected by Cloudflare Access or Keycast OAuth session
 
 import { Hono } from 'hono'
+import { getCookie } from 'hono/cookie'
 import { bech32 } from '@scure/base'
-import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getAllActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsernames, getAllTags } from '../db/queries'
+import { getSession } from '../auth/keycast-oauth'
+import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getAllActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags } from '../db/queries'
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
 import { syncUsernameToFastly, deleteUsernameFromFastly, bulkSyncToFastly } from '../utils/fastly-sync'
 import { sendAssignmentNotificationEmail } from '../utils/email'
+import authRoutes from './auth'
 
 /** Convert a 64-char hex pubkey to npub bech32 format */
 function hexToNpub(hex: string): string {
@@ -35,37 +38,81 @@ function hexToNpub(hex: string): string {
 
 type Bindings = {
   DB: D1Database
+  SESSION_KV?: KVNamespace
+  ADMIN_PUBKEYS?: string
   FASTLY_API_TOKEN?: string
   FASTLY_STORE_ID?: string
   SENDGRID_API_KEY?: string
+  KEYCAST_URL?: string
+  KEYCAST_CLIENT_ID?: string
+  BYPASS_LOCAL_AUTH?: string
+}
+
+/** Check if a pubkey is in the comma-separated ADMIN_PUBKEYS allowlist. */
+function isAdminPubkey(pubkey: string | null, adminPubkeys: string | undefined): boolean {
+  if (!pubkey || !adminPubkeys) return false
+  return adminPubkeys.split(',').map(p => p.trim().toLowerCase()).includes(pubkey.toLowerCase())
 }
 
 const admin = new Hono<{ Bindings: Bindings }>()
 
-// Defense-in-depth: verify requests come through Cloudflare Access
-// Cloudflare Access protects names.admin.divine.video at the edge,
-// but the worker is also reachable via names.divine.video which has
-// no Access policy. This middleware blocks that bypass.
+// Auth routes mounted first -- they handle their own hostname guard
+// and must be accessible without an existing session (chicken-and-egg).
+admin.route('/auth', authRoutes)
+
+// Defense-in-depth: verify requests are authenticated.
+// Accepts CF Access JWT (edge-injected) or Keycast OAuth session cookie.
+// The worker is reachable via names.divine.video (no Access policy),
+// so the hostname guard blocks that bypass regardless of auth method.
 admin.use('*', async (c, next) => {
   const url = new URL(c.req.url)
-
-  // Only allow admin API on the admin subdomain (and localhost for dev)
-  const isAdminHost = url.hostname === 'names.admin.divine.video'
-  const isLocalDev = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
+  // Only allow admin API on the admin subdomain (and localhost for dev).
+  // admin.localhost resolves to 127.0.0.1 via RFC 6761 and mirrors prod routing locally.
+  const isAdminHost = url.hostname === 'names.admin.divine.video' || url.hostname === 'admin.localhost'
+  const isLocalDev = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === 'admin.localhost'
 
   if (!isAdminHost && !isLocalDev) {
     return c.json({ ok: false, error: 'Unauthorized' }, 403)
   }
 
-  // In production, require Cloudflare Access JWT header
-  if (isAdminHost) {
-    const cfJwt = c.req.header('Cf-Access-Jwt-Assertion')
-    if (!cfJwt) {
-      return c.json({ ok: false, error: 'Unauthorized' }, 403)
+  // Auth routes handle their own security (hostname guard only).
+  // Skip the auth check so unauthenticated users can start the OAuth flow.
+  if (c.req.path.startsWith('/api/admin/auth/')) {
+    return next()
+  }
+
+  // Dev bypass, opt-in via BYPASS_LOCAL_AUTH=true in .dev.vars.
+  // Default is off so wrangler dev can exercise the real CF Access / Keycast paths
+  // against a locally-running Keycast stack.
+  if (isLocalDev && c.env.BYPASS_LOCAL_AUTH === 'true') {
+    c.set('adminEmail' as never, 'dev@local' as never)
+    return next()
+  }
+
+  // Path 1: CF Access JWT (existing, edge-injected)
+  const cfJwt = c.req.header('Cf-Access-Jwt-Assertion')
+  if (cfJwt) {
+    const email = c.req.header('Cf-Access-Authenticated-User-Email') || 'unknown'
+    c.set('adminEmail' as never, email as never)
+    return next()
+  }
+
+  // Path 2: Keycast session cookie
+  const sessionId = getCookie(c, '__session')
+  if (sessionId && c.env.SESSION_KV) {
+    const session = await getSession(c.env.SESSION_KV, sessionId)
+    if (session) {
+      // Authorization: check pubkey against admin allowlist
+      // Pattern from divine-invite-darshan (Daniel's admin_pubkeys config)
+      if (!isAdminPubkey(session.pubkey, c.env.ADMIN_PUBKEYS)) {
+        return c.json({ ok: false, error: 'Forbidden: not an admin' }, 403)
+      }
+      c.set('adminEmail' as never, session.email as never)
+      return next()
     }
   }
 
-  await next()
+  return c.json({ ok: false, error: 'Unauthorized' }, 401)
 })
 
 admin.get('/usernames/search', async (c) => {
@@ -247,7 +294,7 @@ admin.post('/username/reserve', async (c) => {
 
     // Include override reason in the reserved_reason if provided
     const finalReason = overrideReason ? `${reason} [Override: ${overrideReason}]` : reason
-    const createdBy = c.req.header('Cf-Access-Authenticated-User-Email') || null
+    const createdBy = (c.get('adminEmail' as never) as string) || null
     await reserveUsername(c.env.DB, usernameData.display, usernameData.canonical, finalReason, 'admin', createdBy)
 
     if (overrideReason) {
@@ -295,7 +342,7 @@ admin.post('/username/reserve-bulk', async (c) => {
     }
 
     // Process each name
-    const createdBy = c.req.header('Cf-Access-Authenticated-User-Email') || null
+    const createdBy = (c.get('adminEmail' as never) as string) || null
     const results = []
     for (const name of nameList) {
       try {
@@ -430,7 +477,7 @@ admin.post('/username/assign', async (c) => {
       throw error
     }
 
-    const createdBy = c.req.header('Cf-Access-Authenticated-User-Email') || null
+    const createdBy = (c.get('adminEmail' as never) as string) || null
     await assignUsername(c.env.DB, usernameData.display, usernameData.canonical, normalizedPubkey, 'admin', createdBy)
 
     // Sync to Fastly KV for edge routing
@@ -477,7 +524,7 @@ admin.post('/username/assign-bulk', async (c) => {
     }
 
     // Process each assignment
-    const createdBy = c.req.header('Cf-Access-Authenticated-User-Email') || null
+    const createdBy = (c.get('adminEmail' as never) as string) || null
     const results = []
     for (const assignment of assignments) {
       const { name, pubkey } = assignment
@@ -776,7 +823,7 @@ admin.post('/username/:name/tags', async (c) => {
     return c.json({ ok: false, error: 'tag is required' }, 400)
   }
 
-  const createdBy = c.req.header('Cf-Access-Authenticated-User-Email') || 'unknown'
+  const createdBy = (c.get('adminEmail' as never) as string) || 'unknown'
 
   const username = await getUsernameByName(c.env.DB, name)
   if (!username) return c.json({ ok: false, error: 'Username not found' }, 404)
