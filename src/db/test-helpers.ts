@@ -101,6 +101,29 @@ export function createFakeD1(records: MockRecord[]) {
                 return { count: new Set(tags.map(t => t.username_id)).size }
               }
 
+              // Consolidated stats summary query
+              if (sql.includes('all_count') && sql.includes('pending_confirmation_count')) {
+                const [sevenDaysAgo, thirtyDaysAgo, updatedSevenDaysAgo, updatedThirtyDaysAgo] = boundParams
+                const taggedIds = new Set(tags.map(t => t.username_id))
+                const vipIds = new Set(tags.filter(t => t.tag === 'vip').map(t => t.username_id))
+                return {
+                  all_count: records.length,
+                  active_count: records.filter(u => u.status === 'active').length,
+                  reserved_count: records.filter(u => u.status === 'reserved').length,
+                  revoked_count: records.filter(u => u.status === 'revoked').length,
+                  burned_count: records.filter(u => u.status === 'burned').length,
+                  pending_confirmation_count: records.filter(u => u.status === 'pending-confirmation').length,
+                  with_notes_count: records.filter(u => typeof u.admin_notes === 'string' && u.admin_notes.trim().length > 0).length,
+                  with_tags_count: records.filter(u => u.id != null && taggedIds.has(u.id)).length,
+                  untagged_count: records.filter(u => u.id == null || !taggedIds.has(u.id)).length,
+                  vip_count: records.filter(u => u.id != null && vipIds.has(u.id)).length,
+                  claimed_7d_count: records.filter(u => typeof u.claimed_at === 'number' && u.claimed_at >= sevenDaysAgo).length,
+                  claimed_30d_count: records.filter(u => typeof u.claimed_at === 'number' && u.claimed_at >= thirtyDaysAgo).length,
+                  updated_7d_count: records.filter(u => (u.updated_at || 0) >= updatedSevenDaysAgo).length,
+                  updated_30d_count: records.filter(u => (u.updated_at || 0) >= updatedThirtyDaysAgo).length,
+                }
+              }
+
               // COUNT query
               if (sql.includes('COUNT(*)')) {
                 // Search COUNT (has LIKE patterns) — handle first to avoid matching stats patterns
@@ -240,10 +263,12 @@ export function createFakeD1(records: MockRecord[]) {
             run: async () => {
               // Admin notes UPDATE
               if (sql.includes('UPDATE usernames') && sql.includes('admin_notes = ?')) {
-                const [adminNotes, updatedAt, id] = boundParams
+                const [adminNotes, updatedBy, updatedAtNotes, updatedAt, id] = boundParams
                 const rec = records.find(r => r.id === id)
                 if (rec) {
                   rec.admin_notes = adminNotes
+                  rec.admin_notes_updated_by = updatedBy
+                  rec.admin_notes_updated_at = updatedAtNotes
                   rec.updated_at = updatedAt
                 }
                 return { success: true, meta: { changes: rec ? 1 : 0 } }

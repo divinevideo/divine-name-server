@@ -6,6 +6,8 @@ import { getUsername, assignUsername, revokeUsername, addTagToUsername, removeTa
 import type { Username, TagDetail } from '../types'
 import StatusBadge from '../components/StatusBadge'
 
+const MAX_ADMIN_NOTES_LENGTH = 5000
+
 export default function UsernameDetail() {
   const { name } = useParams<{ name: string }>()
   const navigate = useNavigate()
@@ -173,7 +175,12 @@ export default function UsernameDetail() {
         setDraftNotes(savedNotes)
         setNotesSuccess('Notes saved.')
         if (username) {
-          setUsername({ ...username, admin_notes: result.admin_notes })
+          setUsername({
+            ...username,
+            admin_notes: result.admin_notes,
+            admin_notes_updated_by: result.admin_notes_updated_by || null,
+            admin_notes_updated_at: result.admin_notes_updated_at || null,
+          })
         }
       } else {
         setNotesError(result.error || 'Save failed')
@@ -237,15 +244,17 @@ export default function UsernameDetail() {
       </div>
 
       {/* Reserved banner with inline assign */}
-      {username.status === 'reserved' && !username.pubkey && (
+      {(username.status === 'reserved' || username.status === 'pending-confirmation') && !username.pubkey && (
         <div className="rounded-lg bg-amber-50 border border-amber-200 p-4 mb-6">
           <div className="flex items-start justify-between">
             <div>
               <p className="text-sm font-medium text-amber-800">
-                Reserved — no account yet
+                {username.status === 'pending-confirmation' ? 'Pending confirmation — no account yet' : 'Reserved — no account yet'}
               </p>
               <p className="mt-1 text-sm text-amber-700">
-                This name is held but not assigned to anyone. Assign a pubkey to activate it.
+                {username.status === 'pending-confirmation'
+                  ? 'This name is awaiting email confirmation and has not been assigned to anyone yet. Assign a pubkey to activate it immediately.'
+                  : 'This name is held but not assigned to anyone. Assign a pubkey to activate it.'}
                 {username.claim_source === 'vine-import' && ' Originally imported from Vine.'}
                 {username.claim_source === 'admin' && ' Manually reserved by an admin.'}
               </p>
@@ -392,8 +401,17 @@ export default function UsernameDetail() {
               setNotesSuccess(null)
             }}
             placeholder="Add internal context for trust and safety, support, or outreach..."
+            maxLength={MAX_ADMIN_NOTES_LENGTH}
             className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
           />
+          <div className="flex items-center justify-between text-xs text-gray-500">
+            <span>
+              {username.admin_notes_updated_at
+                ? `Last updated by ${username.admin_notes_updated_by || 'unknown'} on ${formatDate(username.admin_notes_updated_at)}`
+                : 'No edit history yet'}
+            </span>
+            <span>{draftNotes.length}/{MAX_ADMIN_NOTES_LENGTH}</span>
+          </div>
           {notesError && (
             <p className="text-sm text-red-600">{notesError}</p>
           )}
@@ -497,7 +515,7 @@ export default function UsernameDetail() {
         </div>
         <div className="px-6 py-4 space-y-4">
           {/* Assign Action — hidden for reserved+no-pubkey since the banner above handles it */}
-          {(username.status === 'revoked' || (username.status === 'reserved' && username.pubkey)) && (
+          {(username.status === 'revoked' || ((username.status === 'reserved' || username.status === 'pending-confirmation') && username.pubkey)) && (
             <div>
               {!showAssign ? (
                 <button
@@ -550,7 +568,7 @@ export default function UsernameDetail() {
           )}
 
           {/* Revoke Action */}
-          {(username.status === 'active' || username.status === 'reserved') && (
+          {(username.status === 'active' || username.status === 'reserved' || username.status === 'pending-confirmation') && (
             <div>
               {!showRevoke ? (
                 <button

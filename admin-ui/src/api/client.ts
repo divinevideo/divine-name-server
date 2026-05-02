@@ -265,7 +265,11 @@ export async function getUsernameStats(): Promise<UsernameStatsResponse> {
 export async function updateAdminNotes(
   name: string,
   adminNotes: string | null
-): Promise<ApiResponse & { admin_notes: string | null }> {
+): Promise<ApiResponse & {
+  admin_notes: string | null
+  admin_notes_updated_by?: string | null
+  admin_notes_updated_at?: number | null
+}> {
   const response = await fetch(`${API_BASE}/username/${encodeURIComponent(name)}/notes`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

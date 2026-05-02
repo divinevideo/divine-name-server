@@ -4,6 +4,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
 import admin from './admin'
+import { getUsernameByName } from '../db/queries'
 
 // Mock the email utility so tests don't hit SendGrid
 vi.mock('../utils/email', () => ({
@@ -66,6 +67,27 @@ describe('Admin Search Endpoint', () => {
     const json = await res.json() as any
     expect(json.ok).toBe(true)
     expect(json.results).toBeDefined()
+  })
+
+  it('should allow pending-confirmation as a status filter', async () => {
+    const app = createTestApp()
+    const db = createFakeD1([
+      {
+        id: 1, name: 'pendinguser', username_display: 'pendinguser', username_canonical: 'pendinguser',
+        pubkey: null, email: 'pending@example.com', relays: null, status: 'pending-confirmation',
+        recyclable: 0, created_at: 1700000000, updated_at: 1700000000, claimed_at: null,
+        revoked_at: null, reserved_reason: null, admin_notes: null,
+      },
+    ])
+
+    const req = new Request('http://localhost/admin/usernames/search?q=&status=pending-confirmation')
+    const res = await app.fetch(req, { DB: db, BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.results).toHaveLength(1)
+    expect(json.results[0].status).toBe('pending-confirmation')
   })
 
   it('should return 400 if query is too long', async () => {
@@ -995,18 +1017,26 @@ describe('Admin Notes Endpoint', () => {
 
   it('should update admin notes for existing username', async () => {
     const app = createTestApp()
+    const db = createMockDB()
 
     const req = new Request('http://localhost/admin/username/testuser/notes', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ admin_notes: 'VIP creator account' }),
     })
-    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    const res = await app.fetch(req, { DB: db, BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
     expect(json.ok).toBe(true)
     expect(json.admin_notes).toBe('VIP creator account')
+    expect(json.admin_notes_updated_by).toBe('dev@local')
+    expect(json.admin_notes_updated_at).toBeTypeOf('number')
+
+    const username = await getUsernameByName(db, 'testuser')
+    expect(username?.admin_notes).toBe('VIP creator account')
+    expect(username?.admin_notes_updated_by).toBe('dev@local')
+    expect(username?.admin_notes_updated_at).toBeTypeOf('number')
   })
 
   it('should return 404 for non-existent username', async () => {
@@ -1020,5 +1050,64 @@ describe('Admin Notes Endpoint', () => {
     const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(404)
+  })
+
+  it('should reject non-string admin_notes payloads', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/admin/username/testuser/notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ admin_notes: { nope: true } }),
+    })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(400)
+    const json = await res.json() as any
+    expect(json.error).toContain('string or null')
+  })
+
+  it('should reject admin_notes that exceed the max length', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/admin/username/testuser/notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ admin_notes: 'a'.repeat(5001) }),
+    })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(400)
+    const json = await res.json() as any
+    expect(json.error).toContain('5000')
+  })
+})
+
+describe('Admin Export Endpoint', () => {
+  function createTestApp() {
+    const app = new Hono<{ Bindings: { DB: D1Database; BYPASS_LOCAL_AUTH?: string } }>()
+    app.route('/admin', admin)
+    return app
+  }
+
+  it('should allow exporting pending-confirmation usernames', async () => {
+    const app = createTestApp()
+    const db = createFakeD1([
+      {
+        id: 1, name: 'pendinguser', username_display: 'pendinguser', username_canonical: 'pendinguser',
+        pubkey: null, email: 'pending@example.com', relays: null, status: 'pending-confirmation',
+        recyclable: 0, created_at: 1700000000, updated_at: 1700000000, claimed_at: null,
+        revoked_at: null, reserved_reason: null, admin_notes: null,
+      },
+    ])
+
+    const req = new Request('http://localhost/admin/export/csv?status=pending-confirmation')
+    const res = await app.fetch(req, { DB: db, BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('text/csv')
+    const csv = await res.text()
+    expect(csv).toContain('pending-confirmation')
+    expect(csv).toContain('pendinguser')
   })
 })

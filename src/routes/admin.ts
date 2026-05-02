@@ -11,6 +11,10 @@ import { syncUsernameToFastly, deleteUsernameFromFastly, bulkSyncToFastly } from
 import { sendAssignmentNotificationEmail } from '../utils/email'
 import authRoutes from './auth'
 
+const MAX_ADMIN_NOTES_LENGTH = 5000
+const VALID_ADMIN_STATUSES = ['active', 'reserved', 'revoked', 'burned', 'pending-confirmation', 'recovered'] as const
+type AdminStatusFilter = (typeof VALID_ADMIN_STATUSES)[number]
+
 /** Convert a 64-char hex pubkey to npub bech32 format */
 function hexToNpub(hex: string): string {
   try {
@@ -118,7 +122,7 @@ admin.use('*', async (c, next) => {
 admin.get('/usernames/search', async (c) => {
   try {
     const query = c.req.query('q')
-    const status = c.req.query('status') as 'active' | 'reserved' | 'revoked' | 'burned' | 'recovered' | undefined
+    const status = c.req.query('status') as AdminStatusFilter | undefined
     const sort = c.req.query('sort') as SearchSort | undefined
     const pageStr = c.req.query('page') || '1'
     const limitStr = c.req.query('limit') || '50'
@@ -133,8 +137,7 @@ admin.get('/usernames/search', async (c) => {
     }
 
     // Validate status parameter
-    const validStatuses = ['active', 'reserved', 'revoked', 'burned', 'recovered']
-    if (status && !validStatuses.includes(status)) {
+    if (status && !VALID_ADMIN_STATUSES.includes(status)) {
       return c.json({ ok: false, error: 'Invalid status parameter' }, 400)
     }
 
@@ -221,15 +224,26 @@ admin.post('/username/:name/notes', async (c) => {
     }
 
     const body = await c.req.json<{ admin_notes?: string | null }>()
+    if (body.admin_notes !== undefined && body.admin_notes !== null && typeof body.admin_notes !== 'string') {
+      return c.json({ ok: false, error: 'admin_notes must be a string or null' }, 400)
+    }
+
     const adminNotes = body.admin_notes !== undefined ? body.admin_notes : null
     const trimmed = typeof adminNotes === 'string' && adminNotes.trim() ? adminNotes.trim() : null
 
-    const updated = await updateAdminNotes(c.env.DB, name, trimmed)
+    if (trimmed && trimmed.length > MAX_ADMIN_NOTES_LENGTH) {
+      return c.json({ ok: false, error: `admin_notes must be ${MAX_ADMIN_NOTES_LENGTH} characters or less` }, 400)
+    }
+
+    const updatedBy = (c.get('adminEmail' as never) as string) || null
+    const updated = await updateAdminNotes(c.env.DB, name, trimmed, updatedBy)
     if (!updated) {
       return c.json({ ok: false, error: 'Username not found' }, 404)
     }
 
-    return c.json({ ok: true, admin_notes: trimmed })
+    console.log(`Admin notes updated for "${name}" by ${updatedBy || 'unknown'} (${trimmed?.length || 0} chars)`)
+
+    return c.json({ ok: true, ...updated })
   } catch (error) {
     console.error('Update notes error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
@@ -639,11 +653,10 @@ admin.post('/username/assign-bulk', async (c) => {
 
 admin.get('/export/csv', async (c) => {
   try {
-    const status = c.req.query('status') as 'active' | 'reserved' | 'revoked' | 'burned' | 'recovered' | undefined
+    const status = c.req.query('status') as AdminStatusFilter | undefined
 
     // Validate status parameter
-    const validStatuses = ['active', 'reserved', 'revoked', 'burned', 'recovered']
-    if (status && !validStatuses.includes(status)) {
+    if (status && !VALID_ADMIN_STATUSES.includes(status)) {
       return c.json({ ok: false, error: 'Invalid status parameter' }, 400)
     }
 

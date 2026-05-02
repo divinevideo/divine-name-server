@@ -51,7 +51,9 @@ export default function Dashboard() {
   }, [query, status, currentPage, tagFilter, sort, performSearch])
 
   useEffect(() => {
-    getUsernameStats().then(data => setStats(data)).catch(() => {})
+    getUsernameStats()
+      .then(data => setStats(data))
+      .catch((err) => console.error('Failed to load username stats:', err))
   }, [])
 
   // Loads all distinct tags once at mount for the filter dropdown.
@@ -168,6 +170,7 @@ export default function Dashboard() {
               <option value="">All Statuses</option>
               <option value="active">Active</option>
               <option value="reserved">Reserved</option>
+              <option value="pending-confirmation">Pending Confirmation</option>
               <option value="recovered">Recovered (Vine)</option>
               <option value="revoked">Revoked</option>
               <option value="burned">Burned</option>

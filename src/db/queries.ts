@@ -20,6 +20,8 @@ export interface Username {
   revoked_at: number | null
   reserved_reason: string | null
   admin_notes: string | null
+  admin_notes_updated_by: string | null
+  admin_notes_updated_at: number | null
   reservation_email: string | null
   confirmation_token: string | null
   reservation_expires_at: number | null
@@ -42,7 +44,7 @@ export interface ReservationToken {
 
 export interface SearchParams {
   query: string
-  status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'recovered'
+  status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'recovered'
   tag?: string
   sort?: SearchSort
   page?: number
@@ -388,7 +390,7 @@ export async function deleteReservedWord(
 
 export async function exportUsernamesByStatus(
   db: D1Database,
-  status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'recovered'
+  status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'recovered'
 ): Promise<Username[]> {
   if (status === 'recovered') {
     const result = await db.prepare(
@@ -667,45 +669,94 @@ export interface UsernameStats {
   top_tags: Array<{ tag: string; count: number }>
 }
 
-async function countQuery(db: D1Database, sql: string, ...params: unknown[]): Promise<number> {
-  const result = await db.prepare(sql).bind(...params).first<{ count: number }>()
-  return result?.count || 0
-}
-
 export async function getUsernameStats(db: D1Database): Promise<UsernameStats> {
   const now = Math.floor(Date.now() / 1000)
   const sevenDaysAgo = now - 7 * 24 * 60 * 60
   const thirtyDaysAgo = now - 30 * 24 * 60 * 60
 
-  const [
-    all, active, reserved, revoked, burned, pendingConfirmation,
-    withNotes, withTags, untagged, vip,
-    claimed7d, claimed30d, updated7d, updated30d,
-    topTagsResult,
-  ] = await Promise.all([
-    countQuery(db, 'SELECT COUNT(*) AS count FROM usernames'),
-    countQuery(db, 'SELECT COUNT(*) AS count FROM usernames WHERE status = ?', 'active'),
-    countQuery(db, 'SELECT COUNT(*) AS count FROM usernames WHERE status = ?', 'reserved'),
-    countQuery(db, 'SELECT COUNT(*) AS count FROM usernames WHERE status = ?', 'revoked'),
-    countQuery(db, 'SELECT COUNT(*) AS count FROM usernames WHERE status = ?', 'burned'),
-    countQuery(db, 'SELECT COUNT(*) AS count FROM usernames WHERE status = ?', 'pending-confirmation'),
-    countQuery(db, `SELECT COUNT(*) AS count FROM usernames WHERE admin_notes IS NOT NULL AND TRIM(admin_notes) != ''`),
-    countQuery(db, 'SELECT COUNT(DISTINCT username_id) AS count FROM username_tags'),
-    countQuery(db, `SELECT COUNT(*) AS count FROM usernames WHERE NOT EXISTS (SELECT 1 FROM username_tags WHERE username_tags.username_id = usernames.id)`),
-    countQuery(db, 'SELECT COUNT(DISTINCT username_id) AS count FROM username_tags WHERE tag = ?', 'vip'),
-    countQuery(db, 'SELECT COUNT(*) AS count FROM usernames WHERE claimed_at IS NOT NULL AND claimed_at >= ?', sevenDaysAgo),
-    countQuery(db, 'SELECT COUNT(*) AS count FROM usernames WHERE claimed_at IS NOT NULL AND claimed_at >= ?', thirtyDaysAgo),
-    countQuery(db, 'SELECT COUNT(*) AS count FROM usernames WHERE updated_at >= ?', sevenDaysAgo),
-    countQuery(db, 'SELECT COUNT(*) AS count FROM usernames WHERE updated_at >= ?', thirtyDaysAgo),
+  const [summary, topTagsResult] = await Promise.all([
+    db.prepare(
+      `SELECT
+         COUNT(*) AS all_count,
+         SUM(CASE WHEN u.status = 'active' THEN 1 ELSE 0 END) AS active_count,
+         SUM(CASE WHEN u.status = 'reserved' THEN 1 ELSE 0 END) AS reserved_count,
+         SUM(CASE WHEN u.status = 'revoked' THEN 1 ELSE 0 END) AS revoked_count,
+         SUM(CASE WHEN u.status = 'burned' THEN 1 ELSE 0 END) AS burned_count,
+         SUM(CASE WHEN u.status = 'pending-confirmation' THEN 1 ELSE 0 END) AS pending_confirmation_count,
+         SUM(CASE WHEN u.admin_notes IS NOT NULL AND TRIM(u.admin_notes) != '' THEN 1 ELSE 0 END) AS with_notes_count,
+         SUM(CASE WHEN tagged.username_id IS NOT NULL THEN 1 ELSE 0 END) AS with_tags_count,
+         SUM(CASE WHEN tagged.username_id IS NULL THEN 1 ELSE 0 END) AS untagged_count,
+         SUM(CASE WHEN vip.username_id IS NOT NULL THEN 1 ELSE 0 END) AS vip_count,
+         SUM(CASE WHEN u.claimed_at IS NOT NULL AND u.claimed_at >= ? THEN 1 ELSE 0 END) AS claimed_7d_count,
+         SUM(CASE WHEN u.claimed_at IS NOT NULL AND u.claimed_at >= ? THEN 1 ELSE 0 END) AS claimed_30d_count,
+         SUM(CASE WHEN u.updated_at >= ? THEN 1 ELSE 0 END) AS updated_7d_count,
+         SUM(CASE WHEN u.updated_at >= ? THEN 1 ELSE 0 END) AS updated_30d_count
+       FROM usernames u
+       LEFT JOIN (
+         SELECT DISTINCT username_id FROM username_tags
+       ) tagged ON tagged.username_id = u.id
+       LEFT JOIN (
+         SELECT DISTINCT username_id FROM username_tags WHERE tag = 'vip'
+       ) vip ON vip.username_id = u.id`
+    ).bind(sevenDaysAgo, thirtyDaysAgo, sevenDaysAgo, thirtyDaysAgo).first<{
+      all_count: number
+      active_count: number
+      reserved_count: number
+      revoked_count: number
+      burned_count: number
+      pending_confirmation_count: number
+      with_notes_count: number
+      with_tags_count: number
+      untagged_count: number
+      vip_count: number
+      claimed_7d_count: number
+      claimed_30d_count: number
+      updated_7d_count: number
+      updated_30d_count: number
+    }>(),
     db.prepare(
       'SELECT tag, COUNT(*) AS count FROM username_tags GROUP BY tag ORDER BY count DESC, tag ASC LIMIT 10'
     ).bind().all<{ tag: string; count: number }>(),
   ])
 
+  const stats = summary || {
+    all_count: 0,
+    active_count: 0,
+    reserved_count: 0,
+    revoked_count: 0,
+    burned_count: 0,
+    pending_confirmation_count: 0,
+    with_notes_count: 0,
+    with_tags_count: 0,
+    untagged_count: 0,
+    vip_count: 0,
+    claimed_7d_count: 0,
+    claimed_30d_count: 0,
+    updated_7d_count: 0,
+    updated_30d_count: 0,
+  }
+
   return {
-    totals: { all, active, reserved, revoked, burned, pending_confirmation: pendingConfirmation },
-    metadata: { with_notes: withNotes, with_tags: withTags, untagged, vip },
-    activity: { claimed_7d: claimed7d, claimed_30d: claimed30d, updated_7d: updated7d, updated_30d: updated30d },
+    totals: {
+      all: stats.all_count,
+      active: stats.active_count,
+      reserved: stats.reserved_count,
+      revoked: stats.revoked_count,
+      burned: stats.burned_count,
+      pending_confirmation: stats.pending_confirmation_count,
+    },
+    metadata: {
+      with_notes: stats.with_notes_count,
+      with_tags: stats.with_tags_count,
+      untagged: stats.untagged_count,
+      vip: stats.vip_count,
+    },
+    activity: {
+      claimed_7d: stats.claimed_7d_count,
+      claimed_30d: stats.claimed_30d_count,
+      updated_7d: stats.updated_7d_count,
+      updated_30d: stats.updated_30d_count,
+    },
     top_tags: topTagsResult.results,
   }
 }
@@ -715,14 +766,20 @@ export async function getUsernameStats(db: D1Database): Promise<UsernameStats> {
 export async function updateAdminNotes(
   db: D1Database,
   name: string,
-  adminNotes: string | null
-): Promise<boolean> {
+  adminNotes: string | null,
+  updatedBy: string | null
+): Promise<Pick<Username, 'admin_notes' | 'admin_notes_updated_by' | 'admin_notes_updated_at'> | null> {
   const username = await getUsernameByName(db, name)
-  if (!username) return false
+  if (!username) return null
 
   const now = Math.floor(Date.now() / 1000)
   await db.prepare(
-    'UPDATE usernames SET admin_notes = ?, updated_at = ? WHERE id = ?'
-  ).bind(adminNotes, now, username.id).run()
-  return true
+    'UPDATE usernames SET admin_notes = ?, admin_notes_updated_by = ?, admin_notes_updated_at = ?, updated_at = ? WHERE id = ?'
+  ).bind(adminNotes, updatedBy, now, now, username.id).run()
+
+  return {
+    admin_notes: adminNotes,
+    admin_notes_updated_by: updatedBy,
+    admin_notes_updated_at: now,
+  }
 }

@@ -2,7 +2,7 @@
 // ABOUTME: Validates search functionality with fake D1 database
 
 import { describe, it, expect } from 'vitest'
-import { searchUsernames, claimUsername, assignUsername, createReservation, reserveUsername, revokeUsername, addTag, removeTag, getTagsForUsername, getTagDetailsForUsername, getTagsForUsernames, getAllTags, getUsernameStats, updateAdminNotes, type SearchParams, type Username } from './queries'
+import { searchUsernames, claimUsername, assignUsername, createReservation, reserveUsername, revokeUsername, addTag, removeTag, getTagsForUsername, getTagDetailsForUsername, getTagsForUsernames, getAllTags, getUsernameByName, getUsernameStats, updateAdminNotes, type SearchParams, type Username } from './queries'
 import { createFakeD1, type MockRecord } from './test-helpers'
 
 const mockRecords: MockRecord[] = [
@@ -750,13 +750,20 @@ describe('updateAdminNotes', () => {
       { id: 1, name: 'alice', username_canonical: 'alice', status: 'active', created_at: 1000, updated_at: 1000 },
     ]
     const db = createFakeD1(recs)
-    const result = await updateAdminNotes(db, 'alice', 'Important creator')
-    expect(result).toBe(true)
+    const result = await updateAdminNotes(db, 'alice', 'Important creator', 'admin@divine.video')
+    expect(result?.admin_notes).toBe('Important creator')
+    expect(result?.admin_notes_updated_by).toBe('admin@divine.video')
+    expect(result?.admin_notes_updated_at).toBeTypeOf('number')
+
+    const updated = await getUsernameByName(db, 'alice')
+    expect(updated?.admin_notes).toBe('Important creator')
+    expect(updated?.admin_notes_updated_by).toBe('admin@divine.video')
+    expect(updated?.admin_notes_updated_at).toBeTypeOf('number')
   })
 
-  it('should return false for non-existent username', async () => {
+  it('should return null for non-existent username', async () => {
     const db = createFakeD1([])
-    const result = await updateAdminNotes(db, 'nobody', 'test')
-    expect(result).toBe(false)
+    const result = await updateAdminNotes(db, 'nobody', 'test', 'admin@divine.video')
+    expect(result).toBe(null)
   })
 })

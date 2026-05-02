@@ -1,5 +1,6 @@
 export type ClaimSource = 'self-service' | 'admin' | 'bulk-upload' | 'vine-import' | 'public-reservation' | 'unknown'
 export type SearchSort = 'relevance' | 'newest' | 'oldest' | 'updated'
+export type UsernameStatus = 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation'
 
 export interface TagDetail {
   tag: string
@@ -13,7 +14,7 @@ export interface Username {
   pubkey: string | null
   email: string | null
   relays: string | null
-  status: 'active' | 'reserved' | 'revoked' | 'burned'
+  status: UsernameStatus
   recyclable: number
   created_at: number
   updated_at: number
@@ -21,6 +22,8 @@ export interface Username {
   revoked_at: number | null
   reserved_reason: string | null
   admin_notes: string | null
+  admin_notes_updated_by?: string | null
+  admin_notes_updated_at?: number | null
   claim_source: ClaimSource
   created_by: string | null
   tags?: string[]
