@@ -7,7 +7,8 @@ import type {
   ReservedWord,
   BulkReserveResponse,
   ApiResponse,
-  TagDetail
+  TagDetail,
+  FastlySyncPageResponse,
 } from '../types'
 
 const API_BASE = '/api/admin'
@@ -236,6 +237,30 @@ export async function getAllTags(): Promise<{ tags: { tag: string; count: number
 
   if (!response.ok) {
     throw new Error(`Failed to fetch tags: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+// --- Fastly KV Sync ---
+
+export async function syncFastlyPage(
+  cursor?: string | null,
+  limit = 500,
+  dryRun = false
+): Promise<FastlySyncPageResponse> {
+  const response = await fetch(`${API_BASE}/sync/fastly`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      limit,
+      cursor: cursor ?? undefined,
+      dry_run: dryRun,
+    }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Fastly sync failed: ${response.statusText}`)
   }
 
   return response.json()

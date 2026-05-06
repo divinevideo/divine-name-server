@@ -2,7 +2,7 @@
 // ABOUTME: Validates search functionality with fake D1 database
 
 import { describe, it, expect } from 'vitest'
-import { searchUsernames, claimUsername, assignUsername, createReservation, reserveUsername, revokeUsername, addTag, removeTag, getTagsForUsername, getTagDetailsForUsername, getTagsForUsernames, getAllTags, type SearchParams, type Username } from './queries'
+import { searchUsernames, claimUsername, assignUsername, createReservation, reserveUsername, revokeUsername, addTag, removeTag, getTagsForUsername, getTagDetailsForUsername, getTagsForUsernames, getAllTags, getActiveUsernamesPaginated, countActiveUsernames, type SearchParams, type Username } from './queries'
 import { createFakeD1, type MockRecord } from './test-helpers'
 
 const mockRecords: MockRecord[] = [
@@ -572,6 +572,85 @@ describe('revoked_at clearing (ericartell bug)', () => {
     expect(record.status).toBe('revoked')
     expect(record.revoked_at).not.toBeNull()
     expect(typeof record.revoked_at).toBe('number')
+  })
+})
+
+function createCursorMock(records: MockRecord[]) {
+  return {
+    prepare: (sql: string) => ({
+      bind: (...params: any[]) => ({
+        all: async () => {
+          let filtered = records.filter(r => r.status === 'active')
+          if (params.length === 3) {
+            const [, afterId, limit] = params
+            filtered = filtered.filter(r => (r.id ?? 0) > afterId)
+            filtered.sort((a, b) => (a.id ?? 0) - (b.id ?? 0))
+            return { results: filtered.slice(0, limit) }
+          }
+          const limit = params[params.length - 1]
+          filtered.sort((a, b) => (a.id ?? 0) - (b.id ?? 0))
+          return { results: filtered.slice(0, limit) }
+        },
+        first: async () => {
+          const count = records.filter(r => r.status === 'active').length
+          return { count }
+        },
+      }),
+    }),
+  } as unknown as D1Database
+}
+
+const paginationRecords: MockRecord[] = [
+  { id: 1, name: 'alice', username_canonical: 'alice', pubkey: 'pk1', status: 'active', created_at: 1700000000, updated_at: 1700000000 },
+  { id: 2, name: 'bob', username_canonical: 'bob', pubkey: null, status: 'reserved', created_at: 1700000100, updated_at: 1700000100 },
+  { id: 3, name: 'charlie', username_canonical: 'charlie', pubkey: 'pk3', status: 'active', created_at: 1700000200, updated_at: 1700000200 },
+  { id: 4, name: 'dave', username_canonical: 'dave', pubkey: 'pk4', status: 'active', created_at: 1700000300, updated_at: 1700000300 },
+  { id: 5, name: 'eve', username_canonical: 'eve', pubkey: 'pk5', status: 'revoked', created_at: 1700000400, updated_at: 1700000400 },
+  { id: 6, name: 'frank', username_canonical: 'frank', pubkey: 'pk6', status: 'active', created_at: 1700000500, updated_at: 1700000500 },
+]
+
+describe('getActiveUsernamesPaginated', () => {
+  it('first page (cursor null) returns first N active users ordered by id', async () => {
+    const db = createCursorMock(paginationRecords)
+    const result = await getActiveUsernamesPaginated(db, null, 2)
+
+    expect(result).toHaveLength(2)
+    expect(result[0].name).toBe('alice')
+    expect(result[1].name).toBe('charlie')
+  })
+
+  it('next page (with cursor) returns active users after cursor id', async () => {
+    const db = createCursorMock(paginationRecords)
+    const result = await getActiveUsernamesPaginated(db, 3, 2)
+
+    expect(result).toHaveLength(2)
+    expect(result[0].name).toBe('dave')
+    expect(result[1].name).toBe('frank')
+  })
+
+  it('returns empty when cursor past last record', async () => {
+    const db = createCursorMock(paginationRecords)
+    const result = await getActiveUsernamesPaginated(db, 100, 10)
+
+    expect(result).toHaveLength(0)
+  })
+
+  it('only returns active usernames (skips reserved and revoked)', async () => {
+    const db = createCursorMock(paginationRecords)
+    const result = await getActiveUsernamesPaginated(db, null, 100)
+
+    expect(result).toHaveLength(4)
+    expect(result.every(r => r.status === 'active')).toBe(true)
+    expect(result.map(r => r.name)).toEqual(['alice', 'charlie', 'dave', 'frank'])
+  })
+})
+
+describe('countActiveUsernames', () => {
+  it('returns count of active usernames', async () => {
+    const db = createCursorMock(paginationRecords)
+    const count = await countActiveUsernames(db)
+
+    expect(count).toBe(4)
   })
 })
 

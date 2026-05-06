@@ -5,9 +5,9 @@ import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
 import { bech32 } from '@scure/base'
 import { getSession } from '../auth/keycast-oauth'
-import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getAllActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags } from '../db/queries'
+import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getActiveUsernamesPaginated, countActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags } from '../db/queries'
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
-import { syncUsernameToFastly, deleteUsernameFromFastly, bulkSyncToFastly } from '../utils/fastly-sync'
+import { syncUsernameToFastly, deleteUsernameFromFastly, syncBatch, parseRelayHints } from '../utils/fastly-sync'
 import { sendAssignmentNotificationEmail } from '../utils/email'
 import authRoutes from './auth'
 
@@ -657,40 +657,63 @@ admin.get('/export/csv', async (c) => {
   }
 })
 
-// Full sync: push all active D1 users to Fastly KV (additive only, never deletes)
+// Paginated sync: push active D1 users to Fastly KV one page at a time
 admin.post('/sync/fastly', async (c) => {
   try {
     if (!c.env.FASTLY_API_TOKEN || !c.env.FASTLY_STORE_ID) {
       return c.json({ ok: false, error: 'Fastly credentials not configured' }, 400)
     }
 
-    const activeUsers = await getAllActiveUsernames(c.env.DB)
+    const body: { limit?: number; cursor?: string | null; dry_run?: boolean } = await c.req.json().catch(() => ({}))
+    const limit = Math.min(Math.max(body.limit ?? 500, 1), 1000)
+    const cursor = body.cursor ? parseInt(body.cursor, 10) : null
+    const dryRun = body.dry_run ?? false
 
-    if (activeUsers.length === 0) {
-      return c.json({ ok: true, message: 'No active users to sync', synced: 0 })
+    if (body.cursor && (isNaN(cursor!) || cursor! < 0)) {
+      return c.json({ ok: false, error: 'Invalid cursor' }, 400)
     }
 
-    const toSync = activeUsers
-      .filter(u => u.pubkey) // Only sync users that have a pubkey
-      .map(u => ({
-        username: u.username_canonical || u.name,
-        data: {
-          pubkey: u.pubkey!,
-          relays: u.relays ? (() => { try { return JSON.parse(u.relays!) } catch { return [] } })() : [],
-          status: 'active' as const,
-          atproto_did: u.atproto_did || null,
-          atproto_state: u.atproto_state || null,
-        }
-      }))
+    const page = await getActiveUsernamesPaginated(c.env.DB, cursor, limit)
+    const totalActive = await countActiveUsernames(c.env.DB)
 
-    const results = await bulkSyncToFastly(c.env, toSync)
+    const syncable = page.filter(u => u.pubkey)
+    const nextCursor = page.length === limit ? String(page[page.length - 1].id) : null
+    const processed = cursor ? totalActive - page.length : totalActive
+    const remaining = nextCursor ? Math.max(0, totalActive - (cursor ?? 0) - page.length) : 0
+
+    if (dryRun) {
+      return c.json({
+        ok: true,
+        dry_run: true,
+        page_size: page.length,
+        syncable: syncable.length,
+        skipped: page.length - syncable.length,
+        cursor: nextCursor,
+        remaining,
+      })
+    }
+
+    const items = syncable.map(u => ({
+      username: u.username_canonical || u.name,
+      action: 'sync' as const,
+      data: {
+        pubkey: u.pubkey!,
+        relays: parseRelayHints(u.relays),
+        status: 'active' as const,
+        atproto_did: u.atproto_did || null,
+        atproto_state: u.atproto_state || null,
+      },
+    }))
+
+    const results = await syncBatch(c.env, items, { concurrency: 10 })
 
     return c.json({
       ok: true,
-      total_active: activeUsers.length,
-      synced: results.success,
+      synced: results.synced,
       failed: results.failed,
-      errors: results.errors.length > 0 ? results.errors.slice(0, 20) : undefined
+      cursor: nextCursor,
+      remaining,
+      errors: results.errors.length > 0 ? results.errors.slice(0, 20) : undefined,
     })
   } catch (error) {
     console.error('Fastly sync error:', error)

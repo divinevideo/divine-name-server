@@ -5,7 +5,7 @@ import { syncUsernameToFastly } from '../utils/fastly-sync'
 vi.mock('../utils/fastly-sync', () => ({
   syncUsernameToFastly: vi.fn().mockResolvedValue({ success: true }),
   deleteUsernameFromFastly: vi.fn().mockResolvedValue({ success: true }),
-  bulkSyncToFastly: vi.fn().mockResolvedValue({ success: 0, failed: 0, errors: [] }),
+  syncBatch: vi.fn().mockResolvedValue({ synced: 0, deleted: 0, failed: 0, errors: [] }),
   parseRelayHints: vi.fn().mockReturnValue(['wss://relay.damus.io']),
 }))
 

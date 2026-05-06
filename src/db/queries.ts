@@ -129,12 +129,39 @@ export async function claimUsername(
   ).bind(nameCanonical, nameDisplay, nameCanonical, pubkey, relaysJson, now, now, now).run()
 }
 
-export async function getAllActiveUsernames(
+export async function getActiveUsernamesPaginated(
+  db: D1Database,
+  afterId: number | null,
+  limit: number
+): Promise<Username[]> {
+  if (afterId !== null) {
+    const result = await db.prepare(
+      'SELECT * FROM usernames WHERE status = ? AND id > ? ORDER BY id LIMIT ?'
+    ).bind('active', afterId, limit).all<Username>()
+    return result.results
+  }
+  const result = await db.prepare(
+    'SELECT * FROM usernames WHERE status = ? ORDER BY id LIMIT ?'
+  ).bind('active', limit).all<Username>()
+  return result.results
+}
+
+export async function countActiveUsernames(
   db: D1Database
+): Promise<number> {
+  const result = await db.prepare(
+    'SELECT COUNT(*) as count FROM usernames WHERE status = ?'
+  ).bind('active').first<{ count: number }>()
+  return result?.count ?? 0
+}
+
+export async function getUsernamesUpdatedSince(
+  db: D1Database,
+  sinceEpoch: number
 ): Promise<Username[]> {
   const result = await db.prepare(
-    'SELECT * FROM usernames WHERE status = ?'
-  ).bind('active').all<Username>()
+    `SELECT * FROM usernames WHERE updated_at >= ? AND status IN ('active', 'revoked', 'burned')`
+  ).bind(sinceEpoch).all<Username>()
 
   return result.results
 }

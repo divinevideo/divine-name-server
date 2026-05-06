@@ -9,8 +9,8 @@ import admin from './routes/admin'
 // Auth routes are mounted inside admin.ts (same Hono app, exempt from auth middleware)
 import publicRoutes from './routes/public'
 import internalAtproto from './routes/internal-atproto'
-import { getAllActiveUsernames, expireStaleReservations } from './db/queries'
-import { bulkSyncToFastly, parseRelayHints } from './utils/fastly-sync'
+import { getUsernamesUpdatedSince, expireStaleReservations } from './db/queries'
+import { syncBatch, parseRelayHints } from './utils/fastly-sync'
 
 type Bindings = {
   DB: D1Database
@@ -105,22 +105,25 @@ export default {
       console.log(`Cron: expired ${expired} stale pending-confirmation reservations`)
     }
 
-    // Hourly reconciliation: sync all active D1 users to Fastly KV
-    const activeUsers = await getAllActiveUsernames(env.DB)
-    const toSync = activeUsers
-      .filter(u => u.pubkey)
+    // Delta sync: only sync usernames updated in the last 2 hours (overlap for safety)
+    const twoHoursAgo = Math.floor(Date.now() / 1000) - (2 * 60 * 60)
+    const recentlyChanged = await getUsernamesUpdatedSince(env.DB, twoHoursAgo)
+
+    const items = recentlyChanged
+      .filter(u => (u.status === 'active' && u.pubkey) || u.status === 'revoked' || u.status === 'burned')
       .map(u => ({
         username: u.username_canonical || u.name,
-        data: {
+        action: (u.status === 'active' ? 'sync' : 'delete') as 'sync' | 'delete',
+        data: u.status === 'active' ? {
           pubkey: u.pubkey!,
           relays: parseRelayHints(u.relays),
           status: 'active' as const,
           atproto_did: u.atproto_did,
           atproto_state: u.atproto_state,
-        }
+        } : undefined,
       }))
 
-    const results = await bulkSyncToFastly(env, toSync)
-    console.log(`Cron sync: ${results.success} synced, ${results.failed} failed out of ${toSync.length} active users`)
+    const results = await syncBatch(env, items, { concurrency: 10 })
+    console.log(`Cron delta sync: ${recentlyChanged.length} changed, ${results.synced} synced, ${results.deleted} deleted, ${results.failed} failed`)
   }
 }

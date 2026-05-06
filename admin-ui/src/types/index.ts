@@ -85,3 +85,15 @@ export interface BulkReserveResponse extends ApiResponse {
   failed?: number
   results?: BulkReserveResult[]
 }
+
+export interface FastlySyncPageResponse extends ApiResponse {
+  synced?: number
+  failed?: number
+  cursor?: string | null
+  remaining?: number
+  errors?: string[]
+  dry_run?: boolean
+  syncable?: number
+  skipped?: number
+  page_size?: number
+}

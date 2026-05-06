@@ -130,25 +130,62 @@ export async function deleteUsernameFromFastly(
   }
 }
 
-/**
- * Bulk sync multiple usernames to Fastly
- * Used for initial sync or recovery
- */
-export async function bulkSyncToFastly(
-  env: FastlyEnv,
-  usernames: Array<{ username: string; data: UsernameKVData }>
-): Promise<{ success: number; failed: number; errors: string[] }> {
-  const results = { success: 0, failed: 0, errors: [] as string[] }
+export interface SyncItem {
+  username: string
+  action: 'sync' | 'delete'
+  data?: UsernameKVData
+}
 
-  for (const { username, data } of usernames) {
-    const result = await syncUsernameToFastly(env, username, data)
-    if (result.success) {
-      results.success++
-    } else {
-      results.failed++
-      results.errors.push(`${username}: ${result.error}`)
+export interface SyncBatchResult {
+  synced: number
+  deleted: number
+  failed: number
+  errors: string[]
+}
+
+export async function syncBatch(
+  env: FastlyEnv,
+  items: SyncItem[],
+  options?: { concurrency?: number }
+): Promise<SyncBatchResult> {
+  const concurrency = options?.concurrency ?? 10
+  const result: SyncBatchResult = { synced: 0, deleted: 0, failed: 0, errors: [] }
+
+  if (items.length === 0) return result
+
+  const queue = [...items]
+  const inflight = new Set<Promise<void>>()
+
+  const processItem = async (item: SyncItem): Promise<void> => {
+    if (item.action === 'sync' && item.data) {
+      const res = await syncUsernameToFastly(env, item.username, item.data)
+      if (res.success) result.synced++
+      else {
+        result.failed++
+        result.errors.push(`${item.username}: ${res.error}`)
+      }
+    } else if (item.action === 'delete') {
+      const res = await deleteUsernameFromFastly(env, item.username)
+      if (res.success) result.deleted++
+      else {
+        result.failed++
+        result.errors.push(`${item.username}: ${res.error}`)
+      }
     }
   }
 
-  return results
+  while (queue.length > 0 || inflight.size > 0) {
+    while (queue.length > 0 && inflight.size < concurrency) {
+      const item = queue.shift()!
+      const promise = processItem(item).then(() => {
+        inflight.delete(promise)
+      })
+      inflight.add(promise)
+    }
+    if (inflight.size > 0) {
+      await Promise.race(inflight)
+    }
+  }
+
+  return result
 }
