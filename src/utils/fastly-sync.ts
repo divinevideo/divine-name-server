@@ -164,6 +164,9 @@ export async function syncBatch(
         result.failed++
         result.errors.push(`${item.username}: ${res.error}`)
       }
+    } else if (item.action === 'sync' && !item.data) {
+      result.failed++
+      result.errors.push(`${item.username}: sync action missing data`)
     } else if (item.action === 'delete') {
       const res = await deleteUsernameFromFastly(env, item.username)
       if (res.success) result.deleted++

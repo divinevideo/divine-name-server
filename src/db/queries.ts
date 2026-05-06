@@ -147,8 +147,15 @@ export async function getActiveUsernamesPaginated(
 }
 
 export async function countActiveUsernames(
-  db: D1Database
+  db: D1Database,
+  afterId?: number | null
 ): Promise<number> {
+  if (afterId) {
+    const result = await db.prepare(
+      'SELECT COUNT(*) as count FROM usernames WHERE status = ? AND id > ?'
+    ).bind('active', afterId).first<{ count: number }>()
+    return result?.count ?? 0
+  }
   const result = await db.prepare(
     'SELECT COUNT(*) as count FROM usernames WHERE status = ?'
   ).bind('active').first<{ count: number }>()

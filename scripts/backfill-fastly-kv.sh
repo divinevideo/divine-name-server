@@ -30,7 +30,8 @@ if [[ -z "$MODE" ]]; then
 fi
 
 if [[ -z "${ADMIN_TOKEN:-}" ]]; then
-  echo "Error: ADMIN_TOKEN env var required (CF Access service token or Keycast session JWT)"
+  echo "Error: ADMIN_TOKEN env var required"
+  echo "  Extract from browser: copy the 'session' cookie value from names.admin.divine.video"
   exit 1
 fi
 

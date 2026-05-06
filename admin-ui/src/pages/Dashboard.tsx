@@ -38,9 +38,9 @@ export default function Dashboard() {
     let totalFailed = 0
 
     try {
-      // Dry run first to get total count
+      // Dry run first page to get total count
       const dryRun = await syncFastlyPage(null, 500, true)
-      let estimatedTotal = (dryRun.syncable ?? 0) + (dryRun.remaining ?? 0)
+      const estimatedTotal = dryRun.total ?? 0
       setSyncProgress(p => ({ ...p, total: estimatedTotal }))
 
       // Now sync for real

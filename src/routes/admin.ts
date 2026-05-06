@@ -674,17 +674,18 @@ admin.post('/sync/fastly', async (c) => {
     }
 
     const page = await getActiveUsernamesPaginated(c.env.DB, cursor, limit)
-    const totalActive = await countActiveUsernames(c.env.DB)
 
     const syncable = page.filter(u => u.pubkey)
     const nextCursor = page.length === limit ? String(page[page.length - 1].id) : null
-    const processed = cursor ? totalActive - page.length : totalActive
-    const remaining = nextCursor ? Math.max(0, totalActive - (cursor ?? 0) - page.length) : 0
+    const lastId = page.length > 0 ? page[page.length - 1].id : cursor
+    const remaining = nextCursor ? await countActiveUsernames(c.env.DB, lastId) : 0
 
     if (dryRun) {
+      const totalActive = await countActiveUsernames(c.env.DB)
       return c.json({
         ok: true,
         dry_run: true,
+        total: totalActive,
         page_size: page.length,
         syncable: syncable.length,
         skipped: page.length - syncable.length,
@@ -710,6 +711,7 @@ admin.post('/sync/fastly', async (c) => {
     return c.json({
       ok: true,
       synced: results.synced,
+      deleted: results.deleted,
       failed: results.failed,
       cursor: nextCursor,
       remaining,
