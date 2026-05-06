@@ -7,7 +7,7 @@ import { bech32 } from '@scure/base'
 import { getSession } from '../auth/keycast-oauth'
 import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getActiveUsernamesPaginated, countActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags } from '../db/queries'
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
-import { syncUsernameToFastly, deleteUsernameFromFastly, syncBatch, parseRelayHints } from '../utils/fastly-sync'
+import { syncUsernameToFastly, deleteUsernameFromFastly, syncBatch, parseRelayHints, readUsernameFromFastly, syncAndVerifyUsername } from '../utils/fastly-sync'
 import { sendAssignmentNotificationEmail } from '../utils/email'
 import authRoutes from './auth'
 
@@ -412,14 +412,14 @@ admin.post('/username/revoke', async (c) => {
 
     await revokeUsername(c.env.DB, usernameData.canonical, burn)
 
-    // Sync to Fastly - mark as revoked/burned or delete
+    // Sync to Fastly with verification (delete if burned, update status if revoked)
     c.executionCtx.waitUntil(
       burn
         ? deleteUsernameFromFastly(c.env, usernameData.canonical)
-        : syncUsernameToFastly(c.env, usernameData.canonical, {
+        : syncAndVerifyUsername(c.env, usernameData.canonical, {
             pubkey: existing.pubkey || '',
             relays: [],
-            status: burn ? 'burned' : 'revoked',
+            status: 'revoked',
             atproto_did: null,
             atproto_state: null,
           })
@@ -480,9 +480,9 @@ admin.post('/username/assign', async (c) => {
     const createdBy = (c.get('adminEmail' as never) as string) || null
     await assignUsername(c.env.DB, usernameData.display, usernameData.canonical, normalizedPubkey, 'admin', createdBy)
 
-    // Sync to Fastly KV for edge routing
+    // Sync to Fastly KV with read-back verification
     c.executionCtx.waitUntil(
-      syncUsernameToFastly(c.env, usernameData.canonical, {
+      syncAndVerifyUsername(c.env, usernameData.canonical, {
         pubkey: normalizedPubkey,
         relays: [],
         status: 'active',
@@ -563,7 +563,7 @@ admin.post('/username/assign-bulk', async (c) => {
 
         await assignUsername(c.env.DB, usernameData.display, usernameData.canonical, normalizedPubkey, 'bulk-upload', createdBy)
 
-        // Sync to Fastly (fire and forget)
+        // Sync to Fastly — no read-back verification on bulk to avoid doubling API calls
         c.executionCtx.waitUntil(
           syncUsernameToFastly(c.env, usernameData.canonical, {
             pubkey: normalizedPubkey,
@@ -811,11 +811,11 @@ admin.post('/username/set-atproto', async (c) => {
       `UPDATE usernames SET atproto_did = ?, atproto_state = ?, updated_at = ? WHERE username_canonical = ? OR name = ?`
     ).bind(atproto_did || null, atproto_state || null, now, canonical, name).run()
 
-    // Sync to Fastly KV
+    // Sync to Fastly KV with verification
     if (existing.status === 'active' && existing.pubkey) {
-      const relays = existing.relays ? (() => { try { return JSON.parse(existing.relays!) } catch { return [] } })() : []
+      const relays = parseRelayHints(existing.relays)
       c.executionCtx.waitUntil(
-        syncUsernameToFastly(c.env, canonical, {
+        syncAndVerifyUsername(c.env, canonical, {
           pubkey: existing.pubkey,
           relays,
           status: 'active',
@@ -833,6 +833,123 @@ admin.post('/username/set-atproto', async (c) => {
     })
   } catch (error) {
     console.error('Set ATProto error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+// --- NIP-05 / Fastly KV Status ---
+
+admin.get('/username/:name/nip05-status', async (c) => {
+  try {
+    const name = c.req.param('name')
+    if (!name) {
+      return c.json({ ok: false, error: 'Name parameter is required' }, 400)
+    }
+
+    const canonical = name.toLowerCase()
+    const existing = await getUsernameByName(c.env.DB, canonical)
+    if (!existing) {
+      return c.json({ ok: false, error: 'Username not found' }, 404)
+    }
+
+    if (existing.status !== 'active' || !existing.pubkey) {
+      return c.json({
+        ok: true,
+        status: 'not_applicable',
+        reason: existing.status !== 'active'
+          ? `Username status is ${existing.status}`
+          : 'No pubkey assigned',
+      })
+    }
+
+    if (!c.env.FASTLY_API_TOKEN || !c.env.FASTLY_STORE_ID) {
+      return c.json({ ok: true, status: 'error', detail: 'Fastly credentials not configured' })
+    }
+
+    const fastly = await readUsernameFromFastly(c.env, canonical)
+    if (!fastly.success) {
+      return c.json({ ok: true, status: 'error', detail: fastly.error })
+    }
+
+    if (!fastly.data) {
+      return c.json({ ok: true, status: 'missing' })
+    }
+
+    // Only compare pubkey + status — these drive NIP-05 resolution correctness
+    const pubkeyMatch = fastly.data.pubkey === existing.pubkey
+    const statusMatch = fastly.data.status === existing.status
+
+    if (pubkeyMatch && statusMatch) {
+      return c.json({ ok: true, status: 'synced', fastly: fastly.data })
+    }
+
+    return c.json({
+      ok: true,
+      status: 'mismatch',
+      fastly: fastly.data,
+      db: { pubkey: existing.pubkey, status: existing.status },
+    })
+  } catch (error) {
+    console.error('NIP-05 status error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.post('/username/:name/sync-to-fastly', async (c) => {
+  try {
+    const name = c.req.param('name')
+    if (!name) {
+      return c.json({ ok: false, error: 'Name parameter is required' }, 400)
+    }
+
+    if (!c.env.FASTLY_API_TOKEN || !c.env.FASTLY_STORE_ID) {
+      return c.json({ ok: false, error: 'Fastly credentials not configured' }, 400)
+    }
+
+    const canonical = name.toLowerCase()
+    const existing = await getUsernameByName(c.env.DB, canonical)
+    if (!existing) {
+      return c.json({ ok: false, error: 'Username not found' }, 404)
+    }
+
+    if (existing.status === 'burned') {
+      const deleteResult = await deleteUsernameFromFastly(c.env, canonical)
+      return c.json({
+        ok: true,
+        action: 'deleted',
+        success: deleteResult.success,
+        verified: deleteResult.success,
+        error: deleteResult.error,
+      })
+    }
+
+    if (existing.status !== 'active' || !existing.pubkey) {
+      return c.json({
+        ok: false,
+        error: existing.status !== 'active'
+          ? `Cannot sync: username status is ${existing.status}`
+          : 'Cannot sync: no pubkey assigned',
+      }, 400)
+    }
+
+    const relays = parseRelayHints(existing.relays)
+    const result = await syncAndVerifyUsername(c.env, canonical, {
+      pubkey: existing.pubkey,
+      relays,
+      status: 'active',
+      atproto_did: existing.atproto_did || null,
+      atproto_state: existing.atproto_state || null,
+    })
+
+    return c.json({
+      ok: true,
+      action: 'synced',
+      success: result.success,
+      verified: result.verified,
+      error: result.error,
+    })
+  } catch (error) {
+    console.error('Single username Fastly sync error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
   }
 })

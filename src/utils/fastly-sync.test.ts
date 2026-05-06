@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
 
-import { syncBatch, type SyncItem, type FastlyEnv } from './fastly-sync'
+import { syncBatch, readUsernameFromFastly, syncAndVerifyUsername, type SyncItem, type FastlyEnv } from './fastly-sync'
 
 const env: FastlyEnv = {
   FASTLY_API_TOKEN: 'test-token',
@@ -93,5 +93,98 @@ describe('syncBatch', () => {
     expect(result.failed).toBe(1)
     expect(result.errors[0]).toContain('alice')
     expect(mockFetch).not.toHaveBeenCalled()
+  })
+})
+
+describe('readUsernameFromFastly', () => {
+  it('should return data for existing key', async () => {
+    const kvData = { pubkey: 'abc123', relays: [], status: 'active' }
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => kvData,
+    })
+
+    const result = await readUsernameFromFastly(env, 'alice')
+
+    expect(result.success).toBe(true)
+    expect(result.data).toEqual(kvData)
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining('user%3Aalice'),
+      expect.objectContaining({ method: 'GET' })
+    )
+  })
+
+  it('should return undefined data for 404', async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 404, text: async () => 'not found' })
+
+    const result = await readUsernameFromFastly(env, 'nonexistent')
+
+    expect(result.success).toBe(true)
+    expect(result.data).toBeUndefined()
+  })
+
+  it('should return error for non-404 failures', async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 500, text: async () => 'server error' })
+
+    const result = await readUsernameFromFastly(env, 'alice')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('500')
+  })
+
+  it('should return error when config is missing', async () => {
+    const result = await readUsernameFromFastly({}, 'alice')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('missing')
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+})
+
+describe('syncAndVerifyUsername', () => {
+  const data = { pubkey: 'abc123', relays: [] as string[], status: 'active' as const }
+
+  it('should return verified:true when read-back matches', async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => '' })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => data })
+
+    const result = await syncAndVerifyUsername(env, 'alice', data)
+
+    expect(result.success).toBe(true)
+    expect(result.verified).toBe(true)
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('should return verified:false when read-back has mismatch', async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => '' })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ ...data, pubkey: 'different' }) })
+
+    const result = await syncAndVerifyUsername(env, 'alice', data)
+
+    expect(result.success).toBe(true)
+    expect(result.verified).toBe(false)
+  })
+
+  it('should return verified:false when key missing after write', async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => '' })
+      .mockResolvedValueOnce({ ok: false, status: 404, text: async () => 'not found' })
+
+    const result = await syncAndVerifyUsername(env, 'alice', data)
+
+    expect(result.success).toBe(true)
+    expect(result.verified).toBe(false)
+  })
+
+  it('should return success:false when sync itself fails', async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 500, text: async () => 'error' })
+
+    const result = await syncAndVerifyUsername(env, 'alice', data)
+
+    expect(result.success).toBe(false)
+    expect(result.verified).toBe(false)
   })
 })

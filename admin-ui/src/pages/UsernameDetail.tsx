@@ -2,8 +2,8 @@
 // ABOUTME: Shows all metadata and provides actions like assign, revoke, burn
 import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { getUsername, assignUsername, revokeUsername, addTagToUsername, removeTagFromUsername, getAllTags } from '../api/client'
-import type { Username, TagDetail } from '../types'
+import { getUsername, assignUsername, revokeUsername, addTagToUsername, removeTagFromUsername, getAllTags, getNip05Status, resyncToFastly } from '../api/client'
+import type { Username, TagDetail, Nip05StatusResponse } from '../types'
 import StatusBadge from '../components/StatusBadge'
 
 export default function UsernameDetail() {
@@ -23,6 +23,12 @@ export default function UsernameDetail() {
   const [burnOnRevoke, setBurnOnRevoke] = useState(false)
   const [revokeLoading, setRevokeLoading] = useState(false)
 
+  // NIP-05 / Fastly sync states
+  const [nip05Status, setNip05Status] = useState<Nip05StatusResponse | null>(null)
+  const [nip05Loading, setNip05Loading] = useState(false)
+  const [syncLoading, setSyncLoading] = useState(false)
+  const [syncResult, setSyncResult] = useState<string | null>(null)
+
   // Tag states
   const [tags, setTags] = useState<string[]>([])
   const [tagDetails, setTagDetails] = useState<TagDetail[]>([])
@@ -31,8 +37,41 @@ export default function UsernameDetail() {
   const [allKnownTags, setAllKnownTags] = useState<{ tag: string; count: number }[]>([])
   const tagContainerRef = useRef<HTMLDivElement>(null)
 
+  const loadNip05Status = async () => {
+    if (!name) return
+    setNip05Loading(true)
+    try {
+      const result = await getNip05Status(name)
+      setNip05Status(result)
+    } catch {
+      setNip05Status(null)
+    } finally {
+      setNip05Loading(false)
+    }
+  }
+
+  const handleResync = async () => {
+    if (!name) return
+    setSyncLoading(true)
+    setSyncResult(null)
+    try {
+      const result = await resyncToFastly(name)
+      if (result.ok && result.success) {
+        setSyncResult(result.verified ? 'Synced and verified' : 'Synced (verification pending)')
+      } else {
+        setSyncResult(result.error || 'Sync failed')
+      }
+      loadNip05Status()
+    } catch (err) {
+      setSyncResult(err instanceof Error ? err.message : 'Sync failed')
+    } finally {
+      setSyncLoading(false)
+    }
+  }
+
   useEffect(() => {
     loadUsername()
+    loadNip05Status()
     getAllTags().then(data => setAllKnownTags(data.tags || [])).catch(() => {})
   }, [name])
 
@@ -351,6 +390,47 @@ export default function UsernameDetail() {
               <p className="mt-1 text-sm text-gray-900">{username.created_by}</p>
             </div>
           )}
+
+          <div>
+            <p className="text-sm font-medium text-gray-500">Fastly KV Status</p>
+            <div className="mt-1 flex items-center gap-2">
+              {nip05Loading ? (
+                <span className="text-sm text-gray-400">Checking...</span>
+              ) : !nip05Status ? (
+                <span className="text-sm text-gray-400">Unable to check</span>
+              ) : nip05Status.status === 'synced' ? (
+                <span className="inline-flex items-center gap-1 text-sm text-green-700">
+                  <span className="w-2 h-2 rounded-full bg-green-500" />
+                  Synced
+                </span>
+              ) : nip05Status.status === 'missing' ? (
+                <span className="inline-flex items-center gap-1 text-sm text-amber-700">
+                  <span className="w-2 h-2 rounded-full bg-amber-500" />
+                  Missing from Fastly
+                </span>
+              ) : nip05Status.status === 'mismatch' ? (
+                <span className="inline-flex items-center gap-1 text-sm text-red-700">
+                  <span className="w-2 h-2 rounded-full bg-red-500" />
+                  Mismatch
+                </span>
+              ) : nip05Status.status === 'not_applicable' ? (
+                <span className="text-sm text-gray-400">N/A — {nip05Status.reason}</span>
+              ) : nip05Status.status === 'error' ? (
+                <span className="inline-flex items-center gap-1 text-sm text-red-600">
+                  <span className="w-2 h-2 rounded-full bg-red-400" />
+                  Error: {nip05Status.detail}
+                </span>
+              ) : null}
+              <button
+                onClick={loadNip05Status}
+                disabled={nip05Loading}
+                className="text-xs text-blue-600 hover:text-blue-800 disabled:opacity-50"
+                title="Refresh status"
+              >
+                Refresh
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -486,6 +566,24 @@ export default function UsernameDetail() {
                     </button>
                   </div>
                 </form>
+              )}
+            </div>
+          )}
+
+          {/* Re-sync to Fastly */}
+          {username.status === 'active' && username.pubkey && (
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleResync}
+                disabled={syncLoading}
+                className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+              >
+                {syncLoading ? 'Syncing...' : 'Re-sync to Fastly'}
+              </button>
+              {syncResult && (
+                <span className={`text-sm ${syncResult.startsWith('Synced') ? 'text-green-600' : 'text-red-600'}`}>
+                  {syncResult}
+                </span>
               )}
             </div>
           )}

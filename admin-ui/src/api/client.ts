@@ -9,6 +9,8 @@ import type {
   ApiResponse,
   TagDetail,
   FastlySyncPageResponse,
+  Nip05StatusResponse,
+  ResyncResponse,
 } from '../types'
 
 const API_BASE = '/api/admin'
@@ -237,6 +239,30 @@ export async function getAllTags(): Promise<{ tags: { tag: string; count: number
 
   if (!response.ok) {
     throw new Error(`Failed to fetch tags: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+// --- NIP-05 / Fastly KV Status ---
+
+export async function getNip05Status(name: string): Promise<Nip05StatusResponse> {
+  const response = await fetch(`${API_BASE}/username/${encodeURIComponent(name)}/nip05-status`)
+
+  if (!response.ok) {
+    throw new Error(`NIP-05 status check failed: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+export async function resyncToFastly(name: string): Promise<ResyncResponse> {
+  const response = await fetch(`${API_BASE}/username/${encodeURIComponent(name)}/sync-to-fastly`, {
+    method: 'POST',
+  })
+
+  if (!response.ok) {
+    throw new Error(`Re-sync failed: ${response.statusText}`)
   }
 
   return response.json()

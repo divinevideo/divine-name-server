@@ -17,7 +17,7 @@ import {
   findSpentProofs,
   storeSpentProofs
 } from '../db/queries'
-import { syncUsernameToFastly, deleteUsernameFromFastly } from '../utils/fastly-sync'
+import { syncAndVerifyUsername, deleteUsernameFromFastly } from '../utils/fastly-sync'
 import { sendReservationConfirmationEmail } from '../utils/email'
 import {
   parseCashuToken,
@@ -485,9 +485,9 @@ username.post('/claim', async (c) => {
     // Claim the username
     await claimUsername(c.env.DB, nameDisplay, nameCanonical, pubkey, relays)
 
-    // Sync to Fastly KV for edge routing (async, don't block response)
+    // Sync to Fastly KV with read-back verification (async, don't block response)
     c.executionCtx.waitUntil(
-      syncUsernameToFastly(c.env, nameCanonical, {
+      syncAndVerifyUsername(c.env, nameCanonical, {
         pubkey,
         relays: relays || [],
         status: 'active',

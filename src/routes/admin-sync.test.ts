@@ -1,20 +1,24 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 
-const { getActiveUsernamesPaginated, countActiveUsernames, syncBatch } = vi.hoisted(() => ({
+const { getActiveUsernamesPaginated, countActiveUsernames, getUsernameByName, syncBatch, readUsernameFromFastly, syncAndVerifyUsername, deleteUsernameFromFastly } = vi.hoisted(() => ({
   getActiveUsernamesPaginated: vi.fn(),
   countActiveUsernames: vi.fn(),
+  getUsernameByName: vi.fn(),
   syncBatch: vi.fn(),
+  readUsernameFromFastly: vi.fn(),
+  syncAndVerifyUsername: vi.fn(),
+  deleteUsernameFromFastly: vi.fn(),
 }))
 
 vi.mock('../db/queries', async () => {
   const actual = await vi.importActual<typeof import('../db/queries')>('../db/queries')
-  return { ...actual, getActiveUsernamesPaginated, countActiveUsernames }
+  return { ...actual, getActiveUsernamesPaginated, countActiveUsernames, getUsernameByName }
 })
 
 vi.mock('../utils/fastly-sync', async () => {
   const actual = await vi.importActual<typeof import('../utils/fastly-sync')>('../utils/fastly-sync')
-  return { ...actual, syncBatch }
+  return { ...actual, syncBatch, readUsernameFromFastly, syncAndVerifyUsername, deleteUsernameFromFastly }
 })
 
 vi.mock('../utils/email', () => ({
@@ -201,5 +205,149 @@ describe('POST /admin/sync/fastly', () => {
     const bob = syncItems.find((i: any) => i.username === 'bob')
     expect(bob.data.atproto_did).toBe('did:plc:bob')
     expect(bob.data.atproto_state).toBe('ready')
+  })
+})
+
+describe('GET /admin/username/:name/nip05-status', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('returns synced when Fastly matches DB', async () => {
+    getUsernameByName.mockResolvedValue({ name: 'alice', pubkey: 'pk1', status: 'active', relays: null })
+    readUsernameFromFastly.mockResolvedValue({ success: true, data: { pubkey: 'pk1', status: 'active', relays: [] } })
+
+    const app = createTestApp()
+    const req = new Request('http://localhost/admin/username/alice/nip05-status')
+    const res = await app.fetch(req, baseEnv, ctx)
+    const json = await res.json() as any
+
+    expect(json.ok).toBe(true)
+    expect(json.status).toBe('synced')
+  })
+
+  it('returns mismatch when pubkey differs', async () => {
+    getUsernameByName.mockResolvedValue({ name: 'alice', pubkey: 'pk1', status: 'active', relays: null })
+    readUsernameFromFastly.mockResolvedValue({ success: true, data: { pubkey: 'wrong', status: 'active', relays: [] } })
+
+    const app = createTestApp()
+    const req = new Request('http://localhost/admin/username/alice/nip05-status')
+    const res = await app.fetch(req, baseEnv, ctx)
+    const json = await res.json() as any
+
+    expect(json.status).toBe('mismatch')
+    expect(json.fastly.pubkey).toBe('wrong')
+    expect(json.db.pubkey).toBe('pk1')
+  })
+
+  it('returns missing when key not in Fastly', async () => {
+    getUsernameByName.mockResolvedValue({ name: 'alice', pubkey: 'pk1', status: 'active', relays: null })
+    readUsernameFromFastly.mockResolvedValue({ success: true, data: undefined })
+
+    const app = createTestApp()
+    const req = new Request('http://localhost/admin/username/alice/nip05-status')
+    const res = await app.fetch(req, baseEnv, ctx)
+    const json = await res.json() as any
+
+    expect(json.status).toBe('missing')
+  })
+
+  it('returns not_applicable for non-active usernames', async () => {
+    getUsernameByName.mockResolvedValue({ name: 'alice', pubkey: 'pk1', status: 'revoked', relays: null })
+
+    const app = createTestApp()
+    const req = new Request('http://localhost/admin/username/alice/nip05-status')
+    const res = await app.fetch(req, baseEnv, ctx)
+    const json = await res.json() as any
+
+    expect(json.status).toBe('not_applicable')
+    expect(readUsernameFromFastly).not.toHaveBeenCalled()
+  })
+
+  it('returns not_applicable for active usernames without pubkey', async () => {
+    getUsernameByName.mockResolvedValue({ name: 'alice', pubkey: null, status: 'active', relays: null })
+
+    const app = createTestApp()
+    const req = new Request('http://localhost/admin/username/alice/nip05-status')
+    const res = await app.fetch(req, baseEnv, ctx)
+    const json = await res.json() as any
+
+    expect(json.status).toBe('not_applicable')
+  })
+
+  it('returns 404 for unknown username', async () => {
+    getUsernameByName.mockResolvedValue(null)
+
+    const app = createTestApp()
+    const req = new Request('http://localhost/admin/username/unknown/nip05-status')
+    const res = await app.fetch(req, baseEnv, ctx)
+
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('POST /admin/username/:name/sync-to-fastly', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('syncs active username and returns verified result', async () => {
+    getUsernameByName.mockResolvedValue({ name: 'alice', pubkey: 'pk1', status: 'active', relays: '["wss://r.damus.io"]', atproto_did: null, atproto_state: null })
+    syncAndVerifyUsername.mockResolvedValue({ success: true, verified: true })
+
+    const app = createTestApp()
+    const req = new Request('http://localhost/admin/username/alice/sync-to-fastly', { method: 'POST' })
+    const res = await app.fetch(req, baseEnv, ctx)
+    const json = await res.json() as any
+
+    expect(json.ok).toBe(true)
+    expect(json.action).toBe('synced')
+    expect(json.verified).toBe(true)
+    expect(syncAndVerifyUsername).toHaveBeenCalledWith(
+      expect.anything(),
+      'alice',
+      expect.objectContaining({ pubkey: 'pk1', status: 'active' })
+    )
+  })
+
+  it('deletes burned username from Fastly', async () => {
+    getUsernameByName.mockResolvedValue({ name: 'alice', pubkey: 'pk1', status: 'burned' })
+    deleteUsernameFromFastly.mockResolvedValue({ success: true })
+
+    const app = createTestApp()
+    const req = new Request('http://localhost/admin/username/alice/sync-to-fastly', { method: 'POST' })
+    const res = await app.fetch(req, baseEnv, ctx)
+    const json = await res.json() as any
+
+    expect(json.action).toBe('deleted')
+    expect(deleteUsernameFromFastly).toHaveBeenCalledWith(expect.anything(), 'alice')
+  })
+
+  it('returns 400 for reserved username without pubkey', async () => {
+    getUsernameByName.mockResolvedValue({ name: 'reserved1', pubkey: null, status: 'reserved' })
+
+    const app = createTestApp()
+    const req = new Request('http://localhost/admin/username/reserved1/sync-to-fastly', { method: 'POST' })
+    const res = await app.fetch(req, baseEnv, ctx)
+
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 404 for unknown username', async () => {
+    getUsernameByName.mockResolvedValue(null)
+
+    const app = createTestApp()
+    const req = new Request('http://localhost/admin/username/unknown/sync-to-fastly', { method: 'POST' })
+    const res = await app.fetch(req, baseEnv, ctx)
+
+    expect(res.status).toBe(404)
+  })
+
+  it('returns 400 when Fastly config is missing', async () => {
+    const app = createTestApp()
+    const req = new Request('http://localhost/admin/username/alice/sync-to-fastly', { method: 'POST' })
+    const res = await app.fetch(req, { ...baseEnv, FASTLY_API_TOKEN: undefined, FASTLY_STORE_ID: undefined }, ctx)
+
+    expect(res.status).toBe(400)
   })
 })

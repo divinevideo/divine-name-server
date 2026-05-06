@@ -130,6 +130,73 @@ export async function deleteUsernameFromFastly(
   }
 }
 
+export async function readUsernameFromFastly(
+  env: FastlyEnv,
+  username: string
+): Promise<{ success: boolean; data?: UsernameKVData; error?: string }> {
+  if (!env.FASTLY_API_TOKEN || !env.FASTLY_STORE_ID) {
+    return { success: false, error: 'Fastly sync configuration is missing' }
+  }
+
+  const kvKey = `user:${username}`
+  const url = `${FASTLY_API_BASE}/resources/stores/kv/${env.FASTLY_STORE_ID}/keys/${encodeURIComponent(kvKey)}`
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Fastly-Key': env.FASTLY_API_TOKEN,
+      },
+    })
+
+    if (response.status === 404) {
+      return { success: true, data: undefined }
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      return { success: false, error: `Fastly API error: ${response.status} ${errorText}` }
+    }
+
+    const data = await response.json() as UsernameKVData
+    return { success: true, data }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error'
+    return { success: false, error: message }
+  }
+}
+
+export async function syncAndVerifyUsername(
+  env: FastlyEnv,
+  username: string,
+  data: UsernameKVData
+): Promise<{ success: boolean; verified: boolean; error?: string }> {
+  const syncResult = await syncUsernameToFastly(env, username, data)
+  if (!syncResult.success) {
+    return { success: false, verified: false, error: syncResult.error }
+  }
+
+  const verifyResult = await readUsernameFromFastly(env, username)
+  if (!verifyResult.success) {
+    console.warn(`Fastly verify read failed for ${username}: ${verifyResult.error}`)
+    return { success: true, verified: false }
+  }
+
+  if (!verifyResult.data) {
+    console.error(`Fastly verify FAILED for ${username}: key missing after successful write`)
+    return { success: true, verified: false }
+  }
+
+  // Only verify pubkey + status — these drive NIP-05 resolution correctness.
+  // Relay hints and atproto metadata are best-effort and not worth flagging.
+  if (verifyResult.data.pubkey !== data.pubkey || verifyResult.data.status !== data.status) {
+    console.error(`Fastly verify FAILED for ${username}: wrote pubkey=${data.pubkey},status=${data.status} but read pubkey=${verifyResult.data.pubkey},status=${verifyResult.data.status}`)
+    return { success: true, verified: false }
+  }
+
+  return { success: true, verified: true }
+}
+
 export interface SyncItem {
   username: string
   action: 'sync' | 'delete'
