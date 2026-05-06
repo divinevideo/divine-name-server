@@ -5,11 +5,15 @@ import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
 import { bech32 } from '@scure/base'
 import { getSession } from '../auth/keycast-oauth'
-import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getAllActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags } from '../db/queries'
+import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getAllActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags, getUsernameStats, updateAdminNotes, type SearchSort } from '../db/queries'
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
 import { syncUsernameToFastly, deleteUsernameFromFastly, bulkSyncToFastly } from '../utils/fastly-sync'
 import { sendAssignmentNotificationEmail } from '../utils/email'
 import authRoutes from './auth'
+
+const MAX_ADMIN_NOTES_LENGTH = 5000
+const VALID_ADMIN_STATUSES = ['active', 'reserved', 'revoked', 'burned', 'pending-confirmation', 'recovered'] as const
+type AdminStatusFilter = (typeof VALID_ADMIN_STATUSES)[number]
 
 /** Convert a 64-char hex pubkey to npub bech32 format */
 function hexToNpub(hex: string): string {
@@ -118,7 +122,8 @@ admin.use('*', async (c, next) => {
 admin.get('/usernames/search', async (c) => {
   try {
     const query = c.req.query('q')
-    const status = c.req.query('status') as 'active' | 'reserved' | 'revoked' | 'burned' | 'recovered' | undefined
+    const status = c.req.query('status') as AdminStatusFilter | undefined
+    const sort = c.req.query('sort') as SearchSort | undefined
     const pageStr = c.req.query('page') || '1'
     const limitStr = c.req.query('limit') || '50'
 
@@ -132,9 +137,14 @@ admin.get('/usernames/search', async (c) => {
     }
 
     // Validate status parameter
-    const validStatuses = ['active', 'reserved', 'revoked', 'burned', 'recovered']
-    if (status && !validStatuses.includes(status)) {
+    if (status && !VALID_ADMIN_STATUSES.includes(status)) {
       return c.json({ ok: false, error: 'Invalid status parameter' }, 400)
+    }
+
+    // Validate sort parameter
+    const validSorts: SearchSort[] = ['relevance', 'newest', 'oldest', 'updated']
+    if (sort && !validSorts.includes(sort)) {
+      return c.json({ ok: false, error: 'Invalid sort parameter' }, 400)
     }
 
     // Validate page parameter
@@ -154,7 +164,7 @@ admin.get('/usernames/search', async (c) => {
 
     const tagRaw = c.req.query('tag')
     const tag = tagRaw && tagRaw.length <= 50 ? tagRaw : undefined
-    const result = await searchUsernames(c.env.DB, { query, status, tag, page, limit: cappedLimit })
+    const result = await searchUsernames(c.env.DB, { query, status, tag, sort, page, limit: cappedLimit })
 
     // Batch-load tags for result set
     const ids = result.results.map((r: any) => r.id).filter(Boolean)
@@ -171,6 +181,16 @@ admin.get('/usernames/search', async (c) => {
     })
   } catch (error) {
     console.error('Search error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.get('/usernames/stats', async (c) => {
+  try {
+    const stats = await getUsernameStats(c.env.DB)
+    return c.json({ ok: true, ...stats })
+  } catch (error) {
+    console.error('Username stats error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
   }
 })
@@ -192,6 +212,40 @@ admin.get('/username/:name', async (c) => {
     return c.json({ ok: true, username: { ...username, tags, tag_details: tagDetails } })
   } catch (error) {
     console.error('Username lookup error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.post('/username/:name/notes', async (c) => {
+  try {
+    const name = c.req.param('name')
+    if (!name) {
+      return c.json({ ok: false, error: 'Name parameter is required' }, 400)
+    }
+
+    const body = await c.req.json<{ admin_notes?: string | null }>()
+    if (body.admin_notes !== undefined && body.admin_notes !== null && typeof body.admin_notes !== 'string') {
+      return c.json({ ok: false, error: 'admin_notes must be a string or null' }, 400)
+    }
+
+    const adminNotes = body.admin_notes !== undefined ? body.admin_notes : null
+    const trimmed = typeof adminNotes === 'string' && adminNotes.trim() ? adminNotes.trim() : null
+
+    if (trimmed && trimmed.length > MAX_ADMIN_NOTES_LENGTH) {
+      return c.json({ ok: false, error: `admin_notes must be ${MAX_ADMIN_NOTES_LENGTH} characters or less` }, 400)
+    }
+
+    const updatedBy = (c.get('adminEmail' as never) as string) || null
+    const updated = await updateAdminNotes(c.env.DB, name, trimmed, updatedBy)
+    if (!updated) {
+      return c.json({ ok: false, error: 'Username not found' }, 404)
+    }
+
+    console.log(`Admin notes updated for "${name}" by ${updatedBy || 'unknown'} (${trimmed?.length || 0} chars)`)
+
+    return c.json({ ok: true, ...updated })
+  } catch (error) {
+    console.error('Update notes error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
   }
 })
@@ -599,11 +653,10 @@ admin.post('/username/assign-bulk', async (c) => {
 
 admin.get('/export/csv', async (c) => {
   try {
-    const status = c.req.query('status') as 'active' | 'reserved' | 'revoked' | 'burned' | 'recovered' | undefined
+    const status = c.req.query('status') as AdminStatusFilter | undefined
 
     // Validate status parameter
-    const validStatuses = ['active', 'reserved', 'revoked', 'burned', 'recovered']
-    if (status && !validStatuses.includes(status)) {
+    if (status && !VALID_ADMIN_STATUSES.includes(status)) {
       return c.json({ ok: false, error: 'Invalid status parameter' }, 400)
     }
 

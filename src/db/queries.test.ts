@@ -2,7 +2,7 @@
 // ABOUTME: Validates search functionality with fake D1 database
 
 import { describe, it, expect } from 'vitest'
-import { searchUsernames, claimUsername, assignUsername, createReservation, reserveUsername, revokeUsername, addTag, removeTag, getTagsForUsername, getTagDetailsForUsername, getTagsForUsernames, getAllTags, type SearchParams, type Username } from './queries'
+import { searchUsernames, claimUsername, assignUsername, createReservation, reserveUsername, revokeUsername, addTag, removeTag, getTagsForUsername, getTagDetailsForUsername, getTagsForUsernames, getAllTags, getUsernameByName, getUsernameStats, updateAdminNotes, type SearchParams, type Username } from './queries'
 import { createFakeD1, type MockRecord } from './test-helpers'
 
 const mockRecords: MockRecord[] = [
@@ -675,5 +675,95 @@ describe('username tags', () => {
     expect(tagMap.get(1)).toEqual(['vip'])
     expect(tagMap.get(2)).toEqual(['vine-legacy'])
     expect(tagMap.has(3)).toBe(false)
+  })
+})
+
+describe('search sort', () => {
+  it('should support oldest-first sorting', async () => {
+    const db = createFakeD1(mockRecords)
+    const result = await searchUsernames(db, { query: '', sort: 'oldest' })
+    expect(result.results[0].name).toBe('alice')
+    expect(result.results[result.results.length - 1].name).toBe('vineuser')
+  })
+
+  it('should support updated sorting', async () => {
+    const recs: MockRecord[] = [
+      { id: 1, name: 'old', username_canonical: 'old', status: 'active', created_at: 1000, updated_at: 9000 },
+      { id: 2, name: 'new', username_canonical: 'new', status: 'active', created_at: 9000, updated_at: 1000 },
+    ]
+    const db = createFakeD1(recs)
+    const result = await searchUsernames(db, { query: '', sort: 'updated' })
+    expect(result.results[0].name).toBe('old')
+  })
+})
+
+describe('search across notes and tags', () => {
+  it('should find usernames by admin_notes content', async () => {
+    const recs: MockRecord[] = [
+      { id: 1, name: 'alice', username_canonical: 'alice', status: 'active', admin_notes: 'VIP creator account', created_at: 1000, updated_at: 1000 },
+      { id: 2, name: 'bob', username_canonical: 'bob', status: 'active', created_at: 2000, updated_at: 2000 },
+    ]
+    const db = createFakeD1(recs)
+    const result = await searchUsernames(db, { query: 'VIP' })
+    expect(result.results).toHaveLength(1)
+    expect(result.results[0].name).toBe('alice')
+  })
+
+  it('should find usernames by tag content', async () => {
+    const recs: MockRecord[] = [
+      { id: 1, name: 'alice', username_canonical: 'alice', status: 'active', created_at: 1000, updated_at: 1000 },
+      { id: 2, name: 'bob', username_canonical: 'bob', status: 'active', created_at: 2000, updated_at: 2000 },
+    ]
+    const db = createFakeD1(recs)
+    await addTag(db, 1, 'creator', 'admin')
+    const result = await searchUsernames(db, { query: 'creator' })
+    expect(result.results).toHaveLength(1)
+    expect(result.results[0].name).toBe('alice')
+  })
+})
+
+describe('getUsernameStats', () => {
+  it('should return totals and metadata counts', async () => {
+    const recs: MockRecord[] = [
+      { id: 1, name: 'a', username_canonical: 'a', status: 'active', admin_notes: 'some note', created_at: 1000, updated_at: 1000 },
+      { id: 2, name: 'b', username_canonical: 'b', status: 'reserved', created_at: 2000, updated_at: 2000 },
+      { id: 3, name: 'c', username_canonical: 'c', status: 'pending-confirmation', created_at: 3000, updated_at: 3000 },
+    ]
+    const db = createFakeD1(recs)
+    await addTag(db, 1, 'vip', 'admin')
+    const stats = await getUsernameStats(db)
+    expect(stats.totals.all).toBe(3)
+    expect(stats.totals.active).toBe(1)
+    expect(stats.totals.reserved).toBe(1)
+    expect(stats.totals.pending_confirmation).toBe(1)
+    expect(stats.metadata.with_notes).toBe(1)
+    expect(stats.metadata.with_tags).toBe(1)
+    expect(stats.metadata.untagged).toBe(2)
+    expect(stats.metadata.vip).toBe(1)
+    expect(stats.top_tags).toContainEqual({ tag: 'vip', count: 1 })
+  })
+})
+
+describe('updateAdminNotes', () => {
+  it('should update admin_notes for an existing username', async () => {
+    const recs: MockRecord[] = [
+      { id: 1, name: 'alice', username_canonical: 'alice', status: 'active', created_at: 1000, updated_at: 1000 },
+    ]
+    const db = createFakeD1(recs)
+    const result = await updateAdminNotes(db, 'alice', 'Important creator', 'admin@divine.video')
+    expect(result?.admin_notes).toBe('Important creator')
+    expect(result?.admin_notes_updated_by).toBe('admin@divine.video')
+    expect(result?.admin_notes_updated_at).toBeTypeOf('number')
+
+    const updated = await getUsernameByName(db, 'alice')
+    expect(updated?.admin_notes).toBe('Important creator')
+    expect(updated?.admin_notes_updated_by).toBe('admin@divine.video')
+    expect(updated?.admin_notes_updated_at).toBeTypeOf('number')
+  })
+
+  it('should return null for non-existent username', async () => {
+    const db = createFakeD1([])
+    const result = await updateAdminNotes(db, 'nobody', 'test', 'admin@divine.video')
+    expect(result).toBe(null)
   })
 })

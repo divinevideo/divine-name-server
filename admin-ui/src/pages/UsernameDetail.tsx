@@ -2,9 +2,11 @@
 // ABOUTME: Shows all metadata and provides actions like assign, revoke, burn
 import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { getUsername, assignUsername, revokeUsername, addTagToUsername, removeTagFromUsername, getAllTags } from '../api/client'
+import { getUsername, assignUsername, revokeUsername, addTagToUsername, removeTagFromUsername, getAllTags, updateAdminNotes } from '../api/client'
 import type { Username, TagDetail } from '../types'
 import StatusBadge from '../components/StatusBadge'
+
+const MAX_ADMIN_NOTES_LENGTH = 5000
 
 export default function UsernameDetail() {
   const { name } = useParams<{ name: string }>()
@@ -30,6 +32,12 @@ export default function UsernameDetail() {
   const [showSuggestions, setShowSuggestions] = useState(false)
   const [allKnownTags, setAllKnownTags] = useState<{ tag: string; count: number }[]>([])
   const tagContainerRef = useRef<HTMLDivElement>(null)
+
+  // Notes states
+  const [draftNotes, setDraftNotes] = useState('')
+  const [notesSaving, setNotesSaving] = useState(false)
+  const [notesError, setNotesError] = useState<string | null>(null)
+  const [notesSuccess, setNotesSuccess] = useState<string | null>(null)
 
   useEffect(() => {
     loadUsername()
@@ -57,6 +65,7 @@ export default function UsernameDetail() {
         setUsername(result.username)
         setTags(result.username.tags || [])
         setTagDetails(result.username.tag_details || [])
+        setDraftNotes(result.username.admin_notes || '')
       } else {
         setError(result.error || 'Username not found')
       }
@@ -154,6 +163,35 @@ export default function UsernameDetail() {
     return `Added by ${who} on ${date}`
   }
 
+  const handleSaveNotes = async () => {
+    if (!name) return
+    setNotesSaving(true)
+    setNotesError(null)
+    setNotesSuccess(null)
+    try {
+      const result = await updateAdminNotes(name, draftNotes.trim() || null)
+      if (result.ok) {
+        const savedNotes = result.admin_notes || ''
+        setDraftNotes(savedNotes)
+        setNotesSuccess('Notes saved.')
+        if (username) {
+          setUsername({
+            ...username,
+            admin_notes: result.admin_notes,
+            admin_notes_updated_by: result.admin_notes_updated_by || null,
+            admin_notes_updated_at: result.admin_notes_updated_at || null,
+          })
+        }
+      } else {
+        setNotesError(result.error || 'Save failed')
+      }
+    } catch (err) {
+      setNotesError(err instanceof Error ? err.message : 'Save failed')
+    } finally {
+      setNotesSaving(false)
+    }
+  }
+
   const filteredSuggestions = allKnownTags
     .filter(t => !tags.includes(t.tag))
     .filter(t => !tagInput || t.tag.includes(tagInput.toLowerCase()))
@@ -206,15 +244,17 @@ export default function UsernameDetail() {
       </div>
 
       {/* Reserved banner with inline assign */}
-      {username.status === 'reserved' && !username.pubkey && (
+      {(username.status === 'reserved' || username.status === 'pending-confirmation') && !username.pubkey && (
         <div className="rounded-lg bg-amber-50 border border-amber-200 p-4 mb-6">
           <div className="flex items-start justify-between">
             <div>
               <p className="text-sm font-medium text-amber-800">
-                Reserved — no account yet
+                {username.status === 'pending-confirmation' ? 'Pending confirmation — no account yet' : 'Reserved — no account yet'}
               </p>
               <p className="mt-1 text-sm text-amber-700">
-                This name is held but not assigned to anyone. Assign a pubkey to activate it.
+                {username.status === 'pending-confirmation'
+                  ? 'This name is awaiting email confirmation and has not been assigned to anyone yet. Assign a pubkey to activate it immediately.'
+                  : 'This name is held but not assigned to anyone. Assign a pubkey to activate it.'}
                 {username.claim_source === 'vine-import' && ' Originally imported from Vine.'}
                 {username.claim_source === 'admin' && ' Manually reserved by an admin.'}
               </p>
@@ -333,13 +373,6 @@ export default function UsernameDetail() {
             </div>
           )}
 
-          {username.admin_notes && (
-            <div>
-              <p className="text-sm font-medium text-gray-500">Admin Notes</p>
-              <p className="mt-1 text-sm text-gray-900">{username.admin_notes}</p>
-            </div>
-          )}
-
           <div>
             <p className="text-sm font-medium text-gray-500">Source</p>
             <p className="mt-1 text-sm text-gray-900">{username.claim_source}</p>
@@ -351,6 +384,50 @@ export default function UsernameDetail() {
               <p className="mt-1 text-sm text-gray-900">{username.created_by}</p>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Internal Notes Card */}
+      <div className="bg-white shadow rounded-lg overflow-hidden mb-6">
+        <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
+          <h3 className="text-lg font-medium text-gray-900">Internal Notes</h3>
+        </div>
+        <div className="px-6 py-4 space-y-3">
+          <textarea
+            rows={4}
+            value={draftNotes}
+            onChange={(e) => {
+              setDraftNotes(e.target.value)
+              setNotesSuccess(null)
+            }}
+            placeholder="Add internal context for trust and safety, support, or outreach..."
+            maxLength={MAX_ADMIN_NOTES_LENGTH}
+            className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
+          />
+          <div className="flex items-center justify-between text-xs text-gray-500">
+            <span>
+              {username.admin_notes_updated_at
+                ? `Last updated by ${username.admin_notes_updated_by || 'unknown'} on ${formatDate(username.admin_notes_updated_at)}`
+                : 'No edit history yet'}
+            </span>
+            <span>{draftNotes.length}/{MAX_ADMIN_NOTES_LENGTH}</span>
+          </div>
+          {notesError && (
+            <p className="text-sm text-red-600">{notesError}</p>
+          )}
+          {notesSuccess && (
+            <p className="text-sm text-green-600">{notesSuccess}</p>
+          )}
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={handleSaveNotes}
+              disabled={notesSaving}
+              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+            >
+              {notesSaving ? 'Saving...' : 'Save Notes'}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -438,7 +515,7 @@ export default function UsernameDetail() {
         </div>
         <div className="px-6 py-4 space-y-4">
           {/* Assign Action — hidden for reserved+no-pubkey since the banner above handles it */}
-          {(username.status === 'revoked' || (username.status === 'reserved' && username.pubkey)) && (
+          {(username.status === 'revoked' || ((username.status === 'reserved' || username.status === 'pending-confirmation') && username.pubkey)) && (
             <div>
               {!showAssign ? (
                 <button
@@ -491,7 +568,7 @@ export default function UsernameDetail() {
           )}
 
           {/* Revoke Action */}
-          {(username.status === 'active' || username.status === 'reserved') && (
+          {(username.status === 'active' || username.status === 'reserved' || username.status === 'pending-confirmation') && (
             <div>
               {!showRevoke ? (
                 <button

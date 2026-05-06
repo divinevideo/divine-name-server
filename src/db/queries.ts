@@ -2,6 +2,7 @@
 // ABOUTME: Provides type-safe D1 database operations
 
 export type ClaimSource = 'self-service' | 'admin' | 'bulk-upload' | 'vine-import' | 'public-reservation' | 'unknown'
+export type SearchSort = 'relevance' | 'newest' | 'oldest' | 'updated'
 
 export interface Username {
   id: number
@@ -19,6 +20,8 @@ export interface Username {
   revoked_at: number | null
   reserved_reason: string | null
   admin_notes: string | null
+  admin_notes_updated_by: string | null
+  admin_notes_updated_at: number | null
   reservation_email: string | null
   confirmation_token: string | null
   reservation_expires_at: number | null
@@ -41,8 +44,9 @@ export interface ReservationToken {
 
 export interface SearchParams {
   query: string
-  status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'recovered'
+  status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'recovered'
   tag?: string
+  sort?: SearchSort
   page?: number
   limit?: number
 }
@@ -229,7 +233,7 @@ export async function searchUsernames(
   db: D1Database,
   params: SearchParams
 ): Promise<SearchResult> {
-  const { query, status, page = 1, limit = 50 } = params
+  const { query, status, sort = 'relevance', page = 1, limit = 50 } = params
   const offset = (page - 1) * limit
 
   // Build WHERE clause
@@ -237,11 +241,11 @@ export async function searchUsernames(
   const queryParams: any[] = []
   const escapedQuery = query && query.length > 0 ? escapeLikePattern(query) : ''
 
-  // If query is empty, don't filter by name/pubkey/email
+  // Search across name, pubkey, email, admin_notes, and tags
   if (escapedQuery) {
     const searchPattern = `%${escapedQuery}%`
-    whereClause = `(name LIKE ? OR username_display LIKE ? OR username_canonical LIKE ? OR pubkey LIKE ? OR email LIKE ?)`
-    queryParams.push(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern)
+    whereClause = `(name LIKE ? OR username_display LIKE ? OR username_canonical LIKE ? OR pubkey LIKE ? OR email LIKE ? OR admin_notes LIKE ? OR EXISTS (SELECT 1 FROM username_tags ut WHERE ut.username_id = usernames.id AND ut.tag LIKE ?))`
+    queryParams.push(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern)
   }
 
   // Add status filter if provided
@@ -286,19 +290,41 @@ export async function searchUsernames(
   const total = countResult?.count || 0
   const totalPages = Math.ceil(total / limit)
 
-  // Get paginated results
-  // When searching by name, score by match quality: exact > prefix > substring
+  // Build ORDER BY clause based on sort parameter
+  // Bind order: ...queryParams, ...orderParams, limit, offset
   let orderClause = 'created_at DESC'
   const orderParams: any[] = []
-  if (escapedQuery) {
+
+  if (sort === 'oldest') {
+    orderClause = 'created_at ASC'
+  } else if (sort === 'updated') {
+    orderClause = 'updated_at DESC, created_at DESC'
+  } else if (sort === 'newest') {
+    orderClause = 'created_at DESC'
+  } else if (escapedQuery) {
+    // sort === 'relevance' with a search query: rank by match quality
     const canonical = query!.toLowerCase()
     const prefixPattern = `${escapedQuery}%`
+    const containsPattern = `%${escapedQuery}%`
     orderClause = `CASE
       WHEN username_canonical = ? THEN 0
       WHEN username_canonical LIKE ? THEN 1
-      ELSE 2
-    END, created_at DESC`
-    orderParams.push(canonical, prefixPattern)
+      WHEN name LIKE ? OR username_display LIKE ? THEN 2
+      WHEN EXISTS (SELECT 1 FROM username_tags ut WHERE ut.username_id = usernames.id AND ut.tag = ?) THEN 3
+      WHEN EXISTS (SELECT 1 FROM username_tags ut WHERE ut.username_id = usernames.id AND ut.tag LIKE ?) THEN 4
+      WHEN pubkey = ? OR email = ? THEN 5
+      WHEN pubkey LIKE ? OR email LIKE ? THEN 6
+      WHEN admin_notes LIKE ? THEN 7
+      ELSE 8
+    END, updated_at DESC, created_at DESC`
+    orderParams.push(
+      canonical, prefixPattern,
+      containsPattern, containsPattern,
+      canonical, containsPattern,
+      canonical, canonical,
+      containsPattern, containsPattern,
+      containsPattern
+    )
   }
 
   const results = await db.prepare(
@@ -364,7 +390,7 @@ export async function deleteReservedWord(
 
 export async function exportUsernamesByStatus(
   db: D1Database,
-  status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'recovered'
+  status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'recovered'
 ): Promise<Username[]> {
   if (status === 'recovered') {
     const result = await db.prepare(
@@ -615,4 +641,145 @@ export async function getAllTags(
     'SELECT tag, COUNT(*) as count FROM username_tags GROUP BY tag ORDER BY tag'
   ).bind().all<{ tag: string; count: number }>()
   return result.results
+}
+
+// --- Stats ---
+
+export interface UsernameStats {
+  totals: {
+    all: number
+    active: number
+    reserved: number
+    revoked: number
+    burned: number
+    pending_confirmation: number
+  }
+  metadata: {
+    with_notes: number
+    with_tags: number
+    untagged: number
+    vip: number
+  }
+  activity: {
+    claimed_7d: number
+    claimed_30d: number
+    updated_7d: number
+    updated_30d: number
+  }
+  top_tags: Array<{ tag: string; count: number }>
+}
+
+export async function getUsernameStats(db: D1Database): Promise<UsernameStats> {
+  const now = Math.floor(Date.now() / 1000)
+  const sevenDaysAgo = now - 7 * 24 * 60 * 60
+  const thirtyDaysAgo = now - 30 * 24 * 60 * 60
+
+  const [summary, topTagsResult] = await Promise.all([
+    db.prepare(
+      `SELECT
+         COUNT(*) AS all_count,
+         SUM(CASE WHEN u.status = 'active' THEN 1 ELSE 0 END) AS active_count,
+         SUM(CASE WHEN u.status = 'reserved' THEN 1 ELSE 0 END) AS reserved_count,
+         SUM(CASE WHEN u.status = 'revoked' THEN 1 ELSE 0 END) AS revoked_count,
+         SUM(CASE WHEN u.status = 'burned' THEN 1 ELSE 0 END) AS burned_count,
+         SUM(CASE WHEN u.status = 'pending-confirmation' THEN 1 ELSE 0 END) AS pending_confirmation_count,
+         SUM(CASE WHEN u.admin_notes IS NOT NULL AND TRIM(u.admin_notes) != '' THEN 1 ELSE 0 END) AS with_notes_count,
+         SUM(CASE WHEN tagged.username_id IS NOT NULL THEN 1 ELSE 0 END) AS with_tags_count,
+         SUM(CASE WHEN tagged.username_id IS NULL THEN 1 ELSE 0 END) AS untagged_count,
+         SUM(CASE WHEN vip.username_id IS NOT NULL THEN 1 ELSE 0 END) AS vip_count,
+         SUM(CASE WHEN u.claimed_at IS NOT NULL AND u.claimed_at >= ? THEN 1 ELSE 0 END) AS claimed_7d_count,
+         SUM(CASE WHEN u.claimed_at IS NOT NULL AND u.claimed_at >= ? THEN 1 ELSE 0 END) AS claimed_30d_count,
+         SUM(CASE WHEN u.updated_at >= ? THEN 1 ELSE 0 END) AS updated_7d_count,
+         SUM(CASE WHEN u.updated_at >= ? THEN 1 ELSE 0 END) AS updated_30d_count
+       FROM usernames u
+       LEFT JOIN (
+         SELECT DISTINCT username_id FROM username_tags
+       ) tagged ON tagged.username_id = u.id
+       LEFT JOIN (
+         SELECT DISTINCT username_id FROM username_tags WHERE tag = 'vip'
+       ) vip ON vip.username_id = u.id`
+    ).bind(sevenDaysAgo, thirtyDaysAgo, sevenDaysAgo, thirtyDaysAgo).first<{
+      all_count: number
+      active_count: number
+      reserved_count: number
+      revoked_count: number
+      burned_count: number
+      pending_confirmation_count: number
+      with_notes_count: number
+      with_tags_count: number
+      untagged_count: number
+      vip_count: number
+      claimed_7d_count: number
+      claimed_30d_count: number
+      updated_7d_count: number
+      updated_30d_count: number
+    }>(),
+    db.prepare(
+      'SELECT tag, COUNT(*) AS count FROM username_tags GROUP BY tag ORDER BY count DESC, tag ASC LIMIT 10'
+    ).bind().all<{ tag: string; count: number }>(),
+  ])
+
+  const stats = summary || {
+    all_count: 0,
+    active_count: 0,
+    reserved_count: 0,
+    revoked_count: 0,
+    burned_count: 0,
+    pending_confirmation_count: 0,
+    with_notes_count: 0,
+    with_tags_count: 0,
+    untagged_count: 0,
+    vip_count: 0,
+    claimed_7d_count: 0,
+    claimed_30d_count: 0,
+    updated_7d_count: 0,
+    updated_30d_count: 0,
+  }
+
+  return {
+    totals: {
+      all: stats.all_count,
+      active: stats.active_count,
+      reserved: stats.reserved_count,
+      revoked: stats.revoked_count,
+      burned: stats.burned_count,
+      pending_confirmation: stats.pending_confirmation_count,
+    },
+    metadata: {
+      with_notes: stats.with_notes_count,
+      with_tags: stats.with_tags_count,
+      untagged: stats.untagged_count,
+      vip: stats.vip_count,
+    },
+    activity: {
+      claimed_7d: stats.claimed_7d_count,
+      claimed_30d: stats.claimed_30d_count,
+      updated_7d: stats.updated_7d_count,
+      updated_30d: stats.updated_30d_count,
+    },
+    top_tags: topTagsResult.results,
+  }
+}
+
+// --- Admin notes ---
+
+export async function updateAdminNotes(
+  db: D1Database,
+  name: string,
+  adminNotes: string | null,
+  updatedBy: string | null
+): Promise<Pick<Username, 'admin_notes' | 'admin_notes_updated_by' | 'admin_notes_updated_at'> | null> {
+  const username = await getUsernameByName(db, name)
+  if (!username) return null
+
+  const now = Math.floor(Date.now() / 1000)
+  await db.prepare(
+    'UPDATE usernames SET admin_notes = ?, admin_notes_updated_by = ?, admin_notes_updated_at = ?, updated_at = ? WHERE id = ?'
+  ).bind(adminNotes, updatedBy, now, now, username.id).run()
+
+  return {
+    admin_notes: adminNotes,
+    admin_notes_updated_by: updatedBy,
+    admin_notes_updated_at: now,
+  }
 }
