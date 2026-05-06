@@ -150,7 +150,7 @@ export async function countActiveUsernames(
   db: D1Database,
   afterId?: number | null
 ): Promise<number> {
-  if (afterId) {
+  if (afterId !== undefined && afterId !== null) {
     const result = await db.prepare(
       'SELECT COUNT(*) as count FROM usernames WHERE status = ? AND id > ?'
     ).bind('active', afterId).first<{ count: number }>()

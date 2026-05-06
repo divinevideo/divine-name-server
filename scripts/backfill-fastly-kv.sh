@@ -59,7 +59,7 @@ while true; do
   response=$(curl -s -w "\n%{http_code}" \
     -X POST "$API_BASE/api/admin/sync/fastly" \
     -H "Content-Type: application/json" \
-    -H "Cookie: session=$ADMIN_TOKEN" \
+    -H "Cookie: __session=$ADMIN_TOKEN" \
     -d "$payload")
 
   http_code=$(echo "$response" | tail -1)
