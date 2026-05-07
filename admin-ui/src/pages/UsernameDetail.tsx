@@ -59,7 +59,11 @@ export default function UsernameDetail() {
     try {
       const result = await resyncToFastly(name)
       if (result.ok && result.success) {
-        setSyncResult(result.verified ? 'Synced and verified' : (result.error || 'Synced, verification failed'))
+        if (result.action === 'deleted') {
+          setSyncResult('Deleted from Fastly')
+        } else {
+          setSyncResult(result.verified ? 'Synced and verified' : (result.error || 'Synced, verification failed'))
+        }
       } else {
         setSyncResult(result.error || 'Sync failed')
       }
@@ -648,7 +652,7 @@ export default function UsernameDetail() {
           )}
 
           {/* Re-sync to Fastly */}
-          {username.status === 'active' && username.pubkey && (
+          {(username.status === 'active' || username.status === 'revoked' || username.status === 'burned') && (
             <div className="flex items-center gap-3">
               <button
                 onClick={handleResync}

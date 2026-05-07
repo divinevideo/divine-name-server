@@ -81,7 +81,7 @@ while true; do
   if [[ "$DRY_RUN" == "true" ]]; then
     syncable=$(echo "$body" | jq -r '.syncable')
     skipped=$(echo "$body" | jq -r '.skipped')
-    remaining=$(echo "$body" | jq -r '.remaining')
+    remaining=$(echo "$body" | jq -r '.remaining // 0')
     cursor=$(echo "$body" | jq -r '.cursor // "null"')
     total_synced=$((total_synced + syncable))
     total_skipped=$((total_skipped + skipped))
@@ -89,7 +89,7 @@ while true; do
   else
     synced=$(echo "$body" | jq -r '.synced')
     failed=$(echo "$body" | jq -r '.failed')
-    remaining=$(echo "$body" | jq -r '.remaining')
+    remaining=$(echo "$body" | jq -r '.remaining // 0')
     cursor=$(echo "$body" | jq -r '.cursor // "null"')
     total_synced=$((total_synced + synced))
     total_failed=$((total_failed + failed))

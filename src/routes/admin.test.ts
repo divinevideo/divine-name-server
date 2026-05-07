@@ -1,7 +1,7 @@
 // ABOUTME: Tests for admin endpoints
 // ABOUTME: Validates search endpoint input validation, error handling, and hostname auth guard
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import admin from './admin'
 import { getUsernameByName } from '../db/queries'
@@ -11,6 +11,13 @@ vi.mock('../utils/email', () => ({
   sendAssignmentNotificationEmail: vi.fn().mockResolvedValue(undefined),
   sendReservationConfirmationEmail: vi.fn().mockResolvedValue(undefined)
 }))
+
+const mockFetch = vi.fn()
+vi.stubGlobal('fetch', mockFetch)
+
+beforeEach(() => {
+  mockFetch.mockReset()
+})
 
 import { createFakeD1 } from '../db/test-helpers'
 
@@ -1109,5 +1116,157 @@ describe('Admin Export Endpoint', () => {
     const csv = await res.text()
     expect(csv).toContain('pending-confirmation')
     expect(csv).toContain('pendinguser')
+  })
+})
+
+describe('Fastly sync endpoints', () => {
+  function createSyncTestApp() {
+    const app = new Hono<{ Bindings: { DB: D1Database; FASTLY_API_TOKEN?: string; FASTLY_STORE_ID?: string; BYPASS_LOCAL_AUTH?: string } }>()
+    app.route('/admin', admin)
+    return app
+  }
+
+  it('POST /admin/sync/fastly dry run should include remaining count', async () => {
+    const app = createSyncTestApp()
+    const db = createFakeD1([
+      {
+        id: 1, name: 'alice', username_display: 'alice', username_canonical: 'alice',
+        pubkey: 'pk1', email: 'alice@example.com', relays: null, status: 'active',
+        recyclable: 0, created_at: 1700000000, updated_at: 1700000000, claimed_at: 1700000000,
+        revoked_at: null, reserved_reason: null, admin_notes: null,
+      },
+      {
+        id: 2, name: 'bob', username_display: 'bob', username_canonical: 'bob',
+        pubkey: 'pk2', email: 'bob@example.com', relays: null, status: 'active',
+        recyclable: 0, created_at: 1700000010, updated_at: 1700000010, claimed_at: 1700000010,
+        revoked_at: null, reserved_reason: null, admin_notes: null,
+      },
+    ])
+
+    const req = new Request('http://localhost/admin/sync/fastly', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dry_run: true, limit: 10 }),
+    })
+    const res = await app.fetch(
+      req,
+      {
+        DB: db,
+        FASTLY_API_TOKEN: 'test-token',
+        FASTLY_STORE_ID: 'test-store',
+        BYPASS_LOCAL_AUTH: 'true',
+      },
+      { waitUntil: () => {}, passThroughOnException: () => {}, props: {} }
+    )
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.dry_run).toBe(true)
+    expect(json.remaining).toBe(0)
+    expect(json.syncable).toBe(2)
+    expect(json.skipped).toBe(0)
+  })
+
+  it('POST /admin/username/:name/sync-to-fastly should delete revoked usernames in Fastly', async () => {
+    const app = createSyncTestApp()
+    const db = createFakeD1([
+      {
+        id: 1, name: 'revoked-user', username_display: 'revoked-user', username_canonical: 'revoked-user',
+        pubkey: 'pk1', email: 'revoked@example.com', relays: JSON.stringify(['wss://relay.divine.video']), status: 'revoked',
+        recyclable: 0, created_at: 1700000000, updated_at: 1700000000, claimed_at: 1700000000,
+        revoked_at: 1700000100, reserved_reason: null, admin_notes: null,
+      },
+    ])
+
+    mockFetch.mockResolvedValue({ ok: true, status: 200, text: async () => '' })
+
+    const req = new Request('http://localhost/admin/username/revoked-user/sync-to-fastly', {
+      method: 'POST',
+    })
+    const res = await app.fetch(
+      req,
+      {
+        DB: db,
+        FASTLY_API_TOKEN: 'test-token',
+        FASTLY_STORE_ID: 'test-store',
+        BYPASS_LOCAL_AUTH: 'true',
+      },
+      { waitUntil: () => {}, passThroughOnException: () => {}, props: {} }
+    )
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.action).toBe('deleted')
+    expect(json.success).toBe(true)
+  })
+
+  it('GET /admin/username/:name/nip05-status should report missing for revoked user with no Fastly key', async () => {
+    const app = createSyncTestApp()
+    const db = createFakeD1([
+      {
+        id: 1, name: 'revoked-user', username_display: 'revoked-user', username_canonical: 'revoked-user',
+        pubkey: 'pk1', email: 'revoked@example.com', relays: null, status: 'revoked',
+        recyclable: 0, created_at: 1700000000, updated_at: 1700000000, claimed_at: 1700000000,
+        revoked_at: 1700000100, reserved_reason: null, admin_notes: null,
+      },
+    ])
+
+    mockFetch.mockResolvedValue({ ok: false, status: 404, text: async () => 'not found' })
+
+    const req = new Request('http://localhost/admin/username/revoked-user/nip05-status')
+    const res = await app.fetch(
+      req,
+      {
+        DB: db,
+        FASTLY_API_TOKEN: 'test-token',
+        FASTLY_STORE_ID: 'test-store',
+        BYPASS_LOCAL_AUTH: 'true',
+      },
+      { waitUntil: () => {}, passThroughOnException: () => {}, props: {} }
+    )
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.status).toBe('missing')
+  })
+
+  it('GET /admin/username/:name/nip05-status should report mismatch when revoked user still exists in Fastly', async () => {
+    const app = createSyncTestApp()
+    const db = createFakeD1([
+      {
+        id: 1, name: 'revoked-user', username_display: 'revoked-user', username_canonical: 'revoked-user',
+        pubkey: 'pk1', email: 'revoked@example.com', relays: null, status: 'revoked',
+        recyclable: 0, created_at: 1700000000, updated_at: 1700000000, claimed_at: 1700000000,
+        revoked_at: 1700000100, reserved_reason: null, admin_notes: null,
+      },
+    ])
+
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ pubkey: 'pk1', relays: [], status: 'active', atproto_state: null, atproto_did: null }),
+      text: async () => '',
+    })
+
+    const req = new Request('http://localhost/admin/username/revoked-user/nip05-status')
+    const res = await app.fetch(
+      req,
+      {
+        DB: db,
+        FASTLY_API_TOKEN: 'test-token',
+        FASTLY_STORE_ID: 'test-store',
+        BYPASS_LOCAL_AUTH: 'true',
+      },
+      { waitUntil: () => {}, passThroughOnException: () => {}, props: {} }
+    )
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.status).toBe('mismatch')
+    expect(json.reason).toContain('still present')
   })
 })

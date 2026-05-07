@@ -3,7 +3,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
 
-import { syncBatch, readUsernameFromFastly, syncAndVerifyUsername, type SyncItem, type FastlyEnv } from './fastly-sync'
+import {
+  syncBatch,
+  readUsernameFromFastly,
+  syncAndVerifyUsername,
+  deleteUsernameFromFastly,
+  type SyncItem,
+  type FastlyEnv,
+} from './fastly-sync'
 
 const env: FastlyEnv = {
   FASTLY_API_TOKEN: 'test-token',
@@ -94,6 +101,17 @@ describe('syncBatch', () => {
     expect(result.errors[0]).toContain('alice')
     expect(mockFetch).not.toHaveBeenCalled()
   })
+
+  it('should fail delete when Fastly config is missing', async () => {
+    const result = await syncBatch({ FASTLY_API_TOKEN: undefined, FASTLY_STORE_ID: undefined }, [
+      { username: 'alice', action: 'delete' },
+    ])
+
+    expect(result.failed).toBe(1)
+    expect(result.deleted).toBe(0)
+    expect(result.errors[0]).toContain('alice')
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
 })
 
 describe('readUsernameFromFastly', () => {
@@ -135,6 +153,16 @@ describe('readUsernameFromFastly', () => {
 
   it('should return error when config is missing', async () => {
     const result = await readUsernameFromFastly({}, 'alice')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('missing')
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+})
+
+describe('deleteUsernameFromFastly', () => {
+  it('should fail when Fastly config is missing', async () => {
+    const result = await deleteUsernameFromFastly({}, 'alice')
 
     expect(result.success).toBe(false)
     expect(result.error).toContain('missing')

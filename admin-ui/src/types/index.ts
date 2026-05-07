@@ -121,6 +121,7 @@ export interface FastlySyncPageResponse extends ApiResponse {
   synced?: number
   deleted?: number
   failed?: number
+  remaining?: number
   cursor?: string | null
   errors?: string[]
   dry_run?: boolean
