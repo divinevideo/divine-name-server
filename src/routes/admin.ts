@@ -1,12 +1,19 @@
 // ABOUTME: Admin endpoints for username management
-// ABOUTME: Protected by Cloudflare Access, handles reserve/revoke/burn/assign
+// ABOUTME: Protected by Cloudflare Access or Keycast OAuth session
 
 import { Hono } from 'hono'
+import { getCookie } from 'hono/cookie'
 import { bech32 } from '@scure/base'
-import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getAllActiveUsernames } from '../db/queries'
+import { getSession } from '../auth/keycast-oauth'
+import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getAllActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags, getUsernameStats, updateAdminNotes, type SearchSort } from '../db/queries'
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
 import { syncUsernameToFastly, deleteUsernameFromFastly, bulkSyncToFastly } from '../utils/fastly-sync'
 import { sendAssignmentNotificationEmail } from '../utils/email'
+import authRoutes from './auth'
+
+const MAX_ADMIN_NOTES_LENGTH = 5000
+const VALID_ADMIN_STATUSES = ['active', 'reserved', 'revoked', 'burned', 'pending-confirmation', 'recovered'] as const
+type AdminStatusFilter = (typeof VALID_ADMIN_STATUSES)[number]
 
 /** Convert a 64-char hex pubkey to npub bech32 format */
 function hexToNpub(hex: string): string {
@@ -35,43 +42,88 @@ function hexToNpub(hex: string): string {
 
 type Bindings = {
   DB: D1Database
+  SESSION_KV?: KVNamespace
+  ADMIN_PUBKEYS?: string
   FASTLY_API_TOKEN?: string
   FASTLY_STORE_ID?: string
   SENDGRID_API_KEY?: string
+  KEYCAST_URL?: string
+  KEYCAST_CLIENT_ID?: string
+  BYPASS_LOCAL_AUTH?: string
+}
+
+/** Check if a pubkey is in the comma-separated ADMIN_PUBKEYS allowlist. */
+function isAdminPubkey(pubkey: string | null, adminPubkeys: string | undefined): boolean {
+  if (!pubkey || !adminPubkeys) return false
+  return adminPubkeys.split(',').map(p => p.trim().toLowerCase()).includes(pubkey.toLowerCase())
 }
 
 const admin = new Hono<{ Bindings: Bindings }>()
 
-// Defense-in-depth: verify requests come through Cloudflare Access
-// Cloudflare Access protects names.admin.divine.video at the edge,
-// but the worker is also reachable via names.divine.video which has
-// no Access policy. This middleware blocks that bypass.
+// Auth routes mounted first -- they handle their own hostname guard
+// and must be accessible without an existing session (chicken-and-egg).
+admin.route('/auth', authRoutes)
+
+// Defense-in-depth: verify requests are authenticated.
+// Accepts CF Access JWT (edge-injected) or Keycast OAuth session cookie.
+// The worker is reachable via names.divine.video (no Access policy),
+// so the hostname guard blocks that bypass regardless of auth method.
 admin.use('*', async (c, next) => {
   const url = new URL(c.req.url)
-
-  // Only allow admin API on the admin subdomain (and localhost for dev)
-  const isAdminHost = url.hostname === 'names.admin.divine.video'
-  const isLocalDev = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
+  // Only allow admin API on the admin subdomain (and localhost for dev).
+  // admin.localhost resolves to 127.0.0.1 via RFC 6761 and mirrors prod routing locally.
+  const isAdminHost = url.hostname === 'names.admin.divine.video' || url.hostname === 'admin.localhost'
+  const isLocalDev = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === 'admin.localhost'
 
   if (!isAdminHost && !isLocalDev) {
     return c.json({ ok: false, error: 'Unauthorized' }, 403)
   }
 
-  // In production, require Cloudflare Access JWT header
-  if (isAdminHost) {
-    const cfJwt = c.req.header('Cf-Access-Jwt-Assertion')
-    if (!cfJwt) {
-      return c.json({ ok: false, error: 'Unauthorized' }, 403)
+  // Auth routes handle their own security (hostname guard only).
+  // Skip the auth check so unauthenticated users can start the OAuth flow.
+  if (c.req.path.startsWith('/api/admin/auth/')) {
+    return next()
+  }
+
+  // Dev bypass, opt-in via BYPASS_LOCAL_AUTH=true in .dev.vars.
+  // Default is off so wrangler dev can exercise the real CF Access / Keycast paths
+  // against a locally-running Keycast stack.
+  if (isLocalDev && c.env.BYPASS_LOCAL_AUTH === 'true') {
+    c.set('adminEmail' as never, 'dev@local' as never)
+    return next()
+  }
+
+  // Path 1: CF Access JWT (existing, edge-injected)
+  const cfJwt = c.req.header('Cf-Access-Jwt-Assertion')
+  if (cfJwt) {
+    const email = c.req.header('Cf-Access-Authenticated-User-Email') || 'unknown'
+    c.set('adminEmail' as never, email as never)
+    return next()
+  }
+
+  // Path 2: Keycast session cookie
+  const sessionId = getCookie(c, '__session')
+  if (sessionId && c.env.SESSION_KV) {
+    const session = await getSession(c.env.SESSION_KV, sessionId)
+    if (session) {
+      // Authorization: check pubkey against admin allowlist
+      // Pattern from divine-invite-darshan (Daniel's admin_pubkeys config)
+      if (!isAdminPubkey(session.pubkey, c.env.ADMIN_PUBKEYS)) {
+        return c.json({ ok: false, error: 'Forbidden: not an admin' }, 403)
+      }
+      c.set('adminEmail' as never, session.email as never)
+      return next()
     }
   }
 
-  await next()
+  return c.json({ ok: false, error: 'Unauthorized' }, 401)
 })
 
 admin.get('/usernames/search', async (c) => {
   try {
     const query = c.req.query('q')
-    const status = c.req.query('status') as 'active' | 'reserved' | 'revoked' | 'burned' | 'recovered' | undefined
+    const status = c.req.query('status') as AdminStatusFilter | undefined
+    const sort = c.req.query('sort') as SearchSort | undefined
     const pageStr = c.req.query('page') || '1'
     const limitStr = c.req.query('limit') || '50'
 
@@ -85,9 +137,14 @@ admin.get('/usernames/search', async (c) => {
     }
 
     // Validate status parameter
-    const validStatuses = ['active', 'reserved', 'revoked', 'burned', 'recovered']
-    if (status && !validStatuses.includes(status)) {
+    if (status && !VALID_ADMIN_STATUSES.includes(status)) {
       return c.json({ ok: false, error: 'Invalid status parameter' }, 400)
+    }
+
+    // Validate sort parameter
+    const validSorts: SearchSort[] = ['relevance', 'newest', 'oldest', 'updated']
+    if (sort && !validSorts.includes(sort)) {
+      return c.json({ ok: false, error: 'Invalid sort parameter' }, 400)
     }
 
     // Validate page parameter
@@ -105,14 +162,90 @@ admin.get('/usernames/search', async (c) => {
     // Cap limit at 100
     const cappedLimit = Math.min(limit, 100)
 
-    const result = await searchUsernames(c.env.DB, { query, status, page, limit: cappedLimit })
+    const tagRaw = c.req.query('tag')
+    const tag = tagRaw && tagRaw.length <= 50 ? tagRaw : undefined
+    const result = await searchUsernames(c.env.DB, { query, status, tag, sort, page, limit: cappedLimit })
+
+    // Batch-load tags for result set
+    const ids = result.results.map((r: any) => r.id).filter(Boolean)
+    const tagMap = await getTagsForUsernames(c.env.DB, ids)
+    const resultsWithTags = result.results.map((r: any) => ({
+      ...r,
+      tags: tagMap.get(r.id) || []
+    }))
 
     return c.json({
       ok: true,
-      ...result
+      results: resultsWithTags,
+      pagination: result.pagination,
     })
   } catch (error) {
     console.error('Search error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.get('/usernames/stats', async (c) => {
+  try {
+    const stats = await getUsernameStats(c.env.DB)
+    return c.json({ ok: true, ...stats })
+  } catch (error) {
+    console.error('Username stats error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.get('/username/:name', async (c) => {
+  try {
+    const name = c.req.param('name')
+    if (!name) {
+      return c.json({ ok: false, error: 'Name parameter is required' }, 400)
+    }
+
+    const username = await getUsernameByName(c.env.DB, name)
+    if (!username) {
+      return c.json({ ok: false, error: 'Username not found' }, 404)
+    }
+
+    const tagDetails = await getTagDetailsForUsername(c.env.DB, username.id)
+    const tags = tagDetails.map(td => td.tag)
+    return c.json({ ok: true, username: { ...username, tags, tag_details: tagDetails } })
+  } catch (error) {
+    console.error('Username lookup error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.post('/username/:name/notes', async (c) => {
+  try {
+    const name = c.req.param('name')
+    if (!name) {
+      return c.json({ ok: false, error: 'Name parameter is required' }, 400)
+    }
+
+    const body = await c.req.json<{ admin_notes?: string | null }>()
+    if (body.admin_notes !== undefined && body.admin_notes !== null && typeof body.admin_notes !== 'string') {
+      return c.json({ ok: false, error: 'admin_notes must be a string or null' }, 400)
+    }
+
+    const adminNotes = body.admin_notes !== undefined ? body.admin_notes : null
+    const trimmed = typeof adminNotes === 'string' && adminNotes.trim() ? adminNotes.trim() : null
+
+    if (trimmed && trimmed.length > MAX_ADMIN_NOTES_LENGTH) {
+      return c.json({ ok: false, error: `admin_notes must be ${MAX_ADMIN_NOTES_LENGTH} characters or less` }, 400)
+    }
+
+    const updatedBy = (c.get('adminEmail' as never) as string) || null
+    const updated = await updateAdminNotes(c.env.DB, name, trimmed, updatedBy)
+    if (!updated) {
+      return c.json({ ok: false, error: 'Username not found' }, 404)
+    }
+
+    console.log(`Admin notes updated for "${name}" by ${updatedBy || 'unknown'} (${trimmed?.length || 0} chars)`)
+
+    return c.json({ ok: true, ...updated })
+  } catch (error) {
+    console.error('Update notes error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
   }
 })
@@ -215,7 +348,7 @@ admin.post('/username/reserve', async (c) => {
 
     // Include override reason in the reserved_reason if provided
     const finalReason = overrideReason ? `${reason} [Override: ${overrideReason}]` : reason
-    const createdBy = c.req.header('Cf-Access-Authenticated-User-Email') || null
+    const createdBy = (c.get('adminEmail' as never) as string) || null
     await reserveUsername(c.env.DB, usernameData.display, usernameData.canonical, finalReason, 'admin', createdBy)
 
     if (overrideReason) {
@@ -263,7 +396,7 @@ admin.post('/username/reserve-bulk', async (c) => {
     }
 
     // Process each name
-    const createdBy = c.req.header('Cf-Access-Authenticated-User-Email') || null
+    const createdBy = (c.get('adminEmail' as never) as string) || null
     const results = []
     for (const name of nameList) {
       try {
@@ -398,7 +531,7 @@ admin.post('/username/assign', async (c) => {
       throw error
     }
 
-    const createdBy = c.req.header('Cf-Access-Authenticated-User-Email') || null
+    const createdBy = (c.get('adminEmail' as never) as string) || null
     await assignUsername(c.env.DB, usernameData.display, usernameData.canonical, normalizedPubkey, 'admin', createdBy)
 
     // Sync to Fastly KV for edge routing
@@ -445,7 +578,7 @@ admin.post('/username/assign-bulk', async (c) => {
     }
 
     // Process each assignment
-    const createdBy = c.req.header('Cf-Access-Authenticated-User-Email') || null
+    const createdBy = (c.get('adminEmail' as never) as string) || null
     const results = []
     for (const assignment of assignments) {
       const { name, pubkey } = assignment
@@ -520,21 +653,25 @@ admin.post('/username/assign-bulk', async (c) => {
 
 admin.get('/export/csv', async (c) => {
   try {
-    const status = c.req.query('status') as 'active' | 'reserved' | 'revoked' | 'burned' | 'recovered' | undefined
+    const status = c.req.query('status') as AdminStatusFilter | undefined
 
     // Validate status parameter
-    const validStatuses = ['active', 'reserved', 'revoked', 'burned', 'recovered']
-    if (status && !validStatuses.includes(status)) {
+    if (status && !VALID_ADMIN_STATUSES.includes(status)) {
       return c.json({ ok: false, error: 'Invalid status parameter' }, 400)
     }
 
     const usernames = await exportUsernamesByStatus(c.env.DB, status)
 
+    // Batch-load tags for all exported usernames
+    const ids = usernames.map((u: any) => u.id).filter(Boolean)
+    const tagMap = await getTagsForUsernames(c.env.DB, ids)
+
     // Build CSV content
-    const headers = ['name', 'pubkey', 'npub', 'status', 'claim_source', 'created_by', 'created_at', 'claimed_at', 'revoked_at', 'reserved_reason']
+    const headers = ['name', 'pubkey', 'npub', 'status', 'claim_source', 'created_by', 'created_at', 'claimed_at', 'revoked_at', 'reserved_reason', 'tags']
     const csvRows = [headers.join(',')]
 
     for (const u of usernames) {
+      const uTags = tagMap.get((u as any).id) || []
       const row = [
         u.name,
         u.pubkey || '',
@@ -545,11 +682,12 @@ admin.get('/export/csv', async (c) => {
         u.created_at ? new Date(u.created_at * 1000).toISOString() : '',
         u.claimed_at ? new Date(u.claimed_at * 1000).toISOString() : '',
         u.revoked_at ? new Date(u.revoked_at * 1000).toISOString() : '',
-        (u.reserved_reason || '').replace(/"/g, '""')
+        (u.reserved_reason || '').replace(/"/g, '""'),
+        uTags.join(';'),
       ]
       // Escape fields that might contain commas or quotes
       const escapedRow = row.map(field => {
-        if (field.includes(',') || field.includes('"') || field.includes('\n')) {
+        if (field.includes(',') || field.includes('"') || field.includes('\n') || field.includes(';')) {
           return `"${field}"`
         }
         return field
@@ -723,6 +861,56 @@ admin.post('/username/set-atproto', async (c) => {
     })
   } catch (error) {
     console.error('Set ATProto error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+// --- Tags ---
+
+admin.post('/username/:name/tags', async (c) => {
+  const name = c.req.param('name')
+  const body = await c.req.json<{ tag?: string }>()
+  const { tag } = body
+
+  if (!tag || typeof tag !== 'string') {
+    return c.json({ ok: false, error: 'tag is required' }, 400)
+  }
+
+  const createdBy = (c.get('adminEmail' as never) as string) || 'unknown'
+
+  const username = await getUsernameByName(c.env.DB, name)
+  if (!username) return c.json({ ok: false, error: 'Username not found' }, 404)
+
+  try {
+    await addTag(c.env.DB, username.id, tag, createdBy)
+  } catch (e: any) {
+    return c.json({ ok: false, error: e.message }, 400)
+  }
+
+  const tagDetails = await getTagDetailsForUsername(c.env.DB, username.id)
+  const tags = tagDetails.map(td => td.tag)
+  return c.json({ ok: true, tags, tag_details: tagDetails })
+})
+
+admin.delete('/username/:name/tags/:tag', async (c) => {
+  const name = c.req.param('name')
+  const tag = c.req.param('tag')
+
+  const username = await getUsernameByName(c.env.DB, name)
+  if (!username) return c.json({ ok: false, error: 'Username not found' }, 404)
+
+  await removeTag(c.env.DB, username.id, tag)
+  const tagDetails = await getTagDetailsForUsername(c.env.DB, username.id)
+  const tags = tagDetails.map(td => td.tag)
+  return c.json({ ok: true, tags, tag_details: tagDetails })
+})
+
+admin.get('/tags', async (c) => {
+  try {
+    const tags = await getAllTags(c.env.DB)
+    return c.json({ ok: true, tags })
+  } catch (error) {
+    console.error('Get tags error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
   }
 })

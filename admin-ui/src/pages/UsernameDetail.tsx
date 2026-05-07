@@ -1,10 +1,12 @@
 // ABOUTME: Username detail page for viewing and managing individual usernames
 // ABOUTME: Shows all metadata and provides actions like assign, revoke, burn
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { searchUsernames, assignUsername, revokeUsername } from '../api/client'
-import type { Username } from '../types'
+import { getUsername, assignUsername, revokeUsername, addTagToUsername, removeTagFromUsername, getAllTags, updateAdminNotes } from '../api/client'
+import type { Username, TagDetail } from '../types'
 import StatusBadge from '../components/StatusBadge'
+
+const MAX_ADMIN_NOTES_LENGTH = 5000
 
 export default function UsernameDetail() {
   const { name } = useParams<{ name: string }>()
@@ -23,9 +25,34 @@ export default function UsernameDetail() {
   const [burnOnRevoke, setBurnOnRevoke] = useState(false)
   const [revokeLoading, setRevokeLoading] = useState(false)
 
+  // Tag states
+  const [tags, setTags] = useState<string[]>([])
+  const [tagDetails, setTagDetails] = useState<TagDetail[]>([])
+  const [tagInput, setTagInput] = useState('')
+  const [showSuggestions, setShowSuggestions] = useState(false)
+  const [allKnownTags, setAllKnownTags] = useState<{ tag: string; count: number }[]>([])
+  const tagContainerRef = useRef<HTMLDivElement>(null)
+
+  // Notes states
+  const [draftNotes, setDraftNotes] = useState('')
+  const [notesSaving, setNotesSaving] = useState(false)
+  const [notesError, setNotesError] = useState<string | null>(null)
+  const [notesSuccess, setNotesSuccess] = useState<string | null>(null)
+
   useEffect(() => {
     loadUsername()
+    getAllTags().then(data => setAllKnownTags(data.tags || [])).catch(() => {})
   }, [name])
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (tagContainerRef.current && !tagContainerRef.current.contains(e.target as Node)) {
+        setShowSuggestions(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
 
   const loadUsername = async () => {
     if (!name) return
@@ -33,12 +60,14 @@ export default function UsernameDetail() {
     setError(null)
 
     try {
-      const result = await searchUsernames(name)
-      const found = result.results.find(u => u.name === name)
-      if (found) {
-        setUsername(found)
+      const result = await getUsername(name)
+      if (result.ok && result.username) {
+        setUsername(result.username)
+        setTags(result.username.tags || [])
+        setTagDetails(result.username.tag_details || [])
+        setDraftNotes(result.username.admin_notes || '')
       } else {
-        setError('Username not found')
+        setError(result.error || 'Username not found')
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load username')
@@ -88,6 +117,85 @@ export default function UsernameDetail() {
     }
   }
 
+  const handleAddTag = async (tagToAdd: string) => {
+    if (!name || !tagToAdd.trim()) return
+    try {
+      const result = await addTagToUsername(name, tagToAdd.trim())
+      if (result.ok) {
+        setTags(result.tags)
+        setTagDetails(result.tag_details || [])
+        setTagInput('')
+        setShowSuggestions(false)
+        // Refresh known tags
+        getAllTags().then(data => setAllKnownTags(data.tags || [])).catch(() => {})
+      }
+    } catch (err) {
+      console.error('Failed to add tag:', err)
+    }
+  }
+
+  const handleRemoveTag = async (tagToRemove: string) => {
+    if (!name) return
+    if (tagToRemove === 'vip') {
+      const confirmed = window.confirm(
+        `Remove the "vip" tag from "${name}"? VIP names may have special handling obligations — confirm this removal is intentional.`
+      )
+      if (!confirmed) return
+    }
+    try {
+      const result = await removeTagFromUsername(name, tagToRemove)
+      if (result.ok) {
+        setTags(result.tags)
+        setTagDetails(result.tag_details || [])
+        getAllTags().then(data => setAllKnownTags(data.tags || [])).catch(() => {})
+      }
+    } catch (err) {
+      console.error('Failed to remove tag:', err)
+    }
+  }
+
+  const getTagDetail = (tag: string): TagDetail | undefined =>
+    tagDetails.find(td => td.tag === tag)
+
+  const formatTagMeta = (detail: TagDetail): string => {
+    const date = new Date(detail.created_at * 1000).toLocaleDateString()
+    const who = detail.created_by || 'unknown'
+    return `Added by ${who} on ${date}`
+  }
+
+  const handleSaveNotes = async () => {
+    if (!name) return
+    setNotesSaving(true)
+    setNotesError(null)
+    setNotesSuccess(null)
+    try {
+      const result = await updateAdminNotes(name, draftNotes.trim() || null)
+      if (result.ok) {
+        const savedNotes = result.admin_notes || ''
+        setDraftNotes(savedNotes)
+        setNotesSuccess('Notes saved.')
+        if (username) {
+          setUsername({
+            ...username,
+            admin_notes: result.admin_notes,
+            admin_notes_updated_by: result.admin_notes_updated_by || null,
+            admin_notes_updated_at: result.admin_notes_updated_at || null,
+          })
+        }
+      } else {
+        setNotesError(result.error || 'Save failed')
+      }
+    } catch (err) {
+      setNotesError(err instanceof Error ? err.message : 'Save failed')
+    } finally {
+      setNotesSaving(false)
+    }
+  }
+
+  const filteredSuggestions = allKnownTags
+    .filter(t => !tags.includes(t.tag))
+    .filter(t => !tagInput || t.tag.includes(tagInput.toLowerCase()))
+
   const formatDate = (timestamp: number | null) => {
     if (!timestamp) return '-'
     return new Date(timestamp * 1000).toLocaleString()
@@ -134,6 +242,74 @@ export default function UsernameDetail() {
           {username.name}@divine.video
         </p>
       </div>
+
+      {/* Reserved banner with inline assign */}
+      {(username.status === 'reserved' || username.status === 'pending-confirmation') && !username.pubkey && (
+        <div className="rounded-lg bg-amber-50 border border-amber-200 p-4 mb-6">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-sm font-medium text-amber-800">
+                {username.status === 'pending-confirmation' ? 'Pending confirmation — no account yet' : 'Reserved — no account yet'}
+              </p>
+              <p className="mt-1 text-sm text-amber-700">
+                {username.status === 'pending-confirmation'
+                  ? 'This name is awaiting email confirmation and has not been assigned to anyone yet. Assign a pubkey to activate it immediately.'
+                  : 'This name is held but not assigned to anyone. Assign a pubkey to activate it.'}
+                {username.claim_source === 'vine-import' && ' Originally imported from Vine.'}
+                {username.claim_source === 'admin' && ' Manually reserved by an admin.'}
+              </p>
+            </div>
+            {!showAssign && (
+              <button
+                onClick={() => setShowAssign(true)}
+                className="ml-4 shrink-0 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700"
+              >
+                Assign to Pubkey
+              </button>
+            )}
+          </div>
+          {showAssign && (
+            <form onSubmit={handleAssign} className="mt-3 space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-amber-800">
+                  Pubkey (hex or npub)
+                </label>
+                <input
+                  type="text"
+                  value={assignPubkey}
+                  onChange={(e) => setAssignPubkey(e.target.value)}
+                  required
+                  placeholder="npub1... or 64-character hex"
+                  className="mt-1 block w-full rounded-md border-amber-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2 border font-mono text-xs"
+                />
+              </div>
+              {assignError && (
+                <p className="text-sm text-red-600">{assignError}</p>
+              )}
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  disabled={assignLoading}
+                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {assignLoading ? 'Assigning...' : 'Assign'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAssign(false)
+                    setAssignPubkey('')
+                    setAssignError(null)
+                  }}
+                  className="inline-flex items-center px-3 py-2 border border-amber-300 text-sm font-medium rounded-md shadow-sm text-amber-800 bg-white hover:bg-amber-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      )}
 
       {/* Details Card */}
       <div className="bg-white shadow rounded-lg overflow-hidden mb-6">
@@ -197,13 +373,6 @@ export default function UsernameDetail() {
             </div>
           )}
 
-          {username.admin_notes && (
-            <div>
-              <p className="text-sm font-medium text-gray-500">Admin Notes</p>
-              <p className="mt-1 text-sm text-gray-900">{username.admin_notes}</p>
-            </div>
-          )}
-
           <div>
             <p className="text-sm font-medium text-gray-500">Source</p>
             <p className="mt-1 text-sm text-gray-900">{username.claim_source}</p>
@@ -218,14 +387,135 @@ export default function UsernameDetail() {
         </div>
       </div>
 
+      {/* Internal Notes Card */}
+      <div className="bg-white shadow rounded-lg overflow-hidden mb-6">
+        <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
+          <h3 className="text-lg font-medium text-gray-900">Internal Notes</h3>
+        </div>
+        <div className="px-6 py-4 space-y-3">
+          <textarea
+            rows={4}
+            value={draftNotes}
+            onChange={(e) => {
+              setDraftNotes(e.target.value)
+              setNotesSuccess(null)
+            }}
+            placeholder="Add internal context for trust and safety, support, or outreach..."
+            maxLength={MAX_ADMIN_NOTES_LENGTH}
+            className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500"
+          />
+          <div className="flex items-center justify-between text-xs text-gray-500">
+            <span>
+              {username.admin_notes_updated_at
+                ? `Last updated by ${username.admin_notes_updated_by || 'unknown'} on ${formatDate(username.admin_notes_updated_at)}`
+                : 'No edit history yet'}
+            </span>
+            <span>{draftNotes.length}/{MAX_ADMIN_NOTES_LENGTH}</span>
+          </div>
+          {notesError && (
+            <p className="text-sm text-red-600">{notesError}</p>
+          )}
+          {notesSuccess && (
+            <p className="text-sm text-green-600">{notesSuccess}</p>
+          )}
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={handleSaveNotes}
+              disabled={notesSaving}
+              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+            >
+              {notesSaving ? 'Saving...' : 'Save Notes'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Tags Card */}
+      <div className="bg-white shadow rounded-lg overflow-hidden mb-6">
+        <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
+          <div className="flex items-baseline justify-between">
+            <h3 className="text-lg font-medium text-gray-900">Tags</h3>
+            <span className="text-xs text-gray-400">Internal labels only — not visible to users or sent to any external service</span>
+          </div>
+        </div>
+        <div className="px-6 py-4">
+          <div className="flex flex-wrap gap-2 mb-3">
+            {tags.map(tag => {
+              const detail = getTagDetail(tag)
+              return (
+                <span
+                  key={tag}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800"
+                  title={detail ? formatTagMeta(detail) : undefined}
+                >
+                  {tag}
+                  {detail && (
+                    <span className="text-blue-500 text-xs font-normal ml-1">
+                      by {detail.created_by || 'unknown'}
+                    </span>
+                  )}
+                  <button
+                    onClick={() => handleRemoveTag(tag)}
+                    className="ml-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full text-blue-400 hover:bg-blue-200 hover:text-blue-600"
+                    title={`Remove ${tag}`}
+                  >
+                    ×
+                  </button>
+                </span>
+              )
+            })}
+            {tags.length === 0 && (
+              <span className="text-sm text-gray-400 italic">No tags</span>
+            )}
+          </div>
+          <div className="relative" ref={tagContainerRef}>
+            <input
+              type="text"
+              value={tagInput}
+              onChange={(e) => {
+                setTagInput(e.target.value.toLowerCase())
+                setShowSuggestions(true)
+              }}
+              onFocus={() => setShowSuggestions(true)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && tagInput.trim()) {
+                  e.preventDefault()
+                  handleAddTag(tagInput)
+                } else if (e.key === 'Escape') {
+                  setShowSuggestions(false)
+                }
+              }}
+              placeholder="Add a tag..."
+              maxLength={50}
+              className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2 border"
+            />
+            {showSuggestions && filteredSuggestions.length > 0 && (
+              <div className="absolute z-10 mt-1 w-full bg-white shadow-lg rounded-md border border-gray-200 max-h-40 overflow-auto">
+                {filteredSuggestions.map(s => (
+                  <button
+                    key={s.tag}
+                    onClick={() => handleAddTag(s.tag)}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 flex justify-between items-center"
+                  >
+                    <span>{s.tag}</span>
+                    <span className="text-gray-400 text-xs">{s.count} names</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* Actions Card */}
       <div className="bg-white shadow rounded-lg overflow-hidden">
         <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
           <h3 className="text-lg font-medium text-gray-900">Actions</h3>
         </div>
         <div className="px-6 py-4 space-y-4">
-          {/* Assign Action */}
-          {(username.status === 'reserved' || username.status === 'revoked') && (
+          {/* Assign Action — hidden for reserved+no-pubkey since the banner above handles it */}
+          {(username.status === 'revoked' || ((username.status === 'reserved' || username.status === 'pending-confirmation') && username.pubkey)) && (
             <div>
               {!showAssign ? (
                 <button
@@ -278,7 +568,7 @@ export default function UsernameDetail() {
           )}
 
           {/* Revoke Action */}
-          {(username.status === 'active' || username.status === 'reserved') && (
+          {(username.status === 'active' || username.status === 'reserved' || username.status === 'pending-confirmation') && (
             <div>
               {!showRevoke ? (
                 <button
@@ -292,6 +582,11 @@ export default function UsernameDetail() {
                   <p className="text-sm text-red-800">
                     Are you sure you want to revoke "{username.name}"?
                   </p>
+                  {tags.includes('vip') && (
+                    <p className="text-sm font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                      This username has the "vip" tag — confirm this revocation is intentional.
+                    </p>
+                  )}
                   <div className="flex items-center">
                     <input
                       type="checkbox"

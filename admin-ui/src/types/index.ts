@@ -1,4 +1,12 @@
 export type ClaimSource = 'self-service' | 'admin' | 'bulk-upload' | 'vine-import' | 'public-reservation' | 'unknown'
+export type SearchSort = 'relevance' | 'newest' | 'oldest' | 'updated'
+export type UsernameStatus = 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation'
+
+export interface TagDetail {
+  tag: string
+  created_at: number
+  created_by: string | null
+}
 
 export interface Username {
   id: number
@@ -6,7 +14,7 @@ export interface Username {
   pubkey: string | null
   email: string | null
   relays: string | null
-  status: 'active' | 'reserved' | 'revoked' | 'burned'
+  status: UsernameStatus
   recyclable: number
   created_at: number
   updated_at: number
@@ -14,8 +22,12 @@ export interface Username {
   revoked_at: number | null
   reserved_reason: string | null
   admin_notes: string | null
+  admin_notes_updated_by?: string | null
+  admin_notes_updated_at?: number | null
   claim_source: ClaimSource
   created_by: string | null
+  tags?: string[]
+  tag_details?: TagDetail[]
 }
 
 export interface SearchResult {
@@ -47,6 +59,10 @@ export interface AssignResponse extends ApiResponse {
   requiresOverride?: boolean
 }
 
+export interface UsernameLookupResponse extends ApiResponse {
+  username?: Username
+}
+
 export interface RevokeResponse extends ApiResponse {
   name?: string
   status?: string
@@ -73,3 +89,29 @@ export interface BulkReserveResponse extends ApiResponse {
   failed?: number
   results?: BulkReserveResult[]
 }
+
+export interface UsernameStats {
+  totals: {
+    all: number
+    active: number
+    reserved: number
+    revoked: number
+    burned: number
+    pending_confirmation: number
+  }
+  metadata: {
+    with_notes: number
+    with_tags: number
+    untagged: number
+    vip: number
+  }
+  activity: {
+    claimed_7d: number
+    claimed_30d: number
+    updated_7d: number
+    updated_30d: number
+  }
+  top_tags: Array<{ tag: string; count: number }>
+}
+
+export interface UsernameStatsResponse extends ApiResponse, UsernameStats {}

@@ -4,6 +4,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
 import admin from './admin'
+import { getUsernameByName } from '../db/queries'
 
 // Mock the email utility so tests don't hit SendGrid
 vi.mock('../utils/email', () => ({
@@ -11,143 +12,22 @@ vi.mock('../utils/email', () => ({
   sendReservationConfirmationEmail: vi.fn().mockResolvedValue(undefined)
 }))
 
-// Mock D1 database
-function createMockDB() {
-  const mockResults = [
-    {
-      id: 1,
-      name: 'testuser',
-      username_display: 'testuser',
-      username_canonical: 'testuser',
-      pubkey: 'abc123',
-      email: 'test@example.com',
-      relays: null,
-      status: 'active',
-      recyclable: 0,
-      created_at: 1700000000,
-      updated_at: 1700000000,
-      claimed_at: 1700000000,
-      revoked_at: null,
-      reserved_reason: null,
-      admin_notes: null
-    }
-  ]
+import { createFakeD1 } from '../db/test-helpers'
 
-  return {
-    prepare: (sql: string) => {
-      let boundParams: any[] = []
-      return {
-        bind: (...params: any[]) => {
-          boundParams = params
-          return {
-            first: async () => {
-              if (sql.includes('COUNT(*)')) {
-                let filtered = [...mockResults]
-                const hasSearchPattern = sql.includes('LIKE')
-                
-                if (hasSearchPattern) {
-                  const searchPattern = boundParams[0]
-                  if (searchPattern && typeof searchPattern === 'string') {
-                    const searchTerm = searchPattern.replace(/%/g, '').replace(/\\/g, '')
-                    if (searchTerm.length > 0) {
-                      filtered = mockResults.filter(u =>
-                        (u.name && u.name.includes(searchTerm)) ||
-                        (u.username_display && u.username_display.includes(searchTerm)) ||
-                        (u.username_canonical && u.username_canonical.includes(searchTerm)) ||
-                        (u.pubkey && u.pubkey.includes(searchTerm)) ||
-                        (u.email && u.email.includes(searchTerm))
-                      )
-                    }
-                  }
-                  
-                  // Status is at index 5 if search pattern exists
-                  if (boundParams.length > 7 && typeof boundParams[5] === 'string') {
-                    filtered = filtered.filter(u => u.status === boundParams[5])
-                  }
-                } else {
-                  // No search pattern - check for status filter
-                  if (sql.includes('status = ?') && boundParams.length > 0 && boundParams[0]) {
-                    filtered = filtered.filter(u => u.status === boundParams[0])
-                  }
-                }
-                
-                return { count: filtered.length }
-              }
-              
-              // Check for existing username lookup
-              if (sql.includes('username_canonical = ?') || sql.includes('name = ?')) {
-                const lookupValue = boundParams[0] || boundParams[1]
-                const found = mockResults.find(u => 
-                  u.username_canonical === lookupValue || u.name === lookupValue
-                )
-                return found || null
-              }
-              
-              // Check for reserved_words lookup (in first() - this is for isReservedWord)
-              if (sql.includes('reserved_words') && sql.includes('SELECT 1')) {
-                return null // Not reserved by default
-              }
-              
-              return null
-            },
-            all: async () => {
-              // Handle reserved_words queries
-              if (sql.includes('reserved_words')) {
-                return { results: [] }
-              }
-              
-              let filtered = [...mockResults]
-              const hasSearchPattern = sql.includes('LIKE')
-              
-              if (hasSearchPattern) {
-                const searchPattern = boundParams[0]
-                if (searchPattern && typeof searchPattern === 'string') {
-                  const searchTerm = searchPattern.replace(/%/g, '').replace(/\\/g, '')
-                  if (searchTerm.length > 0) {
-                    filtered = mockResults.filter(u =>
-                      (u.name && u.name.includes(searchTerm)) ||
-                      (u.username_display && u.username_display.includes(searchTerm)) ||
-                      (u.username_canonical && u.username_canonical.includes(searchTerm)) ||
-                      (u.pubkey && u.pubkey.includes(searchTerm)) ||
-                      (u.email && u.email.includes(searchTerm))
-                    )
-                  }
-                }
-                
-                // Status is at index 5 if search pattern exists
-                if (boundParams.length > 7 && typeof boundParams[5] === 'string') {
-                  filtered = filtered.filter(u => u.status === boundParams[5])
-                }
-              } else {
-                // No search pattern - check for status filter
-                if (sql.includes('status = ?') && boundParams.length > 0 && boundParams[0]) {
-                  filtered = filtered.filter(u => u.status === boundParams[0])
-                }
-              }
-              
-              // Apply pagination
-              const limit = boundParams[boundParams.length - 2] || 50
-              const offset = boundParams[boundParams.length - 1] || 0
-              
-              return {
-                results: filtered
-                  .sort((a, b) => b.created_at - a.created_at)
-                  .slice(offset, offset + limit)
-              }
-            },
-            run: async () => {
-              return { success: true }
-            }
-          }
-        }
-      }
+function createMockDB() {
+  return createFakeD1([
+    {
+      id: 1, name: 'testuser', username_display: 'testuser', username_canonical: 'testuser',
+      pubkey: 'abc123', email: 'test@example.com', relays: null, status: 'active',
+      recyclable: 0, created_at: 1700000000, updated_at: 1700000000, claimed_at: 1700000000,
+      revoked_at: null, reserved_reason: null, admin_notes: null,
     }
-  } as unknown as D1Database
+  ])
 }
 
 describe('Admin Search Endpoint', () => {
   function createTestApp() {
-    const app = new Hono<{ Bindings: { DB: D1Database } }>()
+    const app = new Hono<{ Bindings: { DB: D1Database; BYPASS_LOCAL_AUTH?: string } }>()
     app.route('/admin', admin)
     return app
   }
@@ -156,7 +36,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search')
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -168,7 +48,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=')
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -181,7 +61,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=&status=active')
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -189,12 +69,33 @@ describe('Admin Search Endpoint', () => {
     expect(json.results).toBeDefined()
   })
 
+  it('should allow pending-confirmation as a status filter', async () => {
+    const app = createTestApp()
+    const db = createFakeD1([
+      {
+        id: 1, name: 'pendinguser', username_display: 'pendinguser', username_canonical: 'pendinguser',
+        pubkey: null, email: 'pending@example.com', relays: null, status: 'pending-confirmation',
+        recyclable: 0, created_at: 1700000000, updated_at: 1700000000, claimed_at: null,
+        revoked_at: null, reserved_reason: null, admin_notes: null,
+      },
+    ])
+
+    const req = new Request('http://localhost/admin/usernames/search?q=&status=pending-confirmation')
+    const res = await app.fetch(req, { DB: db, BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.results).toHaveLength(1)
+    expect(json.results[0].status).toBe('pending-confirmation')
+  })
+
   it('should return 400 if query is too long', async () => {
     const app = createTestApp()
 
     const longQuery = 'a'.repeat(101)
     const req = new Request(`http://localhost/admin/usernames/search?q=${longQuery}`)
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -206,7 +107,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=test')
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -221,7 +122,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=test&status=invalid')
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -229,11 +130,23 @@ describe('Admin Search Endpoint', () => {
     expect(json.error).toContain('Invalid status parameter')
   })
 
+  it('should return 400 if sort parameter is invalid', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/admin/usernames/search?q=test&sort=weird')
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(400)
+    const json = await res.json() as any
+    expect(json.ok).toBe(false)
+    expect(json.error).toContain('Invalid sort parameter')
+  })
+
   it('should return 400 if page is negative', async () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=test&page=-1')
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -245,7 +158,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=test&page=0')
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -257,7 +170,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=test&page=abc')
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -269,7 +182,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=test&limit=-1')
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -281,7 +194,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=test&limit=0')
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -293,7 +206,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=test&limit=xyz')
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -305,7 +218,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=')
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -319,7 +232,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=&status=active')
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -331,7 +244,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=&page=1&limit=10')
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -344,7 +257,7 @@ describe('Admin Search Endpoint', () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/admin/usernames/search?q=a')
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -355,7 +268,7 @@ describe('Admin Search Endpoint', () => {
 
 describe('Admin Bulk Reserve Endpoint', () => {
   function createTestApp() {
-    const app = new Hono<{ Bindings: { DB: D1Database } }>()
+    const app = new Hono<{ Bindings: { DB: D1Database; BYPASS_LOCAL_AUTH?: string } }>()
     app.route('/admin', admin)
     return app
   }
@@ -368,7 +281,7 @@ describe('Admin Bulk Reserve Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ names: 'alice,bob,charlie' })
     })
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -385,7 +298,7 @@ describe('Admin Bulk Reserve Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ names: 'alice bob charlie' })
     })
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -401,7 +314,7 @@ describe('Admin Bulk Reserve Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ names: ['alice', 'bob', 'charlie'] })
     })
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -417,7 +330,7 @@ describe('Admin Bulk Reserve Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ names: 'alice, bob charlie,dave' })
     })
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -433,7 +346,7 @@ describe('Admin Bulk Reserve Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({})
     })
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -449,7 +362,7 @@ describe('Admin Bulk Reserve Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ names: '   ' }) // whitespace only
     })
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -466,7 +379,7 @@ describe('Admin Bulk Reserve Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ names: tooMany })
     })
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -482,7 +395,7 @@ describe('Admin Bulk Reserve Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ names: 'alice,bob,charlie' })
     })
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -507,7 +420,7 @@ describe('Admin Bulk Reserve Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ names: 'alice_123' })
     })
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -529,7 +442,7 @@ describe('Admin Bulk Reserve Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ names: '@alice,@bob,@@charlie' })
     })
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -584,7 +497,7 @@ describe('Admin Notify Assignment Endpoint', () => {
   }
 
   function createTestApp() {
-    const app = new Hono<{ Bindings: { DB: D1Database; SENDGRID_API_KEY?: string } }>()
+    const app = new Hono<{ Bindings: { DB: D1Database; SENDGRID_API_KEY?: string; BYPASS_LOCAL_AUTH?: string } }>()
     app.route('/admin', admin)
     return app
   }
@@ -596,7 +509,7 @@ describe('Admin Notify Assignment Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: 'user@example.com' })
     })
-    const res = await app.fetch(req, { DB: createNotifyMockDB(), SENDGRID_API_KEY: 'test-key' }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createNotifyMockDB(), SENDGRID_API_KEY: 'test-key', BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -611,7 +524,7 @@ describe('Admin Notify Assignment Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'testuser' })
     })
-    const res = await app.fetch(req, { DB: createNotifyMockDB(), SENDGRID_API_KEY: 'test-key' }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createNotifyMockDB(), SENDGRID_API_KEY: 'test-key', BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -626,7 +539,7 @@ describe('Admin Notify Assignment Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'testuser', email: 'not-an-email' })
     })
-    const res = await app.fetch(req, { DB: createNotifyMockDB(), SENDGRID_API_KEY: 'test-key' }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createNotifyMockDB(), SENDGRID_API_KEY: 'test-key', BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(400)
     const json = await res.json() as any
@@ -641,7 +554,7 @@ describe('Admin Notify Assignment Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'nonexistent', email: 'user@example.com' })
     })
-    const res = await app.fetch(req, { DB: createNotifyMockDB(), SENDGRID_API_KEY: 'test-key' }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createNotifyMockDB(), SENDGRID_API_KEY: 'test-key', BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(404)
     const json = await res.json() as any
@@ -656,7 +569,7 @@ describe('Admin Notify Assignment Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'testuser', email: 'user@example.com' })
     })
-    const res = await app.fetch(req, { DB: createNotifyMockDB('reserved'), SENDGRID_API_KEY: 'test-key' }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createNotifyMockDB('reserved'), SENDGRID_API_KEY: 'test-key', BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(409)
     const json = await res.json() as any
@@ -671,7 +584,7 @@ describe('Admin Notify Assignment Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'testuser', email: 'user@example.com' })
     })
-    const res = await app.fetch(req, { DB: createNotifyMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createNotifyMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(503)
     const json = await res.json() as any
@@ -686,7 +599,7 @@ describe('Admin Notify Assignment Endpoint', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'testuser', email: 'user@example.com' })
     })
-    const res = await app.fetch(req, { DB: createNotifyMockDB(), SENDGRID_API_KEY: 'test-key' }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createNotifyMockDB(), SENDGRID_API_KEY: 'test-key', BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -698,7 +611,7 @@ describe('Admin Notify Assignment Endpoint', () => {
 
 describe('Admin Hostname Auth Guard', () => {
   function createTestApp() {
-    const app = new Hono<{ Bindings: { DB: D1Database } }>()
+    const app = new Hono<{ Bindings: { DB: D1Database; BYPASS_LOCAL_AUTH?: string } }>()
     app.route('/api/admin', admin)
     return app
   }
@@ -707,7 +620,7 @@ describe('Admin Hostname Auth Guard', () => {
     const app = createTestApp()
 
     const req = new Request('https://names.divine.video/api/admin/usernames/search?q=test')
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(403)
     const json = await res.json() as any
@@ -719,7 +632,7 @@ describe('Admin Hostname Auth Guard', () => {
     const app = createTestApp()
 
     const req = new Request('https://evil.example.com/api/admin/export/csv')
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(403)
     const json = await res.json() as any
@@ -734,7 +647,7 @@ describe('Admin Hostname Auth Guard', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'alice', pubkey: 'a'.repeat(64) })
     })
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(403)
   })
@@ -745,28 +658,456 @@ describe('Admin Hostname Auth Guard', () => {
     const req = new Request('https://names.admin.divine.video/api/admin/usernames/search?q=test', {
       headers: { 'Cf-Access-Jwt-Assertion': 'fake-jwt-for-test' }
     })
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
     expect(json.ok).toBe(true)
   })
 
-  it('should block admin API requests from names.admin.divine.video without CF Access JWT', async () => {
+  describe('GET /api/admin/username/:name (direct lookup)', () => {
+    it('should return username by exact name', async () => {
+      const app = createTestApp()
+
+      const req = new Request('http://localhost/api/admin/username/testuser')
+      const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+      expect(res.status).toBe(200)
+      const json = await res.json() as any
+      expect(json.ok).toBe(true)
+      expect(json.username).toBeDefined()
+      expect(json.username.name).toBe('testuser')
+    })
+
+    it('should return 404 for non-existent username', async () => {
+      const app = createTestApp()
+
+      const req = new Request('http://localhost/api/admin/username/nonexistent')
+      const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+      expect(res.status).toBe(404)
+      const json = await res.json() as any
+      expect(json.ok).toBe(false)
+      expect(json.error).toContain('not found')
+    })
+  })
+
+  it('should block admin API requests from names.admin.divine.video without auth', async () => {
     const app = createTestApp()
 
     const req = new Request('https://names.admin.divine.video/api/admin/usernames/search?q=test')
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(401)
   })
 
-  it('should allow admin API requests from localhost for local dev', async () => {
+  it('should allow admin API requests from localhost when BYPASS_LOCAL_AUTH=true', async () => {
     const app = createTestApp()
 
     const req = new Request('http://localhost/api/admin/usernames/search?q=test')
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {} })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
 
     expect(res.status).toBe(200)
+  })
+
+  it('should require real auth on localhost when BYPASS_LOCAL_AUTH is not set', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/api/admin/usernames/search?q=test')
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(401)
+  })
+
+  it('should require real auth on localhost when BYPASS_LOCAL_AUTH=false', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/api/admin/usernames/search?q=test')
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'false' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(401)
+  })
+
+  it('should allow /api/admin/auth/* on localhost without BYPASS_LOCAL_AUTH', async () => {
+    // OAuth bootstrapping: the callback and /start endpoints must be reachable
+    // without an existing session, otherwise Keycast login can never initiate.
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/api/admin/auth/status')
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.authenticated).toBe(false)
+  })
+})
+
+describe('OAuth Start Config Validation', () => {
+  function createFakeKv(): KVNamespace {
+    const store = new Map<string, string>()
+    return {
+      async get(key: string) { return store.get(key) ?? null },
+      async put(key: string, value: string) { store.set(key, value) },
+      async delete(key: string) { store.delete(key) },
+    } as unknown as KVNamespace
+  }
+
+  function createTestApp() {
+    const app = new Hono<{
+      Bindings: {
+        DB: D1Database
+        SESSION_KV: KVNamespace
+        KEYCAST_URL?: string
+        KEYCAST_CLIENT_ID?: string
+        OAUTH_CALLBACK_BASE_URL?: string
+      }
+    }>()
+    app.route('/api/admin', admin)
+    return app
+  }
+
+  const baseEnv = () => ({
+    DB: createMockDB(),
+    SESSION_KV: createFakeKv(),
+    KEYCAST_CLIENT_ID: 'test-client',
+  })
+
+  it('rejects non-HTTPS KEYCAST_URL pointing at a public host', async () => {
+    const app = createTestApp()
+    const req = new Request('https://names.admin.divine.video/api/admin/auth/start', { method: 'POST' })
+    const env = { ...baseEnv(), KEYCAST_URL: 'http://login.example.com' }
+    const res = await app.fetch(req, env, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(503)
+    const json = await res.json() as any
+    expect(json.error).toContain('KEYCAST_URL must be HTTPS')
+  })
+
+  it('accepts https:// KEYCAST_URL', async () => {
+    const app = createTestApp()
+    const req = new Request('https://names.admin.divine.video/api/admin/auth/start', { method: 'POST' })
+    const env = { ...baseEnv(), KEYCAST_URL: 'https://login.divine.video' }
+    const res = await app.fetch(req, env, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(200)
+  })
+
+  it('accepts http://localhost KEYCAST_URL for local dev', async () => {
+    const app = createTestApp()
+    const req = new Request('http://localhost/api/admin/auth/start', { method: 'POST' })
+    const env = { ...baseEnv(), KEYCAST_URL: 'http://localhost:3000' }
+    const res = await app.fetch(req, env, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(200)
+  })
+
+  it('accepts http://*.localhost KEYCAST_URL for local dev', async () => {
+    const app = createTestApp()
+    const req = new Request('http://localhost/api/admin/auth/start', { method: 'POST' })
+    const env = { ...baseEnv(), KEYCAST_URL: 'http://login.localhost:3000' }
+    const res = await app.fetch(req, env, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(200)
+  })
+
+  it('rejects OAUTH_CALLBACK_BASE_URL pointing at a non-localhost host', async () => {
+    const app = createTestApp()
+    const req = new Request('https://names.admin.divine.video/api/admin/auth/start', { method: 'POST' })
+    const env = {
+      ...baseEnv(),
+      KEYCAST_URL: 'https://login.divine.video',
+      OAUTH_CALLBACK_BASE_URL: 'https://evil.example.com',
+    }
+    const res = await app.fetch(req, env, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(503)
+    const json = await res.json() as any
+    expect(json.error).toContain('OAUTH_CALLBACK_BASE_URL')
+  })
+
+  it('accepts OAUTH_CALLBACK_BASE_URL=http://admin.localhost:8787', async () => {
+    const app = createTestApp()
+    const req = new Request('http://localhost/api/admin/auth/start', { method: 'POST' })
+    const env = {
+      ...baseEnv(),
+      KEYCAST_URL: 'http://localhost:3000',
+      OAUTH_CALLBACK_BASE_URL: 'http://admin.localhost:8787',
+    }
+    const res = await app.fetch(req, env, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.authorize_url).toContain('admin.localhost%3A8787')
+  })
+
+  it('rejects OAUTH_CALLBACK_BASE_URL with a non-http(s) scheme', async () => {
+    const app = createTestApp()
+    const req = new Request('https://names.admin.divine.video/api/admin/auth/start', { method: 'POST' })
+    const env = {
+      ...baseEnv(),
+      KEYCAST_URL: 'https://login.divine.video',
+      OAUTH_CALLBACK_BASE_URL: 'javascript:void(0)',
+    }
+    const res = await app.fetch(req, env, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(503)
+  })
+})
+
+describe('Admin Tag Endpoints', () => {
+  function createTestApp() {
+    const app = new Hono<{ Bindings: { DB: D1Database; BYPASS_LOCAL_AUTH?: string } }>()
+    app.route('/admin', admin)
+    return app
+  }
+
+  function createTagMockDB() {
+    return createFakeD1([
+      {
+        id: 1, name: 'kingbach', username_display: 'KingBach', username_canonical: 'kingbach',
+        pubkey: null, email: null, relays: null, status: 'reserved',
+        recyclable: 1, created_at: 1700000000, updated_at: 1700000000,
+        reserved_reason: 'Brand protection', admin_notes: null,
+      },
+      {
+        id: 2, name: 'lelepons', username_display: 'LelePons', username_canonical: 'lelepons',
+        pubkey: null, email: null, relays: null, status: 'reserved',
+        recyclable: 1, created_at: 1700000100, updated_at: 1700000100,
+        reserved_reason: 'Brand protection', admin_notes: null,
+      },
+    ])
+  }
+
+  it('POST /admin/username/:name/tags adds a tag', async () => {
+    const app = createTestApp()
+    const db = createTagMockDB()
+
+    const req = new Request('http://localhost/admin/username/kingbach/tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
+      body: JSON.stringify({ tag: 'vip' }),
+    })
+    const res = await app.fetch(req, { DB: db, BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.tags).toContain('vip')
+  })
+
+  it('DELETE /admin/username/:name/tags/:tag removes a tag', async () => {
+    const app = createTestApp()
+    const db = createTagMockDB()
+
+    // Add a tag first
+    await app.fetch(new Request('http://localhost/admin/username/kingbach/tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
+      body: JSON.stringify({ tag: 'vip' }),
+    }), { DB: db, BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    // Then remove it
+    const res = await app.fetch(new Request('http://localhost/admin/username/kingbach/tags/vip', {
+      method: 'DELETE',
+      headers: { 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
+    }), { DB: db, BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.tags).not.toContain('vip')
+  })
+
+  it('GET /admin/tags returns all tags with counts', async () => {
+    const app = createTestApp()
+    const db = createTagMockDB()
+
+    // Add tags
+    await app.fetch(new Request('http://localhost/admin/username/kingbach/tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
+      body: JSON.stringify({ tag: 'vip' }),
+    }), { DB: db, BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    await app.fetch(new Request('http://localhost/admin/username/lelepons/tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
+      body: JSON.stringify({ tag: 'vip' }),
+    }), { DB: db, BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    const res = await app.fetch(new Request('http://localhost/admin/tags', {
+      method: 'GET',
+    }), { DB: db, BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.tags).toContainEqual({ tag: 'vip', count: 2 })
+  })
+
+  it('returns 404 for tags on nonexistent username', async () => {
+    const app = createTestApp()
+    const db = createTagMockDB()
+
+    const res = await app.fetch(new Request('http://localhost/admin/username/doesnotexist/tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
+      body: JSON.stringify({ tag: 'vip' }),
+    }), { DB: db, BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    expect(res.status).toBe(404)
+  })
+
+  it('returns 400 when tag field is missing from POST body', async () => {
+    const app = createTestApp()
+    const db = createTagMockDB()
+
+    const res = await app.fetch(new Request('http://localhost/admin/username/kingbach/tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
+      body: JSON.stringify({}),
+    }), { DB: db, BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    expect(res.status).toBe(400)
+    const json = await res.json() as any
+    expect(json.ok).toBe(false)
+    expect(json.error).toContain('required')
+  })
+
+  it('returns 400 when tag exceeds 50 characters', async () => {
+    const app = createTestApp()
+    const db = createTagMockDB()
+
+    const res = await app.fetch(new Request('http://localhost/admin/username/kingbach/tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
+      body: JSON.stringify({ tag: 'a'.repeat(51) }),
+    }), { DB: db, BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    expect(res.status).toBe(400)
+    const json = await res.json() as any
+    expect(json.ok).toBe(false)
+    expect(json.error).toContain('50')
+  })
+})
+
+describe('Admin Stats Endpoint', () => {
+  function createTestApp() {
+    const app = new Hono<{ Bindings: { DB: D1Database } }>()
+    app.route('/admin', admin)
+    return app
+  }
+
+  it('should return stats', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/admin/usernames/stats')
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.totals).toBeDefined()
+    expect(json.totals.pending_confirmation).toBeDefined()
+    expect(json.metadata).toBeDefined()
+    expect(json.activity).toBeDefined()
+    expect(json.top_tags).toBeDefined()
+  })
+})
+
+describe('Admin Notes Endpoint', () => {
+  function createTestApp() {
+    const app = new Hono<{ Bindings: { DB: D1Database } }>()
+    app.route('/admin', admin)
+    return app
+  }
+
+  it('should update admin notes for existing username', async () => {
+    const app = createTestApp()
+    const db = createMockDB()
+
+    const req = new Request('http://localhost/admin/username/testuser/notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ admin_notes: 'VIP creator account' }),
+    })
+    const res = await app.fetch(req, { DB: db, BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.admin_notes).toBe('VIP creator account')
+    expect(json.admin_notes_updated_by).toBe('dev@local')
+    expect(json.admin_notes_updated_at).toBeTypeOf('number')
+
+    const username = await getUsernameByName(db, 'testuser')
+    expect(username?.admin_notes).toBe('VIP creator account')
+    expect(username?.admin_notes_updated_by).toBe('dev@local')
+    expect(username?.admin_notes_updated_at).toBeTypeOf('number')
+  })
+
+  it('should return 404 for non-existent username', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/admin/username/doesnotexist/notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ admin_notes: 'test' }),
+    })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(404)
+  })
+
+  it('should reject non-string admin_notes payloads', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/admin/username/testuser/notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ admin_notes: { nope: true } }),
+    })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(400)
+    const json = await res.json() as any
+    expect(json.error).toContain('string or null')
+  })
+
+  it('should reject admin_notes that exceed the max length', async () => {
+    const app = createTestApp()
+
+    const req = new Request('http://localhost/admin/username/testuser/notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ admin_notes: 'a'.repeat(5001) }),
+    })
+    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(400)
+    const json = await res.json() as any
+    expect(json.error).toContain('5000')
+  })
+})
+
+describe('Admin Export Endpoint', () => {
+  function createTestApp() {
+    const app = new Hono<{ Bindings: { DB: D1Database; BYPASS_LOCAL_AUTH?: string } }>()
+    app.route('/admin', admin)
+    return app
+  }
+
+  it('should allow exporting pending-confirmation usernames', async () => {
+    const app = createTestApp()
+    const db = createFakeD1([
+      {
+        id: 1, name: 'pendinguser', username_display: 'pendinguser', username_canonical: 'pendinguser',
+        pubkey: null, email: 'pending@example.com', relays: null, status: 'pending-confirmation',
+        recyclable: 0, created_at: 1700000000, updated_at: 1700000000, claimed_at: null,
+        revoked_at: null, reserved_reason: null, admin_notes: null,
+      },
+    ])
+
+    const req = new Request('http://localhost/admin/export/csv?status=pending-confirmation')
+    const res = await app.fetch(req, { DB: db, BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('text/csv')
+    const csv = await res.text()
+    expect(csv).toContain('pending-confirmation')
+    expect(csv).toContain('pendinguser')
   })
 })

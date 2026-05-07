@@ -6,6 +6,7 @@ import username from './routes/username'
 import nip05 from './routes/nip05'
 import subdomain from './routes/subdomain'
 import admin from './routes/admin'
+// Auth routes are mounted inside admin.ts (same Hono app, exempt from auth middleware)
 import publicRoutes from './routes/public'
 import internalAtproto from './routes/internal-atproto'
 import { getAllActiveUsernames, expireStaleReservations } from './db/queries'
@@ -14,9 +15,13 @@ import { bulkSyncToFastly, parseRelayHints } from './utils/fastly-sync'
 type Bindings = {
   DB: D1Database
   ASSETS: Fetcher
+  SESSION_KV?: KVNamespace
+  ADMIN_PUBKEYS?: string
   FASTLY_API_TOKEN?: string
   FASTLY_STORE_ID?: string
   ATPROTO_SYNC_TOKEN?: string
+  KEYCAST_URL?: string
+  KEYCAST_CLIENT_ID?: string
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
@@ -37,9 +42,9 @@ app.route('', subdomain)
 app.route('', publicRoutes)
 
 // Service info fallback for non-public, non-admin hostnames
-app.get('/', (c, next) => {
+app.use('/', async (c, next) => {
   const hostname = new URL(c.req.url).hostname
-  if (hostname === 'names.admin.divine.video') {
+  if (hostname === 'names.admin.divine.video' || hostname === 'admin.localhost') {
     return next() // Let admin SPA catch-all handle it
   }
   return c.json({
@@ -51,7 +56,8 @@ app.get('/', (c, next) => {
 // Username API
 app.route('/api/username', username)
 
-// Admin API (protected by Cloudflare Access)
+// Admin API (protected by Cloudflare Access or Keycast session)
+// Auth routes are mounted inside admin.ts, exempted from auth check
 app.route('/api/admin', admin)
 
 // Internal service API (service-authenticated bearer token)
@@ -64,8 +70,8 @@ app.route('', nip05)
 app.get('*', async (c) => {
   const url = new URL(c.req.url)
 
-  // Only handle admin subdomain SPA routes
-  if (url.hostname === 'names.admin.divine.video') {
+  // Only handle admin subdomain SPA routes (plus admin.localhost for local dev)
+  if (url.hostname === 'names.admin.divine.video' || url.hostname === 'admin.localhost') {
     // Don't intercept API routes
     if (url.pathname.startsWith('/api/')) {
       return c.notFound()

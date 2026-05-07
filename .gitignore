@@ -14,3 +14,4 @@ worker-configuration.d.ts
 
 # Private journal
 .private-journal/
+.wrangler-dev/

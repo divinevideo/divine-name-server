@@ -1,11 +1,15 @@
 import type {
   SearchResult,
+  SearchSort,
+  UsernameLookupResponse,
   ReserveResponse,
   AssignResponse,
   RevokeResponse,
   ReservedWord,
   BulkReserveResponse,
-  ApiResponse
+  ApiResponse,
+  TagDetail,
+  UsernameStatsResponse
 } from '../types'
 
 const API_BASE = '/api/admin'
@@ -14,7 +18,9 @@ export async function searchUsernames(
   query: string,
   status?: string,
   page = 1,
-  limit = 50
+  limit = 50,
+  tag?: string,
+  sort?: SearchSort
 ): Promise<SearchResult> {
   const params = new URLSearchParams({
     q: query,
@@ -26,10 +32,44 @@ export async function searchUsernames(
     params.set('status', status)
   }
 
+  if (tag) {
+    params.set('tag', tag)
+  }
+
+  if (sort) {
+    params.set('sort', sort)
+  }
+
   const response = await fetch(`${API_BASE}/usernames/search?${params}`)
 
   if (!response.ok) {
     throw new Error(`Search failed: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+export async function getUsername(name: string): Promise<UsernameLookupResponse> {
+  const response = await fetch(`${API_BASE}/username/${encodeURIComponent(name)}`)
+
+  if (response.status === 404) {
+    const contentType = response.headers.get('content-type') || ''
+    if (contentType.includes('application/json')) {
+      try {
+        return await response.json()
+      } catch {
+        // Fall through to a stable typed 404 payload.
+      }
+    }
+
+    return {
+      ok: false,
+      error: 'Username not found'
+    }
+  }
+
+  if (!response.ok) {
+    throw new Error(`Lookup failed: ${response.statusText}`)
   }
 
   return response.json()
@@ -158,6 +198,86 @@ export async function deleteReservedWord(word: string): Promise<ApiResponse> {
 
   if (!response.ok) {
     throw new Error(`Failed to delete reserved word: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+// --- Tags ---
+
+export async function addTagToUsername(
+  name: string,
+  tag: string
+): Promise<ApiResponse & { tags: string[]; tag_details: TagDetail[] }> {
+  const response = await fetch(`${API_BASE}/username/${encodeURIComponent(name)}/tags`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tag }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Failed to add tag: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+export async function removeTagFromUsername(
+  name: string,
+  tag: string
+): Promise<ApiResponse & { tags: string[]; tag_details: TagDetail[] }> {
+  const response = await fetch(
+    `${API_BASE}/username/${encodeURIComponent(name)}/tags/${encodeURIComponent(tag)}`,
+    { method: 'DELETE' }
+  )
+
+  if (!response.ok) {
+    throw new Error(`Failed to remove tag: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+export async function getAllTags(): Promise<{ tags: { tag: string; count: number }[] }> {
+  const response = await fetch(`${API_BASE}/tags`)
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch tags: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+// --- Stats ---
+
+export async function getUsernameStats(): Promise<UsernameStatsResponse> {
+  const response = await fetch(`${API_BASE}/usernames/stats`)
+
+  if (!response.ok) {
+    throw new Error(`Stats failed: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+// --- Notes ---
+
+export async function updateAdminNotes(
+  name: string,
+  adminNotes: string | null
+): Promise<ApiResponse & {
+  admin_notes: string | null
+  admin_notes_updated_by?: string | null
+  admin_notes_updated_at?: number | null
+}> {
+  const response = await fetch(`${API_BASE}/username/${encodeURIComponent(name)}/notes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ admin_notes: adminNotes }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Update notes failed: ${response.statusText}`)
   }
 
   return response.json()
