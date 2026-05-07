@@ -1,5 +1,6 @@
 import type {
   SearchResult,
+  SearchSort,
   UsernameLookupResponse,
   ReserveResponse,
   AssignResponse,
@@ -11,6 +12,7 @@ import type {
   FastlySyncPageResponse,
   Nip05StatusResponse,
   ResyncResponse,
+  UsernameStatsResponse
 } from '../types'
 
 const API_BASE = '/api/admin'
@@ -20,7 +22,8 @@ export async function searchUsernames(
   status?: string,
   page = 1,
   limit = 50,
-  tag?: string
+  tag?: string,
+  sort?: SearchSort
 ): Promise<SearchResult> {
   const params = new URLSearchParams({
     q: query,
@@ -34,6 +37,10 @@ export async function searchUsernames(
 
   if (tag) {
     params.set('tag', tag)
+  }
+
+  if (sort) {
+    params.set('sort', sort)
   }
 
   const response = await fetch(`${API_BASE}/usernames/search?${params}`)
@@ -256,6 +263,18 @@ export async function getNip05Status(name: string): Promise<Nip05StatusResponse>
   return response.json()
 }
 
+// --- Stats ---
+
+export async function getUsernameStats(): Promise<UsernameStatsResponse> {
+  const response = await fetch(`${API_BASE}/usernames/stats`)
+
+  if (!response.ok) {
+    throw new Error(`Stats failed: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
 export async function resyncToFastly(name: string): Promise<ResyncResponse> {
   const response = await fetch(`${API_BASE}/username/${encodeURIComponent(name)}/sync-to-fastly`, {
     method: 'POST',
@@ -263,6 +282,29 @@ export async function resyncToFastly(name: string): Promise<ResyncResponse> {
 
   if (!response.ok) {
     throw new Error(`Re-sync failed: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+// --- Notes ---
+
+export async function updateAdminNotes(
+  name: string,
+  adminNotes: string | null
+): Promise<ApiResponse & {
+  admin_notes: string | null
+  admin_notes_updated_by?: string | null
+  admin_notes_updated_at?: number | null
+}> {
+  const response = await fetch(`${API_BASE}/username/${encodeURIComponent(name)}/notes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ admin_notes: adminNotes }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Update notes failed: ${response.statusText}`)
   }
 
   return response.json()
