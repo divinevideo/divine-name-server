@@ -122,8 +122,9 @@ export async function deleteUsernameFromFastly(
   username: string
 ): Promise<{ success: boolean; error?: string }> {
   if (!env.FASTLY_API_TOKEN || !env.FASTLY_STORE_ID) {
-    console.log('Fastly delete skipped: missing FASTLY_API_TOKEN or FASTLY_STORE_ID')
-    return { success: true }
+    const error = 'Fastly sync configuration is missing'
+    console.error('Fastly delete failed: missing FASTLY_API_TOKEN or FASTLY_STORE_ID')
+    return { success: false, error }
   }
 
   // Key format must match compute-js expectations: user:{username}

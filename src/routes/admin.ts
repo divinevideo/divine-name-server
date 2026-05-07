@@ -757,6 +757,7 @@ admin.post('/sync/fastly', async (c) => {
 
     const syncable = page.filter(u => u.pubkey)
     const nextCursor = page.length === limit ? String(page[page.length - 1].id) : null
+    const remaining = nextCursor ? await countActiveUsernames(c.env.DB, Number(nextCursor)) : 0
 
     if (dryRun) {
       const totalActive = await countActiveUsernames(c.env.DB)
@@ -767,6 +768,7 @@ admin.post('/sync/fastly', async (c) => {
         page_size: page.length,
         syncable: syncable.length,
         skipped: page.length - syncable.length,
+        remaining,
         cursor: nextCursor,
       })
     }
@@ -802,6 +804,7 @@ admin.post('/sync/fastly', async (c) => {
       synced: results.synced,
       deleted: results.deleted,
       failed: results.failed,
+      remaining,
       cursor: nextCursor,
       errors: results.errors.length > 0 ? results.errors.slice(0, 20) : undefined,
     })
@@ -954,13 +957,19 @@ admin.get('/username/:name/nip05-status', async (c) => {
       return c.json({ ok: false, error: 'Username not found' }, 404)
     }
 
-    if (existing.status !== 'active' || !existing.pubkey) {
+    if (existing.status === 'active' && !existing.pubkey) {
       return c.json({
         ok: true,
         status: 'not_applicable',
-        reason: existing.status !== 'active'
-          ? `Username status is ${existing.status}`
-          : 'No pubkey assigned',
+        reason: 'No pubkey assigned',
+      })
+    }
+
+    if (!['active', 'revoked', 'burned'].includes(existing.status)) {
+      return c.json({
+        ok: true,
+        status: 'not_applicable',
+        reason: `Username status is ${existing.status}`,
       })
     }
 
@@ -971,6 +980,26 @@ admin.get('/username/:name/nip05-status', async (c) => {
     const fastly = await readUsernameFromFastly(c.env, canonical)
     if (!fastly.success) {
       return c.json({ ok: true, status: 'error', detail: fastly.error })
+    }
+
+    if (existing.status === 'revoked' || existing.status === 'burned') {
+      if (!fastly.data) {
+        return c.json({ ok: true, status: 'missing' })
+      }
+
+      return c.json({
+        ok: true,
+        status: 'mismatch',
+        reason: `Username is ${existing.status} and still present in Fastly`,
+        db: {
+          pubkey: existing.pubkey || '',
+          relays: parseRelayHints(existing.relays),
+          status: existing.status,
+          atproto_did: existing.atproto_did || null,
+          atproto_state: existing.atproto_state || null,
+        },
+        fastly: fastly.data,
+      })
     }
 
     if (!fastly.data) {
@@ -1018,7 +1047,7 @@ admin.post('/username/:name/sync-to-fastly', async (c) => {
       return c.json({ ok: false, error: 'Username not found' }, 404)
     }
 
-    if (existing.status === 'burned') {
+    if (existing.status === 'burned' || existing.status === 'revoked') {
       const deleteResult = await deleteUsernameFromFastly(c.env, canonical)
       if (!deleteResult.success) {
         await enqueueFastlySyncTask(c.env.DB, {
