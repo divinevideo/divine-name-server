@@ -314,7 +314,7 @@ export async function updateAdminNotes(
 
 export async function syncFastlyPage(
   cursor?: string | null,
-  limit = 500,
+  limit = 100,
   dryRun = false,
   signal?: AbortSignal
 ): Promise<FastlySyncPageResponse> {
