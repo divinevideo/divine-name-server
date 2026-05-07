@@ -57,7 +57,7 @@ export default function UsernameDetail() {
     try {
       const result = await resyncToFastly(name)
       if (result.ok && result.success) {
-        setSyncResult(result.verified ? 'Synced and verified' : 'Synced (verification pending)')
+        setSyncResult(result.verified ? 'Synced and verified' : (result.error || 'Synced, verification failed'))
       } else {
         setSyncResult(result.error || 'Sync failed')
       }

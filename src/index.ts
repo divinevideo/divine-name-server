@@ -9,7 +9,7 @@ import admin from './routes/admin'
 // Auth routes are mounted inside admin.ts (same Hono app, exempt from auth middleware)
 import publicRoutes from './routes/public'
 import internalAtproto from './routes/internal-atproto'
-import { getUsernamesUpdatedSince, expireStaleReservations } from './db/queries'
+import { getUsernamesUpdatedSince, expireStaleReservations, getQueuedFastlySyncTasks, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures } from './db/queries'
 import { syncBatch, parseRelayHints } from './utils/fastly-sync'
 
 type Bindings = {
@@ -105,25 +105,61 @@ export default {
       console.log(`Cron: expired ${expired} stale pending-confirmation reservations`)
     }
 
-    // Delta sync: only sync usernames updated in the last 2 hours (overlap for safety)
-    const twoHoursAgo = Math.floor(Date.now() / 1000) - (2 * 60 * 60)
-    const recentlyChanged = await getUsernamesUpdatedSince(env.DB, twoHoursAgo)
+    // Six-hour overlap covers delayed cron firings while the durable queue
+    // preserves retries for anything that still fails after bounded Fastly retries.
+    const sixHoursAgo = Math.floor(Date.now() / 1000) - (6 * 60 * 60)
+    const recentlyChanged = await getUsernamesUpdatedSince(env.DB, sixHoursAgo)
+    const queuedTasks = await getQueuedFastlySyncTasks(env.DB, 5000)
 
-    const items = recentlyChanged
-      .filter(u => (u.status === 'active' && u.pubkey) || u.status === 'revoked' || u.status === 'burned')
-      .map(u => ({
-        username: u.username_canonical || u.name,
-        action: (u.status === 'active' ? 'sync' : 'delete') as 'sync' | 'delete',
-        data: u.status === 'active' ? {
-          pubkey: u.pubkey!,
-          relays: parseRelayHints(u.relays),
-          status: 'active' as const,
-          atproto_did: u.atproto_did,
-          atproto_state: u.atproto_state,
-        } : undefined,
-      }))
+    const itemsByUsername = new Map<string, {
+      username: string
+      action: 'sync' | 'delete'
+      data?: {
+        pubkey: string
+        relays: string[]
+        status: 'active'
+        atproto_did: string | null
+        atproto_state: 'pending' | 'ready' | 'failed' | 'disabled' | null
+      }
+    }>()
+
+    for (const task of queuedTasks) {
+      itemsByUsername.set(task.username, task)
+    }
+
+    for (const user of recentlyChanged) {
+      if (user.status === 'active' && user.pubkey) {
+        itemsByUsername.set(user.username_canonical || user.name, {
+          username: user.username_canonical || user.name,
+          action: 'sync',
+          data: {
+            pubkey: user.pubkey,
+            relays: parseRelayHints(user.relays),
+            status: 'active',
+            atproto_did: user.atproto_did,
+            atproto_state: user.atproto_state,
+          },
+        })
+      } else if (user.status === 'revoked' || user.status === 'burned') {
+        itemsByUsername.set(user.username_canonical || user.name, {
+          username: user.username_canonical || user.name,
+          action: 'delete',
+        })
+      }
+    }
+
+    const items = Array.from(itemsByUsername.values())
+    for (const item of items) {
+      await enqueueFastlySyncTask(env.DB, item)
+    }
 
     const results = await syncBatch(env, items, { concurrency: 10 })
-    console.log(`Cron delta sync: ${recentlyChanged.length} changed, ${results.synced} synced, ${results.deleted} deleted, ${results.failed} failed`)
+    await clearFastlySyncTasks(env.DB, results.successes.map(result => result.username))
+    await markFastlySyncTaskFailures(
+      env.DB,
+      results.failures.map(result => ({ username: result.username, error: result.error }))
+    )
+
+    console.log(`Cron Fastly reconciliation: ${recentlyChanged.length} recent changes, ${queuedTasks.length} queued, ${results.synced} synced, ${results.deleted} deleted, ${results.failed} failed`)
   }
 }

@@ -273,11 +273,13 @@ export async function resyncToFastly(name: string): Promise<ResyncResponse> {
 export async function syncFastlyPage(
   cursor?: string | null,
   limit = 500,
-  dryRun = false
+  dryRun = false,
+  signal?: AbortSignal
 ): Promise<FastlySyncPageResponse> {
   const response = await fetch(`${API_BASE}/sync/fastly`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal,
     body: JSON.stringify({
       limit,
       cursor: cursor ?? undefined,

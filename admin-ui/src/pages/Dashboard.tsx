@@ -26,6 +26,7 @@ export default function Dashboard() {
   const [syncProgress, setSyncProgress] = useState({ synced: 0, failed: 0, total: 0 })
   const [syncError, setSyncError] = useState<string | null>(null)
   const cancelRef = useRef(false)
+  const abortRef = useRef<AbortController | null>(null)
 
   const startFastlySync = async () => {
     setSyncState('running')
@@ -38,14 +39,16 @@ export default function Dashboard() {
     let totalFailed = 0
 
     try {
+      abortRef.current = new AbortController()
+
       // Dry run first page to get total count
-      const dryRun = await syncFastlyPage(null, 500, true)
-      const estimatedTotal = dryRun.total ?? 0
+      const dryRun = await syncFastlyPage(null, 500, true, abortRef.current.signal)
+      const estimatedTotal = dryRun.total_active ?? 0
       setSyncProgress(p => ({ ...p, total: estimatedTotal }))
 
       // Now sync for real
       while (!cancelRef.current) {
-        const result = await syncFastlyPage(cursor, 500, false)
+        const result = await syncFastlyPage(cursor, 500, false, abortRef.current.signal)
         totalSynced += result.synced ?? 0
         totalFailed += result.failed ?? 0
         setSyncProgress({ synced: totalSynced, failed: totalFailed, total: estimatedTotal })
@@ -56,8 +59,14 @@ export default function Dashboard() {
 
       setSyncState(cancelRef.current ? 'idle' : 'done')
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        setSyncState('idle')
+        return
+      }
       setSyncError(err instanceof Error ? err.message : 'Unknown error')
       setSyncState('error')
+    } finally {
+      abortRef.current = null
     }
   }
 
@@ -315,7 +324,10 @@ export default function Dashboard() {
                     </div>
                   </div>
                   <button
-                    onClick={() => { cancelRef.current = true }}
+                    onClick={() => {
+                      cancelRef.current = true
+                      abortRef.current?.abort()
+                    }}
                     className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200"
                   >
                     Stop

@@ -1,6 +1,8 @@
 // ABOUTME: Database query helpers for usernames and reserved words
 // ABOUTME: Provides type-safe D1 database operations
 
+import type { SyncItem, UsernameKVData } from '../utils/fastly-sync'
+
 export type ClaimSource = 'self-service' | 'admin' | 'bulk-upload' | 'vine-import' | 'public-reservation' | 'unknown'
 
 export interface Username {
@@ -55,6 +57,14 @@ export interface SearchResult {
     total: number
     total_pages: number
   }
+}
+
+export interface FastlySyncQueueTask extends SyncItem {
+  queued_at: number
+  updated_at: number
+  last_attempt_at: number | null
+  attempt_count: number
+  last_error: string | null
 }
 
 export async function isReservedWord(
@@ -171,6 +181,86 @@ export async function getUsernamesUpdatedSince(
   ).bind(sinceEpoch).all<Username>()
 
   return result.results
+}
+
+export async function enqueueFastlySyncTask(
+  db: D1Database,
+  item: SyncItem,
+  now = Math.floor(Date.now() / 1000)
+): Promise<void> {
+  const payloadJson = item.data ? JSON.stringify(item.data) : null
+
+  await db.prepare(
+    `INSERT INTO fastly_sync_queue (
+       username_canonical, action, payload_json, queued_at, updated_at, last_attempt_at, attempt_count, last_error
+     ) VALUES (?, ?, ?, ?, ?, NULL, 0, NULL)
+     ON CONFLICT(username_canonical) DO UPDATE SET
+       action = excluded.action,
+       payload_json = excluded.payload_json,
+       queued_at = excluded.queued_at,
+       updated_at = excluded.updated_at,
+       last_attempt_at = NULL,
+       attempt_count = 0,
+       last_error = NULL`
+  ).bind(item.username, item.action, payloadJson, now, now).run()
+}
+
+export async function getQueuedFastlySyncTasks(
+  db: D1Database,
+  limit = 1000
+): Promise<FastlySyncQueueTask[]> {
+  const result = await db.prepare(
+    `SELECT username_canonical, action, payload_json, queued_at, updated_at, last_attempt_at, attempt_count, last_error
+     FROM fastly_sync_queue
+     ORDER BY updated_at ASC
+     LIMIT ?`
+  ).bind(limit).all<{
+    username_canonical: string
+    action: 'sync' | 'delete'
+    payload_json: string | null
+    queued_at: number
+    updated_at: number
+    last_attempt_at: number | null
+    attempt_count: number
+    last_error: string | null
+  }>()
+
+  return result.results.map((row) => ({
+    username: row.username_canonical,
+    action: row.action,
+    data: row.payload_json ? JSON.parse(row.payload_json) as UsernameKVData : undefined,
+    queued_at: row.queued_at,
+    updated_at: row.updated_at,
+    last_attempt_at: row.last_attempt_at,
+    attempt_count: row.attempt_count,
+    last_error: row.last_error,
+  }))
+}
+
+export async function clearFastlySyncTasks(
+  db: D1Database,
+  usernames: string[]
+): Promise<void> {
+  if (usernames.length === 0) return
+
+  const placeholders = usernames.map(() => '?').join(', ')
+  await db.prepare(
+    `DELETE FROM fastly_sync_queue WHERE username_canonical IN (${placeholders})`
+  ).bind(...usernames).run()
+}
+
+export async function markFastlySyncTaskFailures(
+  db: D1Database,
+  failures: Array<{ username: string; error: string }>,
+  now = Math.floor(Date.now() / 1000)
+): Promise<void> {
+  for (const failure of failures) {
+    await db.prepare(
+      `UPDATE fastly_sync_queue
+       SET last_attempt_at = ?, attempt_count = attempt_count + 1, last_error = ?
+       WHERE username_canonical = ?`
+    ).bind(now, failure.error, failure.username).run()
+  }
 }
 
 export async function reserveUsername(

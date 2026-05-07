@@ -5,9 +5,9 @@ import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
 import { bech32 } from '@scure/base'
 import { getSession } from '../auth/keycast-oauth'
-import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getActiveUsernamesPaginated, countActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags } from '../db/queries'
+import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getActiveUsernamesPaginated, countActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures } from '../db/queries'
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
-import { syncUsernameToFastly, deleteUsernameFromFastly, syncBatch, parseRelayHints, readUsernameFromFastly, syncAndVerifyUsername } from '../utils/fastly-sync'
+import { syncUsernameToFastly, deleteUsernameFromFastly, syncBatch, parseRelayHints, readUsernameFromFastly, syncAndVerifyUsername, usernameKVDataMatches } from '../utils/fastly-sync'
 import { sendAssignmentNotificationEmail } from '../utils/email'
 import authRoutes from './auth'
 
@@ -412,17 +412,14 @@ admin.post('/username/revoke', async (c) => {
 
     await revokeUsername(c.env.DB, usernameData.canonical, burn)
 
-    // Sync to Fastly with verification (delete if burned, update status if revoked)
+    await enqueueFastlySyncTask(c.env.DB, {
+      username: usernameData.canonical,
+      action: 'delete',
+    })
+
+    // Delete from Fastly so revoked/burned usernames stop resolving at the edge.
     c.executionCtx.waitUntil(
-      burn
-        ? deleteUsernameFromFastly(c.env, usernameData.canonical)
-        : syncAndVerifyUsername(c.env, usernameData.canonical, {
-            pubkey: existing.pubkey || '',
-            relays: [],
-            status: 'revoked',
-            atproto_did: null,
-            atproto_state: null,
-          })
+      deleteUsernameFromFastly(c.env, usernameData.canonical)
     )
 
     return c.json({
@@ -479,6 +476,17 @@ admin.post('/username/assign', async (c) => {
 
     const createdBy = (c.get('adminEmail' as never) as string) || null
     await assignUsername(c.env.DB, usernameData.display, usernameData.canonical, normalizedPubkey, 'admin', createdBy)
+    await enqueueFastlySyncTask(c.env.DB, {
+      username: usernameData.canonical,
+      action: 'sync',
+      data: {
+        pubkey: normalizedPubkey,
+        relays: [],
+        status: 'active',
+        atproto_did: null,
+        atproto_state: null,
+      },
+    })
 
     // Sync to Fastly KV with read-back verification
     c.executionCtx.waitUntil(
@@ -562,6 +570,17 @@ admin.post('/username/assign-bulk', async (c) => {
         }
 
         await assignUsername(c.env.DB, usernameData.display, usernameData.canonical, normalizedPubkey, 'bulk-upload', createdBy)
+        await enqueueFastlySyncTask(c.env.DB, {
+          username: usernameData.canonical,
+          action: 'sync',
+          data: {
+            pubkey: normalizedPubkey,
+            relays: [],
+            status: 'active',
+            atproto_did: null,
+            atproto_state: null,
+          },
+        })
 
         // Sync to Fastly — no read-back verification on bulk to avoid doubling API calls
         c.executionCtx.waitUntil(
@@ -666,31 +685,29 @@ admin.post('/sync/fastly', async (c) => {
 
     const body: { limit?: number; cursor?: string | null; dry_run?: boolean } = await c.req.json().catch(() => ({}))
     const limit = Math.min(Math.max(body.limit ?? 500, 1), 1000)
-    const cursor = body.cursor ? parseInt(body.cursor, 10) : null
+    const parsedCursor = body.cursor ? parseInt(body.cursor, 10) : null
     const dryRun = body.dry_run ?? false
 
-    if (body.cursor && (isNaN(cursor!) || cursor! < 0)) {
+    if (body.cursor && (isNaN(parsedCursor!) || parsedCursor! < 0)) {
       return c.json({ ok: false, error: 'Invalid cursor' }, 400)
     }
 
+    const cursor = parsedCursor
     const page = await getActiveUsernamesPaginated(c.env.DB, cursor, limit)
 
     const syncable = page.filter(u => u.pubkey)
     const nextCursor = page.length === limit ? String(page[page.length - 1].id) : null
-    const lastId = page.length > 0 ? page[page.length - 1].id : cursor
-    const remaining = nextCursor ? await countActiveUsernames(c.env.DB, lastId) : 0
 
     if (dryRun) {
       const totalActive = await countActiveUsernames(c.env.DB)
       return c.json({
         ok: true,
         dry_run: true,
-        total: totalActive,
+        total_active: totalActive,
         page_size: page.length,
         syncable: syncable.length,
         skipped: page.length - syncable.length,
         cursor: nextCursor,
-        remaining,
       })
     }
 
@@ -706,7 +723,16 @@ admin.post('/sync/fastly', async (c) => {
       },
     }))
 
+    for (const item of items) {
+      await enqueueFastlySyncTask(c.env.DB, item)
+    }
+
     const results = await syncBatch(c.env, items, { concurrency: 10 })
+    await clearFastlySyncTasks(c.env.DB, results.successes.map(result => result.username))
+    await markFastlySyncTaskFailures(
+      c.env.DB,
+      results.failures.map(result => ({ username: result.username, error: result.error }))
+    )
 
     return c.json({
       ok: true,
@@ -714,7 +740,6 @@ admin.post('/sync/fastly', async (c) => {
       deleted: results.deleted,
       failed: results.failed,
       cursor: nextCursor,
-      remaining,
       errors: results.errors.length > 0 ? results.errors.slice(0, 20) : undefined,
     })
   } catch (error) {
@@ -814,6 +839,17 @@ admin.post('/username/set-atproto', async (c) => {
     // Sync to Fastly KV with verification
     if (existing.status === 'active' && existing.pubkey) {
       const relays = parseRelayHints(existing.relays)
+      await enqueueFastlySyncTask(c.env.DB, {
+        username: canonical,
+        action: 'sync',
+        data: {
+          pubkey: existing.pubkey,
+          relays,
+          status: 'active',
+          atproto_did: atproto_did || null,
+          atproto_state: atproto_state || null,
+        },
+      })
       c.executionCtx.waitUntil(
         syncAndVerifyUsername(c.env, canonical, {
           pubkey: existing.pubkey,
@@ -875,11 +911,15 @@ admin.get('/username/:name/nip05-status', async (c) => {
       return c.json({ ok: true, status: 'missing' })
     }
 
-    // Only compare pubkey + status — these drive NIP-05 resolution correctness
-    const pubkeyMatch = fastly.data.pubkey === existing.pubkey
-    const statusMatch = fastly.data.status === existing.status
+    const expectedFastly = {
+      pubkey: existing.pubkey,
+      relays: parseRelayHints(existing.relays),
+      status: 'active' as const,
+      atproto_did: existing.atproto_did || null,
+      atproto_state: existing.atproto_state || null,
+    }
 
-    if (pubkeyMatch && statusMatch) {
+    if (usernameKVDataMatches(fastly.data, expectedFastly)) {
       return c.json({ ok: true, status: 'synced', fastly: fastly.data })
     }
 
@@ -887,7 +927,7 @@ admin.get('/username/:name/nip05-status', async (c) => {
       ok: true,
       status: 'mismatch',
       fastly: fastly.data,
-      db: { pubkey: existing.pubkey, status: existing.status },
+      db: expectedFastly,
     })
   } catch (error) {
     console.error('NIP-05 status error:', error)
@@ -913,6 +953,10 @@ admin.post('/username/:name/sync-to-fastly', async (c) => {
     }
 
     if (existing.status === 'burned') {
+      await enqueueFastlySyncTask(c.env.DB, {
+        username: canonical,
+        action: 'delete',
+      })
       const deleteResult = await deleteUsernameFromFastly(c.env, canonical)
       return c.json({
         ok: true,
@@ -933,6 +977,17 @@ admin.post('/username/:name/sync-to-fastly', async (c) => {
     }
 
     const relays = parseRelayHints(existing.relays)
+    await enqueueFastlySyncTask(c.env.DB, {
+      username: canonical,
+      action: 'sync',
+      data: {
+        pubkey: existing.pubkey,
+        relays,
+        status: 'active',
+        atproto_did: existing.atproto_did || null,
+        atproto_state: existing.atproto_state || null,
+      },
+    })
     const result = await syncAndVerifyUsername(c.env, canonical, {
       pubkey: existing.pubkey,
       relays,

@@ -14,6 +14,27 @@ export interface UsernameKVData {
   atproto_state?: 'pending' | 'ready' | 'failed' | 'disabled' | null
 }
 
+export function normalizeUsernameKVData(data: UsernameKVData): UsernameKVData {
+  return {
+    pubkey: data.pubkey,
+    relays: [...data.relays].sort(),
+    status: data.status,
+    atproto_did: data.atproto_did ?? null,
+    atproto_state: data.atproto_state ?? null,
+  }
+}
+
+export function usernameKVDataMatches(actual: UsernameKVData, expected: UsernameKVData): boolean {
+  const normalizedActual = normalizeUsernameKVData(actual)
+  const normalizedExpected = normalizeUsernameKVData(expected)
+
+  return normalizedActual.pubkey === normalizedExpected.pubkey
+    && normalizedActual.status === normalizedExpected.status
+    && normalizedActual.atproto_did === normalizedExpected.atproto_did
+    && normalizedActual.atproto_state === normalizedExpected.atproto_state
+    && JSON.stringify(normalizedActual.relays) === JSON.stringify(normalizedExpected.relays)
+}
+
 export function parseRelayHints(relays: string | null | undefined): string[] {
   if (!relays) return []
   try {
@@ -106,28 +127,38 @@ export async function deleteUsernameFromFastly(
   const kvKey = `user:${username}`
   const url = `${FASTLY_API_BASE}/resources/stores/kv/${env.FASTLY_STORE_ID}/keys/${encodeURIComponent(kvKey)}`
 
-  try {
-    const response = await fetch(url, {
-      method: 'DELETE',
-      headers: {
-        'Fastly-Key': env.FASTLY_API_TOKEN,
-      },
-    })
+  let lastError = ''
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers: {
+          'Fastly-Key': env.FASTLY_API_TOKEN,
+        },
+      })
 
-    // 404 is fine - key might not exist
-    if (!response.ok && response.status !== 404) {
+      // 404 is fine - key might not exist
+      if (response.ok || response.status === 404) {
+        if (attempt > 0) console.log(`Fastly delete success for ${username} on attempt ${attempt + 1}`)
+        else console.log(`Fastly delete success: ${username}`)
+        return { success: true }
+      }
+
+      lastError = `Fastly API error: ${response.status}`
       const errorText = await response.text()
-      console.error(`Fastly delete failed for ${username}: ${response.status} ${errorText}`)
-      return { success: false, error: `Fastly API error: ${response.status}` }
+      console.error(`Fastly delete attempt ${attempt + 1}/${MAX_RETRIES} failed for ${username}: ${response.status} ${errorText}`)
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : 'Unknown error'
+      console.error(`Fastly delete attempt ${attempt + 1}/${MAX_RETRIES} error for ${username}: ${lastError}`)
     }
 
-    console.log(`Fastly delete success: ${username}`)
-    return { success: true }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error'
-    console.error(`Fastly delete error for ${username}: ${message}`)
-    return { success: false, error: message }
+    if (attempt < MAX_RETRIES - 1) {
+      await sleep(RETRY_BASE_MS * Math.pow(2, attempt))
+    }
   }
+
+  console.error(`Fastly delete FAILED for ${username} after ${MAX_RETRIES} attempts`)
+  return { success: false, error: lastError }
 }
 
 export async function readUsernameFromFastly(
@@ -178,20 +209,23 @@ export async function syncAndVerifyUsername(
 
   const verifyResult = await readUsernameFromFastly(env, username)
   if (!verifyResult.success) {
-    console.warn(`Fastly verify read failed for ${username}: ${verifyResult.error}`)
-    return { success: true, verified: false }
+    const error = `Fastly verify read failed: ${verifyResult.error}`
+    console.warn(`${error} for ${username}`)
+    return { success: true, verified: false, error }
   }
 
   if (!verifyResult.data) {
-    console.error(`Fastly verify FAILED for ${username}: key missing after successful write`)
-    return { success: true, verified: false }
+    const error = 'Fastly verify failed: key missing after successful write'
+    console.error(`${error} for ${username}`)
+    return { success: true, verified: false, error }
   }
 
-  // Only verify pubkey + status — these drive NIP-05 resolution correctness.
-  // Relay hints and atproto metadata are best-effort and not worth flagging.
-  if (verifyResult.data.pubkey !== data.pubkey || verifyResult.data.status !== data.status) {
-    console.error(`Fastly verify FAILED for ${username}: wrote pubkey=${data.pubkey},status=${data.status} but read pubkey=${verifyResult.data.pubkey},status=${verifyResult.data.status}`)
-    return { success: true, verified: false }
+  if (!usernameKVDataMatches(verifyResult.data, data)) {
+    const expected = JSON.stringify(normalizeUsernameKVData(data))
+    const actual = JSON.stringify(normalizeUsernameKVData(verifyResult.data))
+    const error = `Fastly verify failed: wrote ${expected} but read ${actual}`
+    console.error(`${error} for ${username}`)
+    return { success: true, verified: false, error }
   }
 
   return { success: true, verified: true }
@@ -208,6 +242,8 @@ export interface SyncBatchResult {
   deleted: number
   failed: number
   errors: string[]
+  successes: Array<{ username: string; action: 'sync' | 'delete' }>
+  failures: Array<{ username: string; action: 'sync' | 'delete'; error: string }>
 }
 
 export async function syncBatch(
@@ -216,7 +252,7 @@ export async function syncBatch(
   options?: { concurrency?: number }
 ): Promise<SyncBatchResult> {
   const concurrency = options?.concurrency ?? 10
-  const result: SyncBatchResult = { synced: 0, deleted: 0, failed: 0, errors: [] }
+  const result: SyncBatchResult = { synced: 0, deleted: 0, failed: 0, errors: [], successes: [], failures: [] }
 
   if (items.length === 0) return result
 
@@ -226,20 +262,32 @@ export async function syncBatch(
   const processItem = async (item: SyncItem): Promise<void> => {
     if (item.action === 'sync' && item.data) {
       const res = await syncUsernameToFastly(env, item.username, item.data)
-      if (res.success) result.synced++
+      if (res.success) {
+        result.synced++
+        result.successes.push({ username: item.username, action: item.action })
+      }
       else {
         result.failed++
-        result.errors.push(`${item.username}: ${res.error}`)
+        const error = res.error || 'Unknown sync error'
+        result.errors.push(`${item.username}: ${error}`)
+        result.failures.push({ username: item.username, action: item.action, error })
       }
     } else if (item.action === 'sync' && !item.data) {
       result.failed++
-      result.errors.push(`${item.username}: sync action missing data`)
+      const error = 'sync action missing data'
+      result.errors.push(`${item.username}: ${error}`)
+      result.failures.push({ username: item.username, action: item.action, error })
     } else if (item.action === 'delete') {
       const res = await deleteUsernameFromFastly(env, item.username)
-      if (res.success) result.deleted++
+      if (res.success) {
+        result.deleted++
+        result.successes.push({ username: item.username, action: item.action })
+      }
       else {
         result.failed++
-        result.errors.push(`${item.username}: ${res.error}`)
+        const error = res.error || 'Unknown delete error'
+        result.errors.push(`${item.username}: ${error}`)
+        result.failures.push({ username: item.username, action: item.action, error })
       }
     }
   }

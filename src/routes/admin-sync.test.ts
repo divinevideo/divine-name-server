@@ -1,10 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 
-const { getActiveUsernamesPaginated, countActiveUsernames, getUsernameByName, syncBatch, readUsernameFromFastly, syncAndVerifyUsername, deleteUsernameFromFastly } = vi.hoisted(() => ({
+const { getActiveUsernamesPaginated, countActiveUsernames, getUsernameByName, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, syncBatch, readUsernameFromFastly, syncAndVerifyUsername, deleteUsernameFromFastly } = vi.hoisted(() => ({
   getActiveUsernamesPaginated: vi.fn(),
   countActiveUsernames: vi.fn(),
   getUsernameByName: vi.fn(),
+  enqueueFastlySyncTask: vi.fn(),
+  clearFastlySyncTasks: vi.fn(),
+  markFastlySyncTaskFailures: vi.fn(),
   syncBatch: vi.fn(),
   readUsernameFromFastly: vi.fn(),
   syncAndVerifyUsername: vi.fn(),
@@ -13,7 +16,7 @@ const { getActiveUsernamesPaginated, countActiveUsernames, getUsernameByName, sy
 
 vi.mock('../db/queries', async () => {
   const actual = await vi.importActual<typeof import('../db/queries')>('../db/queries')
-  return { ...actual, getActiveUsernamesPaginated, countActiveUsernames, getUsernameByName }
+  return { ...actual, getActiveUsernamesPaginated, countActiveUsernames, getUsernameByName, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures }
 })
 
 vi.mock('../utils/fastly-sync', async () => {
@@ -52,7 +55,7 @@ const activeUsers = [
 describe('POST /admin/sync/fastly', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    syncBatch.mockResolvedValue({ synced: 2, deleted: 0, failed: 0, errors: [] })
+    syncBatch.mockResolvedValue({ synced: 2, deleted: 0, failed: 0, errors: [], successes: [], failures: [] })
     getActiveUsernamesPaginated.mockResolvedValue(activeUsers)
     countActiveUsernames.mockResolvedValue(100)
   })
@@ -163,6 +166,7 @@ describe('POST /admin/sync/fastly', () => {
     const json = await res.json() as any
     expect(json.ok).toBe(true)
     expect(json.dry_run).toBe(true)
+    expect(json.total_active).toBe(100)
     expect(json.syncable).toBe(2)
     expect(json.skipped).toBe(1)
     expect(syncBatch).not.toHaveBeenCalled()

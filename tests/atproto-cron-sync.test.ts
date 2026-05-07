@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Username } from '../src/db/queries'
 
-const { getUsernamesUpdatedSince, expireStaleReservations, syncBatch } = vi.hoisted(() => ({
+const { getUsernamesUpdatedSince, expireStaleReservations, getQueuedFastlySyncTasks, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, syncBatch } = vi.hoisted(() => ({
   getUsernamesUpdatedSince: vi.fn<() => Promise<Username[]>>(),
   expireStaleReservations: vi.fn<() => Promise<number>>(),
+  getQueuedFastlySyncTasks: vi.fn<() => Promise<any[]>>(),
+  enqueueFastlySyncTask: vi.fn<() => Promise<void>>(),
+  clearFastlySyncTasks: vi.fn<() => Promise<void>>(),
+  markFastlySyncTaskFailures: vi.fn<() => Promise<void>>(),
   syncBatch: vi.fn(),
 }))
 
@@ -13,6 +17,10 @@ vi.mock('../src/db/queries', async () => {
     ...actual,
     getUsernamesUpdatedSince,
     expireStaleReservations,
+    getQueuedFastlySyncTasks,
+    enqueueFastlySyncTask,
+    clearFastlySyncTasks,
+    markFastlySyncTaskFailures,
   }
 })
 
@@ -30,7 +38,8 @@ describe('ATProto cron sync payloads', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     expireStaleReservations.mockResolvedValue(0)
-    syncBatch.mockResolvedValue({ synced: 1, deleted: 0, failed: 0, errors: [] })
+    getQueuedFastlySyncTasks.mockResolvedValue([])
+    syncBatch.mockResolvedValue({ synced: 1, deleted: 0, failed: 0, errors: [], successes: [], failures: [] })
   })
 
   it('includes atproto_did and atproto_state in the hourly Fastly reconciliation payload', async () => {

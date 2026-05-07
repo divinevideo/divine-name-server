@@ -15,7 +15,8 @@ import {
   getReservationByToken,
   confirmReservation,
   findSpentProofs,
-  storeSpentProofs
+  storeSpentProofs,
+  enqueueFastlySyncTask,
 } from '../db/queries'
 import { syncAndVerifyUsername, deleteUsernameFromFastly } from '../utils/fastly-sync'
 import { sendReservationConfirmationEmail } from '../utils/email'
@@ -476,6 +477,10 @@ username.post('/claim', async (c) => {
       if (currentCanonical && currentCanonical !== nameCanonical) {
         // User is claiming a new username, old one will be auto-revoked in D1.
         // Also delete the old entry from Fastly KV so it stops resolving.
+        await enqueueFastlySyncTask(c.env.DB, {
+          username: currentCanonical,
+          action: 'delete',
+        })
         c.executionCtx.waitUntil(
           deleteUsernameFromFastly(c.env, currentCanonical)
         )
@@ -484,6 +489,17 @@ username.post('/claim', async (c) => {
 
     // Claim the username
     await claimUsername(c.env.DB, nameDisplay, nameCanonical, pubkey, relays)
+    await enqueueFastlySyncTask(c.env.DB, {
+      username: nameCanonical,
+      action: 'sync',
+      data: {
+        pubkey,
+        relays: relays || [],
+        status: 'active',
+        atproto_did: null,
+        atproto_state: null,
+      },
+    })
 
     // Sync to Fastly KV with read-back verification (async, don't block response)
     c.executionCtx.waitUntil(

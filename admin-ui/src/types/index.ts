@@ -100,6 +100,9 @@ export interface Nip05StatusResponse extends ApiResponse {
   db?: {
     pubkey: string
     status: string
+    relays: string[]
+    atproto_did?: string | null
+    atproto_state?: string | null
   }
 }
 
@@ -107,6 +110,7 @@ export interface ResyncResponse extends ApiResponse {
   action?: 'synced' | 'deleted'
   success?: boolean
   verified?: boolean
+  error?: string
 }
 
 export interface FastlySyncPageResponse extends ApiResponse {
@@ -114,10 +118,9 @@ export interface FastlySyncPageResponse extends ApiResponse {
   deleted?: number
   failed?: number
   cursor?: string | null
-  remaining?: number
   errors?: string[]
   dry_run?: boolean
-  total?: number
+  total_active?: number
   syncable?: number
   skipped?: number
   page_size?: number
