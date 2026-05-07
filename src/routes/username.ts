@@ -477,29 +477,21 @@ username.post('/claim', async (c) => {
       if (currentCanonical && currentCanonical !== nameCanonical) {
         // User is claiming a new username, old one will be auto-revoked in D1.
         // Also delete the old entry from Fastly KV so it stops resolving.
-        await enqueueFastlySyncTask(c.env.DB, {
-          username: currentCanonical,
-          action: 'delete',
-        })
         c.executionCtx.waitUntil(
-          deleteUsernameFromFastly(c.env, currentCanonical)
+          deleteUsernameFromFastly(c.env, currentCanonical).then(async (result) => {
+            if (!result.success) {
+              await enqueueFastlySyncTask(c.env.DB, {
+                username: currentCanonical,
+                action: 'delete',
+              })
+            }
+          })
         )
       }
     }
 
     // Claim the username
     await claimUsername(c.env.DB, nameDisplay, nameCanonical, pubkey, relays)
-    await enqueueFastlySyncTask(c.env.DB, {
-      username: nameCanonical,
-      action: 'sync',
-      data: {
-        pubkey,
-        relays: relays || [],
-        status: 'active',
-        atproto_did: null,
-        atproto_state: null,
-      },
-    })
 
     // Sync to Fastly KV with read-back verification (async, don't block response)
     c.executionCtx.waitUntil(
@@ -509,6 +501,20 @@ username.post('/claim', async (c) => {
         status: 'active',
         atproto_did: null,
         atproto_state: null,
+      }).then(async (result) => {
+        if (!result.success || !result.verified) {
+          await enqueueFastlySyncTask(c.env.DB, {
+            username: nameCanonical,
+            action: 'sync',
+            data: {
+              pubkey,
+              relays: relays || [],
+              status: 'active',
+              atproto_did: null,
+              atproto_state: null,
+            },
+          })
+        }
       })
     )
 

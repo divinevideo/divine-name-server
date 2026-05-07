@@ -10,7 +10,7 @@ import admin from './routes/admin'
 import publicRoutes from './routes/public'
 import internalAtproto from './routes/internal-atproto'
 import { getUsernamesUpdatedSince, expireStaleReservations, getQueuedFastlySyncTasks, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures } from './db/queries'
-import { syncBatch, parseRelayHints } from './utils/fastly-sync'
+import { syncBatch, parseRelayHints, type UsernameKVData } from './utils/fastly-sync'
 
 type Bindings = {
   DB: D1Database
@@ -114,13 +114,7 @@ export default {
     const itemsByUsername = new Map<string, {
       username: string
       action: 'sync' | 'delete'
-      data?: {
-        pubkey: string
-        relays: string[]
-        status: 'active'
-        atproto_did: string | null
-        atproto_state: 'pending' | 'ready' | 'failed' | 'disabled' | null
-      }
+      data?: UsernameKVData
     }>()
 
     for (const task of queuedTasks) {
@@ -149,12 +143,14 @@ export default {
     }
 
     const items = Array.from(itemsByUsername.values())
-    for (const item of items) {
-      await enqueueFastlySyncTask(env.DB, item)
-    }
-
     const results = await syncBatch(env, items, { concurrency: 10 })
     await clearFastlySyncTasks(env.DB, results.successes.map(result => result.username))
+    for (const failure of results.failures) {
+      const item = itemsByUsername.get(failure.username)
+      if (item) {
+        await enqueueFastlySyncTask(env.DB, item)
+      }
+    }
     await markFastlySyncTaskFailures(
       env.DB,
       results.failures.map(result => ({ username: result.username, error: result.error }))

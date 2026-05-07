@@ -95,6 +95,9 @@ export async function syncUsernameToFastly(
       lastError = `Fastly API error: ${response.status}`
       const errorText = await response.text()
       console.error(`Fastly sync attempt ${attempt + 1}/${MAX_RETRIES} failed for ${username}: ${response.status} ${errorText}`)
+      if (response.status < 500 && response.status !== 429) {
+        return { success: false, error: `${lastError} ${errorText}`.trim() }
+      }
     } catch (error) {
       lastError = error instanceof Error ? error.message : 'Unknown error'
       console.error(`Fastly sync attempt ${attempt + 1}/${MAX_RETRIES} error for ${username}: ${lastError}`)
@@ -147,6 +150,9 @@ export async function deleteUsernameFromFastly(
       lastError = `Fastly API error: ${response.status}`
       const errorText = await response.text()
       console.error(`Fastly delete attempt ${attempt + 1}/${MAX_RETRIES} failed for ${username}: ${response.status} ${errorText}`)
+      if (response.status < 500 && response.status !== 429) {
+        return { success: false, error: `${lastError} ${errorText}`.trim() }
+      }
     } catch (error) {
       lastError = error instanceof Error ? error.message : 'Unknown error'
       console.error(`Fastly delete attempt ${attempt + 1}/${MAX_RETRIES} error for ${username}: ${lastError}`)

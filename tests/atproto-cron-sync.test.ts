@@ -218,4 +218,110 @@ describe('ATProto cron sync payloads', () => {
       { concurrency: 10 }
     )
   })
+
+  it('re-enqueues failed work, preserves queued work, and prefers recent payloads', async () => {
+    getQueuedFastlySyncTasks.mockResolvedValue([
+      {
+        username: 'alice',
+        action: 'sync',
+        data: {
+          pubkey: 'stale-pubkey',
+          relays: [],
+          status: 'active',
+          atproto_did: null,
+          atproto_state: null,
+        },
+        queued_at: 100,
+        updated_at: 100,
+        last_attempt_at: 110,
+        attempt_count: 2,
+        last_error: 'old error',
+      },
+      {
+        username: 'burned-user',
+        action: 'delete',
+        queued_at: 90,
+        updated_at: 90,
+        last_attempt_at: 100,
+        attempt_count: 1,
+        last_error: 'delete error',
+      },
+    ])
+    getUsernamesUpdatedSince.mockResolvedValue([
+      {
+        id: 1,
+        name: 'alice',
+        username_display: 'alice',
+        username_canonical: 'alice',
+        pubkey: 'fresh-pubkey',
+        email: null,
+        relays: '["wss://relay.damus.io"]',
+        status: 'active',
+        recyclable: 0,
+        created_at: 0,
+        updated_at: 0,
+        claimed_at: 0,
+        revoked_at: null,
+        reserved_reason: null,
+        admin_notes: null,
+        reservation_email: null,
+        confirmation_token: null,
+        reservation_expires_at: null,
+        subscription_expires_at: null,
+        claim_source: 'self-service',
+        created_by: null,
+        atproto_did: 'did:plc:fresh',
+        atproto_state: 'ready',
+      },
+    ])
+    syncBatch.mockResolvedValue({
+      synced: 0,
+      deleted: 1,
+      failed: 1,
+      errors: ['alice: boom'],
+      successes: [{ username: 'burned-user', action: 'delete' }],
+      failures: [{ username: 'alice', action: 'sync', error: 'boom' }],
+    })
+
+    await worker.scheduled(
+      {} as ScheduledEvent,
+      {
+        DB: {} as D1Database,
+        ASSETS: { fetch: async () => new Response('not found', { status: 404 }) },
+        FASTLY_API_TOKEN: 'fastly-token',
+        FASTLY_STORE_ID: 'store-id',
+      },
+      { waitUntil: () => {}, passThroughOnException: () => {} } as ExecutionContext
+    )
+
+    expect(syncBatch).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.arrayContaining([
+        expect.objectContaining({
+          username: 'alice',
+          data: expect.objectContaining({
+            pubkey: 'fresh-pubkey',
+            atproto_did: 'did:plc:fresh',
+          }),
+        }),
+        expect.objectContaining({
+          username: 'burned-user',
+          action: 'delete',
+        }),
+      ]),
+      { concurrency: 10 }
+    )
+    expect(clearFastlySyncTasks).toHaveBeenCalledWith(expect.anything(), ['burned-user'])
+    expect(enqueueFastlySyncTask).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        username: 'alice',
+        data: expect.objectContaining({ pubkey: 'fresh-pubkey' }),
+      })
+    )
+    expect(markFastlySyncTaskFailures).toHaveBeenCalledWith(
+      expect.anything(),
+      [{ username: 'alice', error: 'boom' }]
+    )
+  })
 })

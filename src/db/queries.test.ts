@@ -2,7 +2,7 @@
 // ABOUTME: Validates search functionality with fake D1 database
 
 import { describe, it, expect } from 'vitest'
-import { searchUsernames, claimUsername, assignUsername, createReservation, reserveUsername, revokeUsername, addTag, removeTag, getTagsForUsername, getTagDetailsForUsername, getTagsForUsernames, getAllTags, getUsernameByName, getUsernameStats, updateAdminNotes, getActiveUsernamesPaginated, countActiveUsernames, type SearchParams, type Username } from './queries'
+import { searchUsernames, claimUsername, assignUsername, createReservation, reserveUsername, revokeUsername, addTag, removeTag, getTagsForUsername, getTagDetailsForUsername, getTagsForUsernames, getAllTags, getUsernameByName, getUsernameStats, updateAdminNotes, getActiveUsernamesPaginated, countActiveUsernames, enqueueFastlySyncTask, getQueuedFastlySyncTasks, clearFastlySyncTasks, markFastlySyncTaskFailures, type SearchParams, type Username } from './queries'
 import { createFakeD1, type MockRecord } from './test-helpers'
 
 const mockRecords: MockRecord[] = [
@@ -642,6 +642,201 @@ describe('getActiveUsernamesPaginated', () => {
     expect(result).toHaveLength(4)
     expect(result.every(r => r.status === 'active')).toBe(true)
     expect(result.map(r => r.name)).toEqual(['alice', 'charlie', 'dave', 'frank'])
+  })
+})
+
+type QueueRow = {
+  username_canonical: string
+  action: 'sync' | 'delete'
+  payload_json: string | null
+  queued_at: number
+  updated_at: number
+  last_attempt_at: number | null
+  attempt_count: number
+  last_error: string | null
+}
+
+function createFastlyQueueMock(initialRows: QueueRow[] = []) {
+  const rows = [...initialRows]
+
+  return {
+    _rows: rows,
+    prepare: (sql: string) => ({
+      bind: (...params: any[]) => ({
+        run: async () => {
+          if (sql.includes('INSERT INTO fastly_sync_queue')) {
+            const [username, action, payloadJson, queuedAt, updatedAt] = params
+            const existing = rows.find((row) => row.username_canonical === username)
+            if (!existing) {
+              rows.push({
+                username_canonical: username,
+                action,
+                payload_json: payloadJson,
+                queued_at: queuedAt,
+                updated_at: updatedAt,
+                last_attempt_at: null,
+                attempt_count: 0,
+                last_error: null,
+              })
+              return { success: true, meta: { changes: 1 } }
+            }
+
+            const changed = existing.action !== action || (existing.payload_json ?? '') !== (payloadJson ?? '')
+            existing.action = action
+            existing.payload_json = payloadJson
+            existing.updated_at = updatedAt
+            if (changed) {
+              existing.queued_at = queuedAt
+              existing.last_attempt_at = null
+              existing.attempt_count = 0
+              existing.last_error = null
+            }
+            return { success: true, meta: { changes: 1 } }
+          }
+
+          if (sql.includes('DELETE FROM fastly_sync_queue WHERE username_canonical IN')) {
+            const usernames = new Set(params as string[])
+            for (let i = rows.length - 1; i >= 0; i--) {
+              if (usernames.has(rows[i].username_canonical)) rows.splice(i, 1)
+            }
+            return { success: true, meta: { changes: 1 } }
+          }
+
+          if (sql.includes('UPDATE fastly_sync_queue') && sql.includes('attempt_count = attempt_count + 1')) {
+            const [lastAttemptAt, lastError, username] = params
+            const row = rows.find((entry) => entry.username_canonical === username)
+            if (row) {
+              row.last_attempt_at = lastAttemptAt
+              row.last_error = lastError
+              row.attempt_count += 1
+            }
+            return { success: true, meta: { changes: row ? 1 : 0 } }
+          }
+
+          return { success: true, meta: { changes: 0 } }
+        },
+        all: async () => {
+          if (sql.includes('FROM fastly_sync_queue')) {
+            const limit = params[0]
+            return {
+              results: [...rows]
+                .sort((a, b) => a.updated_at - b.updated_at)
+                .slice(0, limit),
+            }
+          }
+          return { results: [] }
+        },
+      }),
+    }),
+    batch: async (statements: Array<{ run: () => Promise<unknown> }>) => {
+      for (const statement of statements) {
+        await statement.run()
+      }
+      return []
+    },
+  } as unknown as D1Database & { _rows: QueueRow[] }
+}
+
+describe('Fastly sync queue helpers', () => {
+  it('enqueueFastlySyncTask preserves attempt metadata for unchanged queued work', async () => {
+    const db = createFastlyQueueMock([{
+      username_canonical: 'alice',
+      action: 'sync',
+      payload_json: JSON.stringify({ pubkey: 'pk1', relays: [], status: 'active', atproto_did: null, atproto_state: null }),
+      queued_at: 100,
+      updated_at: 100,
+      last_attempt_at: 150,
+      attempt_count: 2,
+      last_error: 'boom',
+    }])
+
+    await enqueueFastlySyncTask(db, {
+      username: 'alice',
+      action: 'sync',
+      data: { pubkey: 'pk1', relays: [], status: 'active', atproto_did: null, atproto_state: null },
+    }, 200)
+
+    expect(db._rows[0].attempt_count).toBe(2)
+    expect(db._rows[0].last_attempt_at).toBe(150)
+    expect(db._rows[0].last_error).toBe('boom')
+    expect(db._rows[0].queued_at).toBe(100)
+    expect(db._rows[0].updated_at).toBe(200)
+  })
+
+  it('enqueueFastlySyncTask resets attempt metadata when payload changes', async () => {
+    const db = createFastlyQueueMock([{
+      username_canonical: 'alice',
+      action: 'sync',
+      payload_json: JSON.stringify({ pubkey: 'old', relays: [], status: 'active', atproto_did: null, atproto_state: null }),
+      queued_at: 100,
+      updated_at: 100,
+      last_attempt_at: 150,
+      attempt_count: 2,
+      last_error: 'boom',
+    }])
+
+    await enqueueFastlySyncTask(db, {
+      username: 'alice',
+      action: 'sync',
+      data: { pubkey: 'new', relays: [], status: 'active', atproto_did: null, atproto_state: null },
+    }, 200)
+
+    expect(db._rows[0].attempt_count).toBe(0)
+    expect(db._rows[0].last_attempt_at).toBeNull()
+    expect(db._rows[0].last_error).toBeNull()
+    expect(db._rows[0].queued_at).toBe(200)
+  })
+
+  it('getQueuedFastlySyncTasks orders by updated_at and deserializes payloads', async () => {
+    const db = createFastlyQueueMock([
+      {
+        username_canonical: 'later',
+        action: 'delete',
+        payload_json: null,
+        queued_at: 200,
+        updated_at: 200,
+        last_attempt_at: null,
+        attempt_count: 0,
+        last_error: null,
+      },
+      {
+        username_canonical: 'earlier',
+        action: 'sync',
+        payload_json: JSON.stringify({ pubkey: 'pk1', relays: ['wss://b'], status: 'active', atproto_did: null, atproto_state: null }),
+        queued_at: 100,
+        updated_at: 100,
+        last_attempt_at: 110,
+        attempt_count: 1,
+        last_error: 'nope',
+      },
+    ])
+
+    const tasks = await getQueuedFastlySyncTasks(db, 10)
+
+    expect(tasks.map((task) => task.username)).toEqual(['earlier', 'later'])
+    expect(tasks[0].data?.pubkey).toBe('pk1')
+    expect(tasks[1].data).toBeUndefined()
+  })
+
+  it('clearFastlySyncTasks chunks large deletes and markFastlySyncTaskFailures accumulates attempts', async () => {
+    const db = createFastlyQueueMock(Array.from({ length: 501 }, (_, i) => ({
+      username_canonical: `user-${i}`,
+      action: 'sync' as const,
+      payload_json: JSON.stringify({ pubkey: `pk-${i}`, relays: [], status: 'active', atproto_did: null, atproto_state: null }),
+      queued_at: i,
+      updated_at: i,
+      last_attempt_at: null,
+      attempt_count: 0,
+      last_error: null,
+    })))
+
+    await markFastlySyncTaskFailures(db, [{ username: 'user-0', error: 'first' }], 1000)
+    await markFastlySyncTaskFailures(db, [{ username: 'user-0', error: 'second' }], 2000)
+    expect(db._rows.find((row) => row.username_canonical === 'user-0')?.attempt_count).toBe(2)
+    expect(db._rows.find((row) => row.username_canonical === 'user-0')?.last_error).toBe('second')
+
+    await clearFastlySyncTasks(db, db._rows.map((row) => row.username_canonical))
+    expect(db._rows).toHaveLength(0)
   })
 })
 

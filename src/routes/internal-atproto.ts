@@ -75,14 +75,14 @@ internalAtproto.post('/username/set-atproto', async (c) => {
         atproto_did: atproto_did || null,
         atproto_state: atproto_state || null,
       }
-      await enqueueFastlySyncTask(c.env.DB, {
-        username: canonical,
-        action: 'sync',
-        data,
-      })
-      await syncAndVerifyUsername(c.env, canonical, {
-        ...data,
-      })
+      const result = await syncAndVerifyUsername(c.env, canonical, data)
+      if (!result.success || !result.verified) {
+        await enqueueFastlySyncTask(c.env.DB, {
+          username: canonical,
+          action: 'sync',
+          data,
+        })
+      }
     }
 
     return c.json({
