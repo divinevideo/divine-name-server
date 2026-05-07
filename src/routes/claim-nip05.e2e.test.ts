@@ -21,7 +21,8 @@ vi.mock('../utils/email', () => ({
 // Mock Fastly sync utilities
 vi.mock('../utils/fastly-sync', () => ({
   syncUsernameToFastly: vi.fn().mockResolvedValue({ success: true }),
-  deleteUsernameFromFastly: vi.fn().mockResolvedValue({ success: true })
+  syncAndVerifyUsername: vi.fn().mockResolvedValue({ success: true, verified: true }),
+  deleteUsernameFromFastly: vi.fn().mockResolvedValue({ success: true }),
 }))
 
 type MockUsername = {
@@ -398,8 +399,8 @@ describe('Claim → NIP-05 resolution (e2e)', () => {
 
   // Task 6
   it('Fastly KV sync called with status:active after claim', async () => {
-    const { syncUsernameToFastly, deleteUsernameFromFastly } = await import('../utils/fastly-sync')
-    vi.mocked(syncUsernameToFastly).mockClear()
+    const { syncAndVerifyUsername, deleteUsernameFromFastly } = await import('../utils/fastly-sync')
+    vi.mocked(syncAndVerifyUsername).mockClear()
     vi.mocked(deleteUsernameFromFastly).mockClear()
 
     const app = createTestApp()
@@ -421,7 +422,7 @@ describe('Claim → NIP-05 resolution (e2e)', () => {
     // Flush waitUntil promises so Fastly sync mock gets called
     await Promise.all(waitUntilPromises)
 
-    expect(syncUsernameToFastly).toHaveBeenCalledWith(
+    expect(syncAndVerifyUsername).toHaveBeenCalledWith(
       expect.objectContaining({}),
       'dave',
       expect.objectContaining({

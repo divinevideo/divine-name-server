@@ -9,6 +9,9 @@ import type {
   BulkReserveResponse,
   ApiResponse,
   TagDetail,
+  FastlySyncPageResponse,
+  Nip05StatusResponse,
+  ResyncResponse,
   UsernameStatsResponse
 } from '../types'
 
@@ -248,6 +251,18 @@ export async function getAllTags(): Promise<{ tags: { tag: string; count: number
   return response.json()
 }
 
+// --- NIP-05 / Fastly KV Status ---
+
+export async function getNip05Status(name: string): Promise<Nip05StatusResponse> {
+  const response = await fetch(`${API_BASE}/username/${encodeURIComponent(name)}/nip05-status`)
+
+  if (!response.ok) {
+    throw new Error(`NIP-05 status check failed: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
 // --- Stats ---
 
 export async function getUsernameStats(): Promise<UsernameStatsResponse> {
@@ -255,6 +270,18 @@ export async function getUsernameStats(): Promise<UsernameStatsResponse> {
 
   if (!response.ok) {
     throw new Error(`Stats failed: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+export async function resyncToFastly(name: string): Promise<ResyncResponse> {
+  const response = await fetch(`${API_BASE}/username/${encodeURIComponent(name)}/sync-to-fastly`, {
+    method: 'POST',
+  })
+
+  if (!response.ok) {
+    throw new Error(`Re-sync failed: ${response.statusText}`)
   }
 
   return response.json()
@@ -278,6 +305,32 @@ export async function updateAdminNotes(
 
   if (!response.ok) {
     throw new Error(`Update notes failed: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+// --- Fastly KV Sync ---
+
+export async function syncFastlyPage(
+  cursor?: string | null,
+  limit = 500,
+  dryRun = false,
+  signal?: AbortSignal
+): Promise<FastlySyncPageResponse> {
+  const response = await fetch(`${API_BASE}/sync/fastly`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({
+      limit,
+      cursor: cursor ?? undefined,
+      dry_run: dryRun,
+    }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Fastly sync failed: ${response.statusText}`)
   }
 
   return response.json()

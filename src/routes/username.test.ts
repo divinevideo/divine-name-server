@@ -18,7 +18,8 @@ vi.mock('../utils/email', () => ({
 // Mock Fastly sync utilities
 vi.mock('../utils/fastly-sync', () => ({
   syncUsernameToFastly: vi.fn().mockResolvedValue({ success: true }),
-  deleteUsernameFromFastly: vi.fn().mockResolvedValue({ success: true })
+  syncAndVerifyUsername: vi.fn().mockResolvedValue({ success: true, verified: true }),
+  deleteUsernameFromFastly: vi.fn().mockResolvedValue({ success: true }),
 }))
 
 // Mock D1 database with support for reservations and spent Cashu proofs

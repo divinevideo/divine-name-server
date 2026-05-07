@@ -1,6 +1,8 @@
 // ABOUTME: Database query helpers for usernames and reserved words
 // ABOUTME: Provides type-safe D1 database operations
 
+import type { SyncItem, UsernameKVData } from '../utils/fastly-sync'
+
 export type ClaimSource = 'self-service' | 'admin' | 'bulk-upload' | 'vine-import' | 'public-reservation' | 'unknown'
 export type SearchSort = 'relevance' | 'newest' | 'oldest' | 'updated'
 
@@ -59,6 +61,14 @@ export interface SearchResult {
     total: number
     total_pages: number
   }
+}
+
+export interface FastlySyncQueueTask extends SyncItem {
+  queued_at: number
+  updated_at: number
+  last_attempt_at: number | null
+  attempt_count: number
+  last_error: string | null
 }
 
 export async function isReservedWord(
@@ -133,14 +143,166 @@ export async function claimUsername(
   ).bind(nameCanonical, nameDisplay, nameCanonical, pubkey, relaysJson, now, now, now).run()
 }
 
-export async function getAllActiveUsernames(
-  db: D1Database
+export async function getActiveUsernamesPaginated(
+  db: D1Database,
+  afterId: number | null,
+  limit: number
+): Promise<Username[]> {
+  if (afterId !== null) {
+    const result = await db.prepare(
+      'SELECT * FROM usernames WHERE status = ? AND id > ? ORDER BY id LIMIT ?'
+    ).bind('active', afterId, limit).all<Username>()
+    return result.results
+  }
+  const result = await db.prepare(
+    'SELECT * FROM usernames WHERE status = ? ORDER BY id LIMIT ?'
+  ).bind('active', limit).all<Username>()
+  return result.results
+}
+
+export async function countActiveUsernames(
+  db: D1Database,
+  afterId?: number | null
+): Promise<number> {
+  if (afterId !== undefined && afterId !== null) {
+    const result = await db.prepare(
+      'SELECT COUNT(*) as count FROM usernames WHERE status = ? AND id > ?'
+    ).bind('active', afterId).first<{ count: number }>()
+    return result?.count ?? 0
+  }
+  const result = await db.prepare(
+    'SELECT COUNT(*) as count FROM usernames WHERE status = ?'
+  ).bind('active').first<{ count: number }>()
+  return result?.count ?? 0
+}
+
+export async function getUsernamesUpdatedSince(
+  db: D1Database,
+  sinceEpoch: number
 ): Promise<Username[]> {
   const result = await db.prepare(
-    'SELECT * FROM usernames WHERE status = ?'
-  ).bind('active').all<Username>()
+    `SELECT * FROM usernames WHERE updated_at >= ? AND status IN ('active', 'revoked', 'burned')`
+  ).bind(sinceEpoch).all<Username>()
 
   return result.results
+}
+
+export async function enqueueFastlySyncTask(
+  db: D1Database,
+  item: SyncItem,
+  now = Math.floor(Date.now() / 1000)
+): Promise<void> {
+  const payloadJson = item.data ? JSON.stringify(item.data) : null
+
+  await db.prepare(
+    `INSERT INTO fastly_sync_queue (
+       username_canonical, action, payload_json, queued_at, updated_at, last_attempt_at, attempt_count, last_error
+     ) VALUES (?, ?, ?, ?, ?, NULL, 0, NULL)
+     ON CONFLICT(username_canonical) DO UPDATE SET
+       action = excluded.action,
+       payload_json = excluded.payload_json,
+       queued_at = CASE
+         WHEN fastly_sync_queue.action != excluded.action
+           OR COALESCE(fastly_sync_queue.payload_json, '') != COALESCE(excluded.payload_json, '')
+         THEN excluded.queued_at
+         ELSE fastly_sync_queue.queued_at
+       END,
+       updated_at = excluded.updated_at,
+       last_attempt_at = CASE
+         WHEN fastly_sync_queue.action != excluded.action
+           OR COALESCE(fastly_sync_queue.payload_json, '') != COALESCE(excluded.payload_json, '')
+         THEN NULL
+         ELSE fastly_sync_queue.last_attempt_at
+       END,
+       attempt_count = CASE
+         WHEN fastly_sync_queue.action != excluded.action
+           OR COALESCE(fastly_sync_queue.payload_json, '') != COALESCE(excluded.payload_json, '')
+         THEN 0
+         ELSE fastly_sync_queue.attempt_count
+       END,
+       last_error = CASE
+         WHEN fastly_sync_queue.action != excluded.action
+           OR COALESCE(fastly_sync_queue.payload_json, '') != COALESCE(excluded.payload_json, '')
+         THEN NULL
+         ELSE fastly_sync_queue.last_error
+       END`
+  ).bind(item.username, item.action, payloadJson, now, now).run()
+}
+
+export async function getQueuedFastlySyncTasks(
+  db: D1Database,
+  limit = 1000
+): Promise<FastlySyncQueueTask[]> {
+  const result = await db.prepare(
+    `SELECT username_canonical, action, payload_json, queued_at, updated_at, last_attempt_at, attempt_count, last_error
+     FROM fastly_sync_queue
+     ORDER BY updated_at ASC
+     LIMIT ?`
+  ).bind(limit).all<{
+    username_canonical: string
+    action: 'sync' | 'delete'
+    payload_json: string | null
+    queued_at: number
+    updated_at: number
+    last_attempt_at: number | null
+    attempt_count: number
+    last_error: string | null
+  }>()
+
+  return result.results.map((row) => ({
+    username: row.username_canonical,
+    action: row.action,
+    data: row.payload_json ? JSON.parse(row.payload_json) as UsernameKVData : undefined,
+    queued_at: row.queued_at,
+    updated_at: row.updated_at,
+    last_attempt_at: row.last_attempt_at,
+    attempt_count: row.attempt_count,
+    last_error: row.last_error,
+  }))
+}
+
+export async function clearFastlySyncTasks(
+  db: D1Database,
+  usernames: string[]
+): Promise<void> {
+  if (usernames.length === 0) return
+
+  for (let i = 0; i < usernames.length; i += 500) {
+    const chunk = usernames.slice(i, i + 500)
+    const placeholders = chunk.map(() => '?').join(', ')
+    await db.prepare(
+      `DELETE FROM fastly_sync_queue WHERE username_canonical IN (${placeholders})`
+    ).bind(...chunk).run()
+  }
+}
+
+export async function markFastlySyncTaskFailures(
+  db: D1Database,
+  failures: Array<{ username: string; error: string }>,
+  now = Math.floor(Date.now() / 1000)
+): Promise<void> {
+  if (failures.length === 0) return
+
+  const batched = (db as D1Database & { batch?: (statements: D1PreparedStatement[]) => Promise<unknown> }).batch
+  if (typeof batched === 'function') {
+    const statements = failures.map((failure) =>
+      db.prepare(
+        `UPDATE fastly_sync_queue
+         SET last_attempt_at = ?, attempt_count = attempt_count + 1, last_error = ?
+         WHERE username_canonical = ?`
+      ).bind(now, failure.error, failure.username)
+    )
+    await batched(statements)
+    return
+  }
+
+  for (const failure of failures) {
+    await db.prepare(
+      `UPDATE fastly_sync_queue
+       SET last_attempt_at = ?, attempt_count = attempt_count + 1, last_error = ?
+       WHERE username_canonical = ?`
+    ).bind(now, failure.error, failure.username).run()
+  }
 }
 
 export async function reserveUsername(

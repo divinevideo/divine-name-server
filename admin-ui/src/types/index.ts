@@ -90,6 +90,47 @@ export interface BulkReserveResponse extends ApiResponse {
   results?: BulkReserveResult[]
 }
 
+export interface Nip05StatusResponse extends ApiResponse {
+  status?: 'synced' | 'mismatch' | 'missing' | 'not_applicable' | 'error'
+  reason?: string
+  detail?: string
+  fastly?: {
+    pubkey: string
+    status: string
+    relays: string[]
+    atproto_did?: string | null
+    atproto_state?: string | null
+  }
+  db?: {
+    pubkey: string
+    status: string
+    relays: string[]
+    atproto_did?: string | null
+    atproto_state?: string | null
+  }
+}
+
+export interface ResyncResponse extends ApiResponse {
+  action?: 'synced' | 'deleted'
+  success?: boolean
+  verified?: boolean
+  error?: string
+}
+
+export interface FastlySyncPageResponse extends ApiResponse {
+  synced?: number
+  deleted?: number
+  failed?: number
+  remaining?: number
+  cursor?: string | null
+  errors?: string[]
+  dry_run?: boolean
+  total_active?: number
+  syncable?: number
+  skipped?: number
+  page_size?: number
+}
+
 export interface UsernameStats {
   totals: {
     all: number

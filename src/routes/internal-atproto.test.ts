@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import worker from '../index'
-import { syncUsernameToFastly } from '../utils/fastly-sync'
+import { syncAndVerifyUsername } from '../utils/fastly-sync'
 
 vi.mock('../utils/fastly-sync', () => ({
   syncUsernameToFastly: vi.fn().mockResolvedValue({ success: true }),
+  syncAndVerifyUsername: vi.fn().mockResolvedValue({ success: true, verified: true }),
   deleteUsernameFromFastly: vi.fn().mockResolvedValue({ success: true }),
-  bulkSyncToFastly: vi.fn().mockResolvedValue({ success: 0, failed: 0, errors: [] }),
+  syncBatch: vi.fn().mockResolvedValue({ synced: 0, deleted: 0, failed: 0, errors: [] }),
   parseRelayHints: vi.fn().mockReturnValue(['wss://relay.damus.io']),
 }))
 
@@ -115,7 +116,7 @@ describe('internal atproto sync route', () => {
     expect(json.ok).toBe(true)
     expect(json.name).toBe('alice')
     expect(json.atproto_state).toBe('ready')
-    expect(syncUsernameToFastly).toHaveBeenCalledTimes(1)
+    expect(syncAndVerifyUsername).toHaveBeenCalledTimes(1)
   })
 
   it('rejects missing bearer token', async () => {
@@ -171,7 +172,7 @@ describe('internal atproto sync route', () => {
     )
 
     expect(response.status).toBe(404)
-    expect(syncUsernameToFastly).not.toHaveBeenCalled()
+    expect(syncAndVerifyUsername).not.toHaveBeenCalled()
   })
 
   it('returns 400 for an invalid DID payload', async () => {
@@ -213,7 +214,7 @@ describe('internal atproto sync route', () => {
     )
 
     expect(response.status).toBe(400)
-    expect(syncUsernameToFastly).not.toHaveBeenCalled()
+    expect(syncAndVerifyUsername).not.toHaveBeenCalled()
   })
 
   it('returns 400 for an invalid state payload', async () => {
@@ -255,6 +256,6 @@ describe('internal atproto sync route', () => {
     )
 
     expect(response.status).toBe(400)
-    expect(syncUsernameToFastly).not.toHaveBeenCalled()
+    expect(syncAndVerifyUsername).not.toHaveBeenCalled()
   })
 })
