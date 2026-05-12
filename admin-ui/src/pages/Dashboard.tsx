@@ -51,13 +51,13 @@ export default function Dashboard() {
       abortRef.current = new AbortController()
 
       // Dry run first page to get total count
-      const dryRun = await syncFastlyPage(null, 500, true, abortRef.current.signal)
+      const dryRun = await syncFastlyPage(null, 100, true, abortRef.current.signal)
       const estimatedTotal = dryRun.total_active ?? 0
       setSyncProgress(p => ({ ...p, total: estimatedTotal }))
 
       // Now sync for real
       while (!cancelRef.current) {
-        const result = await syncFastlyPage(cursor, 500, false, abortRef.current.signal)
+        const result = await syncFastlyPage(cursor, 100, false, abortRef.current.signal)
         totalSynced += result.synced ?? 0
         totalFailed += result.failed ?? 0
         setSyncProgress({ synced: totalSynced, failed: totalFailed, total: estimatedTotal })
