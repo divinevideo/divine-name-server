@@ -29,7 +29,13 @@ npx wrangler secret put FASTLY_API_TOKEN
 
 Paste the new Fastly automation token when prompted. Do not commit the token, paste it into issue comments, or store it in plaintext docs.
 
-`FASTLY_STORE_ID` is also a Worker secret. Do not change it during token rotation unless the `divine-names` Fastly KV store itself changes.
+`FASTLY_API_TOKEN` is the only secret being rotated. `FASTLY_STORE_ID` is checked in as a `[vars]` resource identifier in `wrangler.toml`; do not change it during token rotation unless the `divine-names` Fastly KV store itself changes.
+
+Before verification, check whether production has a stale `FASTLY_STORE_ID` secret override. In Cloudflare Workers, a `FASTLY_STORE_ID` secret shadows the checked-in `[vars]` value. If the checked-in store id should be used, remove the stale override:
+
+```bash
+npx wrangler secret delete FASTLY_STORE_ID
+```
 
 ## Verify The Rotation
 
