@@ -20,4 +20,17 @@ describe('Fastly automation token runbook', () => {
     expect(content).toContain('hourly cron')
     expect(content).toContain('divine-name-sync')
   })
+
+  it('documents FASTLY_STORE_ID as a checked-in var and warns about stale secret shadowing', () => {
+    const runbookPath = resolve(process.cwd(), 'docs/runbooks/fastly-automation-token.md')
+
+    expect(existsSync(runbookPath)).toBe(true)
+
+    const content = readFileSync(runbookPath, 'utf-8')
+
+    expect(content).toContain('`FASTLY_API_TOKEN` is the only secret being rotated')
+    expect(content).toContain('`FASTLY_STORE_ID` is checked in as a `[vars]` resource identifier')
+    expect(content).toContain('a `FASTLY_STORE_ID` secret shadows the checked-in `[vars]` value')
+    expect(content).toContain('npx wrangler secret delete FASTLY_STORE_ID')
+  })
 })
