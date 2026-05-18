@@ -5,9 +5,10 @@ import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
 import { bech32 } from '@scure/base'
 import { getSession } from '../auth/keycast-oauth'
-import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getActiveUsernamesPaginated, countActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags, getUsernameStats, updateAdminNotes, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, type SearchSort } from '../db/queries'
+import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, getPotentialConfusableUsernames, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getActiveUsernamesPaginated, countActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags, getUsernameStats, updateAdminNotes, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, type SearchSort } from '../db/queries'
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
 import { syncUsernameToFastly, deleteUsernameFromFastly, syncBatch, parseRelayHints, readUsernameFromFastly, syncAndVerifyUsername, usernameKVDataMatches } from '../utils/fastly-sync'
+import { findUsernameConfusableCollision, getConfusableCollision } from '../utils/username-confusable'
 import { sendAssignmentNotificationEmail } from '../utils/email'
 import authRoutes from './auth'
 
@@ -346,6 +347,14 @@ admin.post('/username/reserve', async (c) => {
       return c.json({ ok: false, error }, 409)
     }
 
+    const confusableCollision = await getConfusableCollision(c.env.DB, usernameData.display, usernameData.canonical)
+    if (confusableCollision) {
+      return c.json({
+        ok: false,
+        error: `Username is visually confusable with existing name "${confusableCollision.canonical}"`
+      }, 409)
+    }
+
     // Include override reason in the reserved_reason if provided
     const finalReason = overrideReason ? `${reason} [Override: ${overrideReason}]` : reason
     const createdBy = (c.get('adminEmail' as never) as string) || null
@@ -397,6 +406,7 @@ admin.post('/username/reserve-bulk', async (c) => {
 
     // Process each name
     const createdBy = (c.get('adminEmail' as never) as string) || null
+    const confusableCandidates = await getPotentialConfusableUsernames(c.env.DB)
     const results = []
     for (const name of nameList) {
       try {
@@ -416,7 +426,30 @@ admin.post('/username/reserve-bulk', async (c) => {
           }
           continue
         }
+
+        const confusableCollision = findUsernameConfusableCollision(
+          usernameData.display,
+          usernameData.canonical,
+          confusableCandidates
+        )
+        if (confusableCollision) {
+          results.push({
+            name,
+            status: 'confusable',
+            success: false,
+            error: `Visually confusable with existing name "${confusableCollision.candidateCanonical}"`
+          })
+          continue
+        }
+
         await reserveUsername(c.env.DB, usernameData.display, usernameData.canonical, reason, 'bulk-upload', createdBy)
+        confusableCandidates.push({
+          name: usernameData.canonical,
+          username_display: usernameData.display,
+          username_canonical: usernameData.canonical,
+          status: 'reserved',
+          reservation_expires_at: null
+        })
         results.push({ name, status: 'reserved', success: true })
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error'
@@ -530,6 +563,14 @@ admin.post('/username/assign', async (c) => {
       throw error
     }
 
+    const confusableCollision = await getConfusableCollision(c.env.DB, usernameData.display, usernameData.canonical)
+    if (confusableCollision) {
+      return c.json({
+        ok: false,
+        error: `Username is visually confusable with existing name "${confusableCollision.canonical}"`
+      }, 409)
+    }
+
     const createdBy = (c.get('adminEmail' as never) as string) || null
     await assignUsername(c.env.DB, usernameData.display, usernameData.canonical, normalizedPubkey, 'admin', createdBy)
 
@@ -592,6 +633,7 @@ admin.post('/username/assign-bulk', async (c) => {
 
     // Process each assignment
     const createdBy = (c.get('adminEmail' as never) as string) || null
+    const confusableCandidates = await getPotentialConfusableUsernames(c.env.DB)
     const results = []
     for (const assignment of assignments) {
       const { name, pubkey } = assignment
@@ -628,7 +670,29 @@ admin.post('/username/assign-bulk', async (c) => {
           }
         }
 
+        const confusableCollision = findUsernameConfusableCollision(
+          usernameData.display,
+          usernameData.canonical,
+          confusableCandidates
+        )
+        if (confusableCollision) {
+          results.push({
+            name,
+            status: 'confusable',
+            success: false,
+            error: `Visually confusable with existing name "${confusableCollision.candidateCanonical}"`
+          })
+          continue
+        }
+
         await assignUsername(c.env.DB, usernameData.display, usernameData.canonical, normalizedPubkey, 'bulk-upload', createdBy)
+        confusableCandidates.push({
+          name: usernameData.canonical,
+          username_display: usernameData.display,
+          username_canonical: usernameData.canonical,
+          status: 'active',
+          reservation_expires_at: null
+        })
 
         // Sync to Fastly — no read-back verification on bulk to avoid doubling API calls
         c.executionCtx.waitUntil(

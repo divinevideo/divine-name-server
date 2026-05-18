@@ -51,7 +51,7 @@ function isAsciiLabel(str: string): boolean {
  */
 export function validateUsername(username: string): { display: string; canonical: string } {
   // Trim whitespace
-  const candidate = username.trim()
+  const candidate = username.trim().normalize('NFKC')
 
   // Reject empty
   if (!candidate || candidate.length === 0) {

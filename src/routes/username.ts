@@ -19,6 +19,7 @@ import {
   enqueueFastlySyncTask,
 } from '../db/queries'
 import { syncAndVerifyUsername, deleteUsernameFromFastly } from '../utils/fastly-sync'
+import { getConfusableCollision } from '../utils/username-confusable'
 import { sendReservationConfirmationEmail } from '../utils/email'
 import {
   parseCashuToken,
@@ -121,6 +122,18 @@ username.get('/check/:name', async (c) => {
         // "taken by me" (admin-assigned) from "taken by someone else".
         // Pubkeys are already public via NIP-05 resolution.
         ...(existing.status === 'active' && existing.pubkey ? { pubkey: existing.pubkey.toLowerCase() } : {})
+      }, 200, { 'Access-Control-Allow-Origin': '*' })
+    }
+
+    const confusableCollision = await getConfusableCollision(c.env.DB, usernameData.display, usernameData.canonical)
+    if (confusableCollision) {
+      return c.json({
+        ok: true,
+        available: false,
+        name: usernameData.display,
+        canonical: usernameData.canonical,
+        code: 'confusable',
+        reason: `Username is visually confusable with existing name "${confusableCollision.canonical}"`
       }, 200, { 'Access-Control-Allow-Origin': '*' })
     }
 
@@ -248,6 +261,14 @@ username.post('/reserve', async (c) => {
         }
       }
       // Expired pending-confirmation or revoked: allow re-reservation
+    }
+
+    const confusableCollision = await getConfusableCollision(c.env.DB, nameDisplay, nameCanonical)
+    if (confusableCollision) {
+      return c.json({
+        ok: false,
+        error: `Username is visually confusable with existing name "${confusableCollision.canonical}"`
+      }, 409, { 'Access-Control-Allow-Origin': '*' })
     }
 
     // Rate limit: max 5 reservations per email per hour
@@ -468,6 +489,14 @@ username.post('/claim', async (c) => {
         return c.json({ ok: false, error: 'Username is pending email confirmation' }, 409)
       }
       // If revoked and recyclable, allow claim (continue below)
+    }
+
+    const confusableCollision = await getConfusableCollision(c.env.DB, nameDisplay, nameCanonical)
+    if (confusableCollision) {
+      return c.json({
+        ok: false,
+        error: `Username is visually confusable with existing name "${confusableCollision.canonical}"`
+      }, 409)
     }
 
     // Check if pubkey already has an active username

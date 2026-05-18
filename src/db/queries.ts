@@ -95,6 +95,18 @@ export async function getUsernameByName(
   return result
 }
 
+export async function getPotentialConfusableUsernames(
+  db: D1Database
+): Promise<Array<Pick<Username, 'name' | 'username_display' | 'username_canonical' | 'status' | 'reservation_expires_at'>>> {
+  const result = await db.prepare(
+    `SELECT name, username_display, username_canonical, status, reservation_expires_at
+     FROM usernames
+     WHERE status IN ('active', 'reserved', 'burned', 'pending-confirmation')`
+  ).bind().all<Pick<Username, 'name' | 'username_display' | 'username_canonical' | 'status' | 'reservation_expires_at'>>()
+
+  return result.results
+}
+
 export async function getUsernameByPubkey(
   db: D1Database,
   pubkey: string

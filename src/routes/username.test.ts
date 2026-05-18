@@ -84,6 +84,14 @@ function createMockDB(initialUsernames: any[] = []) {
               return null
             },
             all: async () => {
+              // Confusable candidate lookup for blocking statuses
+              if (sql.includes('FROM usernames') && sql.includes('status IN')) {
+                return {
+                  results: mockUsernames.filter((u: any) =>
+                    ['active', 'reserved', 'burned', 'pending-confirmation'].includes(u.status)
+                  )
+                }
+              }
               return { results: [] }
             },
             run: async () => {
@@ -297,6 +305,33 @@ describe('Username Claiming - Case Insensitive', () => {
     expect(res2.status).toBe(409) // Conflict
     const json2 = await res2.json() as any
     expect(json2.error).toBe('That username is already taken')
+  })
+
+  it('should reject confusable collisions during claim', async () => {
+    const app = createTestApp()
+    const db = createMockDB([{
+      id: 1,
+      name: 'matt',
+      username_display: 'matt',
+      username_canonical: 'matt',
+      pubkey: 'a'.repeat(64),
+      status: 'active',
+      reservation_expires_at: null
+    }])
+
+    const req = new Request('http://localhost/api/username/claim', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Nostr base64...',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name: 'mаtt' }) // Cyrillic "а"
+    })
+
+    const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    expect(res.status).toBe(409)
+    const json = await res.json() as any
+    expect(json.error).toContain('visually confusable')
   })
 
   it('should validate username format correctly', async () => {
@@ -603,6 +638,31 @@ describe('Public Username Endpoints', () => {
       expect(json.name).toBe('MrBeast')
       expect(json.canonical).toBe('mrbeast')
     })
+
+    it('should return unavailable for visually confusable usernames', async () => {
+      const app = createTestApp()
+      const db = createMockDB([{
+        id: 1,
+        name: 'matt',
+        username_display: 'matt',
+        username_canonical: 'matt',
+        pubkey: 'a'.repeat(64),
+        status: 'active',
+        reservation_expires_at: null
+      }])
+
+      const req = new Request(`http://localhost/api/username/check/${encodeURIComponent('mаtt')}`, {
+        method: 'GET'
+      })
+
+      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+      expect(res.status).toBe(200)
+      const json = await res.json() as any
+      expect(json.ok).toBe(true)
+      expect(json.available).toBe(false)
+      expect(json.code).toBe('confusable')
+      expect(json.reason).toContain('visually confusable')
+    })
   })
 
   describe('GET /by-pubkey/:pubkey - Lookup by Pubkey', () => {
@@ -823,6 +883,26 @@ describe('Public Name Reservation', () => {
       const json = await res.json() as any
       expect(json.ok).toBe(false)
       expect(json.error).toContain('pending email confirmation')
+    })
+
+    it('should reject reservation for visually confusable username', async () => {
+      const app = createTestApp()
+      const db = createMockDB([{
+        id: 1, name: 'matt', username_display: 'matt', username_canonical: 'matt',
+        pubkey: 'a'.repeat(64), status: 'active', reservation_expires_at: null
+      }])
+
+      const req = new Request('http://localhost/api/username/reserve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'mаtt', email: 'alice@example.com', cashu_token: mockCashuToken() })
+      })
+
+      const res = await app.fetch(req, { DB: db, ALLOWED_MINTS: 'https://testmint.example.com' }, mockEnv)
+      expect(res.status).toBe(409)
+      const json = await res.json() as any
+      expect(json.ok).toBe(false)
+      expect(json.error).toContain('visually confusable')
     })
 
     it('should allow reservation when pending-confirmation has expired', async () => {

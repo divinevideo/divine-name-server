@@ -441,6 +441,33 @@ describe('Admin Bulk Reserve Endpoint', () => {
     expect(result.error).toContain('underscores')
   })
 
+  it('should reject visually confusable usernames in bulk', async () => {
+    const app = createTestApp()
+    const db = createFakeD1([
+      {
+        id: 1, name: 'matt', username_display: 'matt', username_canonical: 'matt',
+        pubkey: 'a'.repeat(64), email: null, relays: null, status: 'active',
+        recyclable: 1, created_at: 1700000000, updated_at: 1700000000, claimed_at: 1700000000,
+        revoked_at: null, reserved_reason: null, admin_notes: null,
+      }
+    ])
+
+    const req = new Request('http://localhost/admin/username/reserve-bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ names: 'mаtt' }) // Cyrillic "а"
+    })
+    const res = await app.fetch(req, { DB: db, BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.total).toBe(1)
+    expect(json.results[0].success).toBe(false)
+    expect(json.results[0].status).toBe('confusable')
+    expect(json.results[0].error).toContain('Visually confusable')
+  })
+
   it('should strip @ symbols from usernames', async () => {
     const app = createTestApp()
 
