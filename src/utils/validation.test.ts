@@ -135,6 +135,12 @@ describe('validateUsername', () => {
       expect(result.display).toBe('Mr-Beast-123')
       expect(result.canonical).toBe('mr-beast-123')
     })
+
+    it('should normalize NFKC compatibility characters before storing', () => {
+      const result = validateUsername('Ａｌｉｃｅ')
+      expect(result.display).toBe('Alice')
+      expect(result.canonical).toBe('alice')
+    })
   })
 
   describe('internationalized domain names (IDN)', () => {

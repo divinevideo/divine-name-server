@@ -22,7 +22,8 @@
   "dependencies": {
     "@noble/secp256k1": "^3.0.0",
     "@scure/base": "^2.0.0",
-    "hono": "^4.10.6"
+    "hono": "^4.10.6",
+    "namespace-guard": "^0.20.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20251115.0",
