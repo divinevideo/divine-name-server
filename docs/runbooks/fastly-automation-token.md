@@ -8,16 +8,24 @@ This runbook replaces the temporary personal `FASTLY_API_TOKEN` Cloudflare Worke
 
 ## Token Requirements
 
-Only a Fastly superuser can create the replacement token.
+Only a Fastly superuser can create the replacement token, and Fastly requires the superuser to be in sudo mode. If the token creation form does not show a `Type` selector with an `Automation token` option, stop and ask a Fastly superuser to create the token.
+
+Create the token in the Fastly control panel:
+
+1. Go to `Account` > `API tokens` > `Personal tokens`.
+2. Click `Create token`.
+3. Re-authenticate when Fastly prompts for sudo mode.
+4. Confirm the form shows `Type`; select `Automation token`.
 
 Use these settings:
 
+- Name: `divine-name-server-fastly-kv-sync`
 - Token type: automation token
 - Scope: global scope
 - Access: all services
 - Expiration: no expiration, or the longest approved lifetime if policy requires one
 
-Fastly KV Store writes use account-level APIs, so a service-limited token is not sufficient.
+Do not create a user token as a substitute unless this is an explicit emergency fallback. Fastly KV Store writes use account-level APIs, so a service-limited token is not sufficient.
 
 ## Rotate The Worker Secret
 
