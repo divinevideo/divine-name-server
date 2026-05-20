@@ -1270,3 +1270,167 @@ describe('Fastly sync endpoints', () => {
     expect(json.reason).toContain('still present')
   })
 })
+
+describe('POST /api/admin/username/restore', () => {
+  const VALID_PUBKEY = 'a'.repeat(64)
+  const OTHER_PUBKEY = 'b'.repeat(64)
+
+  function createTestApp() {
+    const app = new Hono<{ Bindings: { DB: D1Database; BYPASS_LOCAL_AUTH?: string; FASTLY_API_TOKEN?: string; FASTLY_STORE_ID?: string } }>()
+    app.route('/api/admin', admin)
+    return app
+  }
+
+  function callRestore(app: Hono<any>, env: any, body: any) {
+    const req = new Request('http://localhost/api/admin/username/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    return app.fetch(req, env, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+  }
+
+  it('restores a burned username back to active for the provided pubkey', async () => {
+    const db = createFakeD1([
+      {
+        id: 1, name: 'banneduser', username_display: 'banneduser', username_canonical: 'banneduser',
+        pubkey: OTHER_PUBKEY, email: null, relays: null, status: 'burned',
+        recyclable: 0, created_at: 1700000000, updated_at: 1700000100,
+        claimed_at: 1700000000, revoked_at: 1700000100, reserved_reason: null,
+        admin_notes: 'existing notes',
+      },
+    ])
+    const app = createTestApp()
+    const res = await callRestore(app, { DB: db, BYPASS_LOCAL_AUTH: 'true' }, {
+      name: 'banneduser', pubkey: VALID_PUBKEY, reason: 'ban reversed',
+    })
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.username.status).toBe('active')
+    expect(json.username.recyclable).toBe(1)
+    expect(json.username.revoked_at).toBeNull()
+    expect(json.username.pubkey).toBe(VALID_PUBKEY)
+    expect(json.username.admin_notes).toContain('existing notes')
+    expect(json.username.admin_notes).toContain('restored by')
+    expect(json.username.admin_notes).toContain('ban reversed')
+  })
+
+  it('restores a revoked username back to active', async () => {
+    const db = createFakeD1([
+      {
+        id: 1, name: 'rev-user', username_display: 'rev-user', username_canonical: 'rev-user',
+        pubkey: OTHER_PUBKEY, email: null, relays: null, status: 'revoked',
+        recyclable: 1, created_at: 1700000000, updated_at: 1700000100,
+        claimed_at: 1700000000, revoked_at: 1700000100, reserved_reason: null,
+        admin_notes: null,
+      },
+    ])
+    const app = createTestApp()
+    const res = await callRestore(app, { DB: db, BYPASS_LOCAL_AUTH: 'true' }, {
+      name: 'rev-user', pubkey: VALID_PUBKEY,
+    })
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.username.status).toBe('active')
+    expect(json.username.pubkey).toBe(VALID_PUBKEY)
+    expect(json.username.revoked_at).toBeNull()
+  })
+
+  it('returns 404 when the username does not exist', async () => {
+    const db = createFakeD1([])
+    const app = createTestApp()
+    const res = await callRestore(app, { DB: db, BYPASS_LOCAL_AUTH: 'true' }, {
+      name: 'ghost', pubkey: VALID_PUBKEY,
+    })
+    expect(res.status).toBe(404)
+    const json = await res.json() as any
+    expect(json.ok).toBe(false)
+    expect(json.error).toContain('not found')
+  })
+
+  it('returns 409 when the username is currently active', async () => {
+    const db = createFakeD1([
+      {
+        id: 1, name: 'liveuser', username_display: 'liveuser', username_canonical: 'liveuser',
+        pubkey: OTHER_PUBKEY, email: null, relays: null, status: 'active',
+        recyclable: 0, created_at: 1700000000, updated_at: 1700000000,
+        claimed_at: 1700000000, revoked_at: null, reserved_reason: null, admin_notes: null,
+      },
+    ])
+    const app = createTestApp()
+    const res = await callRestore(app, { DB: db, BYPASS_LOCAL_AUTH: 'true' }, {
+      name: 'liveuser', pubkey: VALID_PUBKEY,
+    })
+    expect(res.status).toBe(409)
+    const json = await res.json() as any
+    expect(json.ok).toBe(false)
+    expect(json.current_pubkey).toBe(OTHER_PUBKEY)
+    // Active row must NOT have been overwritten
+    const row = await getUsernameByName(db, 'liveuser')
+    expect(row?.pubkey).toBe(OTHER_PUBKEY)
+    expect(row?.status).toBe('active')
+  })
+
+  it('search by pubkey&status=burned finds the row after revoke-with-burn', async () => {
+    // Seed an active user, burn them, then look them up by pubkey filtered to burned status.
+    // This is the moderation-service discovery flow: ban → revoke{burn:true} → later find
+    // burned names owned by the banned pubkey so we know what to restore.
+    const db = createFakeD1([
+      {
+        id: 1, name: 'abuser', username_display: 'abuser', username_canonical: 'abuser',
+        pubkey: VALID_PUBKEY, email: null, relays: null, status: 'active',
+        recyclable: 0, created_at: 1700000000, updated_at: 1700000000,
+        claimed_at: 1700000000, revoked_at: null, reserved_reason: null, admin_notes: null,
+      },
+    ])
+    const app = createTestApp()
+
+    const revokeReq = new Request('http://localhost/api/admin/username/revoke', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'abuser', burn: true }),
+    })
+    const revokeRes = await app.fetch(revokeReq, { DB: db, BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    expect(revokeRes.status).toBe(200)
+
+    // pubkey must be preserved through burn so moderation can find it
+    const after = await getUsernameByName(db, 'abuser')
+    expect(after?.status).toBe('burned')
+    expect(after?.pubkey).toBe(VALID_PUBKEY)
+
+    const searchReq = new Request(`http://localhost/api/admin/usernames/search?q=${VALID_PUBKEY}&status=burned`)
+    const searchRes = await app.fetch(searchReq, { DB: db, BYPASS_LOCAL_AUTH: 'true' }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    expect(searchRes.status).toBe(200)
+    const json = await searchRes.json() as any
+    expect(json.ok).toBe(true)
+    expect(json.results).toHaveLength(1)
+    expect(json.results[0].name).toBe('abuser')
+    expect(json.results[0].pubkey).toBe(VALID_PUBKEY)
+    expect(json.results[0].status).toBe('burned')
+  })
+
+  it('rejects an invalid pubkey', async () => {
+    const db = createFakeD1([
+      {
+        id: 1, name: 'banneduser', username_display: 'banneduser', username_canonical: 'banneduser',
+        pubkey: OTHER_PUBKEY, email: null, relays: null, status: 'burned',
+        recyclable: 0, created_at: 1700000000, updated_at: 1700000100,
+        claimed_at: 1700000000, revoked_at: 1700000100, reserved_reason: null, admin_notes: null,
+      },
+    ])
+    const app = createTestApp()
+    const res = await callRestore(app, { DB: db, BYPASS_LOCAL_AUTH: 'true' }, {
+      name: 'banneduser', pubkey: 'not-a-pubkey',
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('requires name and pubkey', async () => {
+    const db = createFakeD1([])
+    const app = createTestApp()
+    const res = await callRestore(app, { DB: db, BYPASS_LOCAL_AUTH: 'true' }, { name: 'x' })
+    expect(res.status).toBe(400)
+  })
+})

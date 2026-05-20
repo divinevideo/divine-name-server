@@ -252,6 +252,8 @@ Fields:
 - `name` (required): Username to revoke
 - `burn` (optional): If true, permanently burns the name; if false, makes it recyclable
 
+The `pubkey` column is preserved on `revoked` and `burned` rows so the moderation service can later look up a banned user's names by pubkey and call `/api/admin/username/restore` if the ban is reversed.
+
 **Response (200):**
 ```json
 {
@@ -261,6 +263,43 @@ Fields:
   "recyclable": false
 }
 ```
+
+#### POST /api/admin/username/restore
+
+Restore a previously revoked or burned username and re-bind it to a specific pubkey. Used by the moderation service when a ban is reversed: after `revoke {burn: true}`, the original `pubkey` is preserved on the row so the moderation service can find the user's burned names via `GET /api/admin/usernames/search?q=<pubkey>&status=burned` and call this endpoint to give the name back.
+
+**Request Body:**
+```json
+{
+  "name": "previouslybanned",
+  "pubkey": "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d",
+  "reason": "Ban reversed by moderation"
+}
+```
+
+Fields:
+- `name` (required): Username to restore (must currently be `revoked` or `burned`)
+- `pubkey` (required): The pubkey to re-bind the name to (hex or npub)
+- `reason` (optional): Audit reason; appended as a timestamped line to `admin_notes`
+
+**Behavior:**
+- Sets `status='active'`, `recyclable=1`, clears `revoked_at`, sets `pubkey`, resets `claimed_at` to now
+- Appends `[<iso-timestamp> restored by <admin-email>]: <reason>` to `admin_notes`
+- If the target pubkey already holds another active name, that other name is revoked first (matches `assign` behavior; required by the partial unique index)
+- Re-syncs the row to Fastly KV via `waitUntil`
+
+**Response (200):**
+```json
+{
+  "ok": true,
+  "username": { /* full updated row */ }
+}
+```
+
+**Errors:**
+- `400` — missing/invalid `name` or `pubkey`
+- `404` — username does not exist
+- `409` — username is currently `active` (response includes `current_pubkey`); silently overwriting an active claim is forbidden
 
 #### POST /api/admin/username/assign
 
