@@ -350,6 +350,63 @@ export async function revokeUsername(
   ).bind(status, recyclable, now, now, canonical, name).run()
 }
 
+/**
+ * Restore a previously revoked or burned username to a specific pubkey.
+ *
+ * Sets status='active', recyclable=1, pubkey=<provided>, clears revoked_at,
+ * resets claimed_at to now, and appends an audit line to admin_notes.
+ *
+ * Caller must verify the row exists and is currently revoked/burned — this
+ * function trusts the caller's status check and performs the update unconditionally.
+ *
+ * Releases any other active username currently held by the target pubkey
+ * (mirrors assignUsername) so the partial unique index on (pubkey,status='active')
+ * is not violated.
+ */
+export async function restoreUsername(
+  db: D1Database,
+  nameCanonical: string,
+  pubkey: string,
+  reason: string | null,
+  restoredBy: string | null
+): Promise<Username | null> {
+  const now = Math.floor(Date.now() / 1000)
+
+  const existing = await getUsernameByName(db, nameCanonical)
+  if (!existing) return null
+
+  const auditLine = `[${new Date(now * 1000).toISOString()} restored by ${restoredBy || 'unknown'}]${reason ? `: ${reason}` : ''}`
+  const newNotes = existing.admin_notes && existing.admin_notes.length > 0
+    ? `${existing.admin_notes}\n${auditLine}`
+    : auditLine
+
+  // Release any other active name held by this pubkey before flipping this row
+  // back to active — the partial unique index forbids two active rows per pubkey.
+  await db.prepare(
+    `UPDATE usernames
+     SET status = 'revoked',
+         revoked_at = ?,
+         updated_at = ?
+     WHERE pubkey = ? AND status = 'active' AND username_canonical != ?`
+  ).bind(now, now, pubkey, nameCanonical).run()
+
+  await db.prepare(
+    `UPDATE usernames
+     SET status = 'active',
+         recyclable = 1,
+         revoked_at = NULL,
+         pubkey = ?,
+         claimed_at = ?,
+         updated_at = ?,
+         admin_notes = ?,
+         admin_notes_updated_by = ?,
+         admin_notes_updated_at = ?
+     WHERE username_canonical = ?`
+  ).bind(pubkey, now, now, newNotes, restoredBy, now, nameCanonical).run()
+
+  return getUsernameByName(db, nameCanonical)
+}
+
 export async function assignUsername(
   db: D1Database,
   nameDisplay: string,

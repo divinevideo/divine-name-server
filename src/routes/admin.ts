@@ -5,7 +5,7 @@ import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
 import { bech32 } from '@scure/base'
 import { getSession } from '../auth/keycast-oauth'
-import { reserveUsername, revokeUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getActiveUsernamesPaginated, countActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags, getUsernameStats, updateAdminNotes, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, type SearchSort } from '../db/queries'
+import { reserveUsername, revokeUsername, restoreUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getActiveUsernamesPaginated, countActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags, getUsernameStats, updateAdminNotes, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, type SearchSort } from '../db/queries'
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
 import { syncUsernameToFastly, deleteUsernameFromFastly, syncBatch, parseRelayHints, readUsernameFromFastly, syncAndVerifyUsername, usernameKVDataMatches } from '../utils/fastly-sync'
 import { sendAssignmentNotificationEmail } from '../utils/email'
@@ -486,6 +486,96 @@ admin.post('/username/revoke', async (c) => {
     })
   } catch (error) {
     console.error('Revoke error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.post('/username/restore', async (c) => {
+  try {
+    const body = await c.req.json<{ name: string; pubkey: string; reason?: string }>()
+    const { name, pubkey, reason } = body
+
+    if (!name || !pubkey) {
+      return c.json({ ok: false, error: 'Name and pubkey are required' }, 400)
+    }
+
+    let usernameData: { display: string; canonical: string }
+    try {
+      usernameData = validateUsername(name)
+    } catch (error) {
+      if (error instanceof UsernameValidationError) {
+        return c.json({ ok: false, error: error.message }, 400)
+      }
+      throw error
+    }
+
+    let normalizedPubkey: string
+    try {
+      normalizedPubkey = validateAndNormalizePubkey(pubkey)
+    } catch (error) {
+      if (error instanceof PubkeyValidationError) {
+        return c.json({ ok: false, error: error.message }, 400)
+      }
+      throw error
+    }
+
+    const existing = await getUsernameByName(c.env.DB, usernameData.canonical)
+    if (!existing) {
+      return c.json({ ok: false, error: 'Username not found' }, 404)
+    }
+
+    if (existing.status === 'active') {
+      return c.json({
+        ok: false,
+        error: 'Username is currently active; revoke before restoring',
+        current_pubkey: existing.pubkey,
+      }, 409)
+    }
+
+    if (existing.status !== 'revoked' && existing.status !== 'burned') {
+      return c.json({
+        ok: false,
+        error: `Cannot restore from status '${existing.status}'`,
+      }, 409)
+    }
+
+    const restoredBy = (c.get('adminEmail' as never) as string) || null
+    const updated = await restoreUsername(
+      c.env.DB,
+      usernameData.canonical,
+      normalizedPubkey,
+      reason || null,
+      restoredBy
+    )
+
+    const relays = parseRelayHints(existing.relays)
+    const fastlyData = {
+      pubkey: normalizedPubkey,
+      relays,
+      status: 'active' as const,
+      atproto_did: existing.atproto_did || null,
+      atproto_state: existing.atproto_state || null,
+    }
+
+    c.executionCtx.waitUntil(
+      syncAndVerifyUsername(c.env, usernameData.canonical, fastlyData).then(async (result) => {
+        if (!result.success || !result.verified) {
+          await enqueueFastlySyncTask(c.env.DB, {
+            username: usernameData.canonical,
+            action: 'sync',
+            data: fastlyData,
+          })
+        }
+      })
+    )
+
+    console.log(
+      `Username "${usernameData.canonical}" restored to ${normalizedPubkey.slice(0, 8)}... by ${restoredBy || 'unknown'}${reason ? ` (reason: ${reason})` : ''}`
+    )
+
+    return c.json({ ok: true, username: updated })
+  } catch (error) {
+    console.error('Restore error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
   }
 })

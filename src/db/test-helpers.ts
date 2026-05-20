@@ -261,6 +261,71 @@ export function createFakeD1(records: MockRecord[]) {
             },
 
             run: async () => {
+              // Restore UPDATE — keyed off the unique "SET status = 'active', recyclable = 1, revoked_at = NULL"
+              // shape before the generic admin_notes branch (which would otherwise match because restore
+              // also updates admin_notes).
+              if (
+                sql.includes('UPDATE usernames') &&
+                sql.includes("status = 'active'") &&
+                sql.includes('recyclable = 1') &&
+                sql.includes('revoked_at = NULL') &&
+                sql.includes('admin_notes = ?')
+              ) {
+                const [newPubkey, claimedAt, updatedAt, newNotes, notesBy, notesAt, canonical] = boundParams
+                const rec = records.find(r => r.username_canonical === canonical || r.name === canonical)
+                if (rec) {
+                  rec.status = 'active'
+                  rec.recyclable = 1
+                  rec.revoked_at = null
+                  rec.pubkey = newPubkey
+                  rec.claimed_at = claimedAt
+                  rec.updated_at = updatedAt
+                  rec.admin_notes = newNotes
+                  rec.admin_notes_updated_by = notesBy
+                  rec.admin_notes_updated_at = notesAt
+                }
+                return { success: true, meta: { changes: rec ? 1 : 0 } }
+              }
+              // Revoke UPDATE: status/recyclable/revoked_at/updated_at WHERE canonical OR name
+              if (
+                sql.includes('UPDATE usernames') &&
+                sql.includes('status = ?') &&
+                sql.includes('recyclable = ?') &&
+                sql.includes('revoked_at = ?')
+              ) {
+                const [status, recyclable, revokedAt, updatedAt, canonical, nameParam] = boundParams
+                const rec = records.find(r =>
+                  r.username_canonical === canonical || r.name === nameParam || r.name === canonical
+                )
+                if (rec) {
+                  rec.status = status
+                  rec.recyclable = recyclable
+                  rec.revoked_at = revokedAt
+                  rec.updated_at = updatedAt
+                  // Pubkey is intentionally preserved — moderation service depends on it
+                }
+                return { success: true, meta: { changes: rec ? 1 : 0 } }
+              }
+              // Release-other-active-name UPDATE (restoreUsername's first statement, also assignUsername's):
+              // WHERE pubkey = ? AND status = 'active' [AND username_canonical != ?]
+              if (
+                sql.includes('UPDATE usernames') &&
+                sql.includes("status = 'revoked'") &&
+                sql.includes('pubkey = ?') &&
+                sql.includes("status = 'active'")
+              ) {
+                const [revokedAt, updatedAt, pk, excludeCanonical] = boundParams
+                let changes = 0
+                for (const r of records) {
+                  if (r.pubkey === pk && r.status === 'active' && r.username_canonical !== excludeCanonical) {
+                    r.status = 'revoked'
+                    r.revoked_at = revokedAt
+                    r.updated_at = updatedAt
+                    changes++
+                  }
+                }
+                return { success: true, meta: { changes } }
+              }
               // Admin notes UPDATE
               if (sql.includes('UPDATE usernames') && sql.includes('admin_notes = ?')) {
                 const [adminNotes, updatedBy, updatedAtNotes, updatedAt, id] = boundParams
