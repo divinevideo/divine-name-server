@@ -1,9 +1,9 @@
 // ABOUTME: Main admin dashboard page for searching and viewing usernames
 // ABOUTME: Supports search by username/pubkey/email with status filtering and pagination
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { searchUsernames, getAllTags, getUsernameStats } from '../api/client'
+import { searchUsernames, getAllTags, getUsernameStats, syncFastlyPage } from '../api/client'
 import type { SearchSort, Username, UsernameStats } from '../types'
 import StatusBadge from '../components/StatusBadge'
 import Pagination from '../components/Pagination'
@@ -29,6 +29,55 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null)
   const [tagFilter, setTagFilter] = useState<string>('')
   const [availableTags, setAvailableTags] = useState<{ tag: string; count: number }[]>([])
+
+  // Fastly KV sync state
+  const [syncState, setSyncState] = useState<'idle' | 'confirm' | 'running' | 'done' | 'error'>('idle')
+  const [syncProgress, setSyncProgress] = useState({ synced: 0, failed: 0, total: 0 })
+  const [syncError, setSyncError] = useState<string | null>(null)
+  const cancelRef = useRef(false)
+  const abortRef = useRef<AbortController | null>(null)
+
+  const startFastlySync = async () => {
+    setSyncState('running')
+    setSyncError(null)
+    setSyncProgress({ synced: 0, failed: 0, total: 0 })
+    cancelRef.current = false
+
+    let cursor: string | null = null
+    let totalSynced = 0
+    let totalFailed = 0
+
+    try {
+      abortRef.current = new AbortController()
+
+      // Dry run first page to get total count
+      const dryRun = await syncFastlyPage(null, 100, true, abortRef.current.signal)
+      const estimatedTotal = dryRun.total_active ?? 0
+      setSyncProgress(p => ({ ...p, total: estimatedTotal }))
+
+      // Now sync for real
+      while (!cancelRef.current) {
+        const result = await syncFastlyPage(cursor, 100, false, abortRef.current.signal)
+        totalSynced += result.synced ?? 0
+        totalFailed += result.failed ?? 0
+        setSyncProgress({ synced: totalSynced, failed: totalFailed, total: estimatedTotal })
+
+        cursor = result.cursor ?? null
+        if (!cursor) break
+      }
+
+      setSyncState(cancelRef.current ? 'idle' : 'done')
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        setSyncState('idle')
+        return
+      }
+      setSyncError(err instanceof Error ? err.message : 'Unknown error')
+      setSyncState('error')
+    } finally {
+      abortRef.current = null
+    }
+  }
 
   const performSearch = useCallback(async () => {
     setLoading(true)
@@ -283,6 +332,89 @@ export default function Dashboard() {
               </svg>
               Burned
             </a>
+          </div>
+        </div>
+
+        {/* Fastly KV Sync */}
+        <div className="mt-4 pt-4 border-t border-gray-200">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium text-gray-700">Fastly KV Sync:</p>
+            <div className="flex items-center gap-2">
+              {syncState === 'idle' && (
+                <button
+                  onClick={() => setSyncState('confirm')}
+                  className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-md bg-indigo-100 text-indigo-700 hover:bg-indigo-200"
+                >
+                  Sync to Fastly KV
+                </button>
+              )}
+              {syncState === 'confirm' && (
+                <>
+                  <span className="text-xs text-gray-600">Sync all active usernames to Fastly KV?</span>
+                  <button
+                    onClick={startFastlySync}
+                    className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-md bg-indigo-600 text-white hover:bg-indigo-700"
+                  >
+                    Confirm
+                  </button>
+                  <button
+                    onClick={() => setSyncState('idle')}
+                    className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200"
+                  >
+                    Cancel
+                  </button>
+                </>
+              )}
+              {syncState === 'running' && (
+                <>
+                  <div className="flex-1 min-w-[200px]">
+                    <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
+                      <span>Syncing... {syncProgress.synced.toLocaleString()}{syncProgress.total > 0 ? ` / ${syncProgress.total.toLocaleString()}` : ''}</span>
+                      {syncProgress.total > 0 && <span>{Math.round((syncProgress.synced / syncProgress.total) * 100)}%</span>}
+                    </div>
+                    <div className="w-full bg-gray-200 rounded-full h-1.5">
+                      <div
+                        className="bg-indigo-600 h-1.5 rounded-full transition-all"
+                        style={{ width: syncProgress.total > 0 ? `${Math.min(100, (syncProgress.synced / syncProgress.total) * 100)}%` : '0%' }}
+                      />
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      cancelRef.current = true
+                      abortRef.current?.abort()
+                    }}
+                    className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200"
+                  >
+                    Stop
+                  </button>
+                </>
+              )}
+              {syncState === 'done' && (
+                <>
+                  <span className="text-xs text-green-700">
+                    Complete: {syncProgress.synced.toLocaleString()} synced{syncProgress.failed > 0 ? `, ${syncProgress.failed} failed` : ''}
+                  </span>
+                  <button
+                    onClick={() => setSyncState('idle')}
+                    className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200"
+                  >
+                    Dismiss
+                  </button>
+                </>
+              )}
+              {syncState === 'error' && (
+                <>
+                  <span className="text-xs text-red-700">Error: {syncError}</span>
+                  <button
+                    onClick={() => setSyncState('idle')}
+                    className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200"
+                  >
+                    Dismiss
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         </div>
       </div>

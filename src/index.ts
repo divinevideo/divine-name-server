@@ -9,8 +9,8 @@ import admin from './routes/admin'
 // Auth routes are mounted inside admin.ts (same Hono app, exempt from auth middleware)
 import publicRoutes from './routes/public'
 import internalAtproto from './routes/internal-atproto'
-import { getAllActiveUsernames, expireStaleReservations } from './db/queries'
-import { bulkSyncToFastly, parseRelayHints } from './utils/fastly-sync'
+import { getUsernamesUpdatedSince, expireStaleReservations, getQueuedFastlySyncTasks, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures } from './db/queries'
+import { syncBatch, parseRelayHints, type UsernameKVData } from './utils/fastly-sync'
 
 type Bindings = {
   DB: D1Database
@@ -105,22 +105,57 @@ export default {
       console.log(`Cron: expired ${expired} stale pending-confirmation reservations`)
     }
 
-    // Hourly reconciliation: sync all active D1 users to Fastly KV
-    const activeUsers = await getAllActiveUsernames(env.DB)
-    const toSync = activeUsers
-      .filter(u => u.pubkey)
-      .map(u => ({
-        username: u.username_canonical || u.name,
-        data: {
-          pubkey: u.pubkey!,
-          relays: parseRelayHints(u.relays),
-          status: 'active' as const,
-          atproto_did: u.atproto_did,
-          atproto_state: u.atproto_state,
-        }
-      }))
+    // Six-hour overlap covers delayed cron firings while the durable queue
+    // preserves retries for anything that still fails after bounded Fastly retries.
+    const sixHoursAgo = Math.floor(Date.now() / 1000) - (6 * 60 * 60)
+    const recentlyChanged = await getUsernamesUpdatedSince(env.DB, sixHoursAgo)
+    const queuedTasks = await getQueuedFastlySyncTasks(env.DB, 5000)
 
-    const results = await bulkSyncToFastly(env, toSync)
-    console.log(`Cron sync: ${results.success} synced, ${results.failed} failed out of ${toSync.length} active users`)
+    const itemsByUsername = new Map<string, {
+      username: string
+      action: 'sync' | 'delete'
+      data?: UsernameKVData
+    }>()
+
+    for (const task of queuedTasks) {
+      itemsByUsername.set(task.username, task)
+    }
+
+    for (const user of recentlyChanged) {
+      if (user.status === 'active' && user.pubkey) {
+        itemsByUsername.set(user.username_canonical || user.name, {
+          username: user.username_canonical || user.name,
+          action: 'sync',
+          data: {
+            pubkey: user.pubkey,
+            relays: parseRelayHints(user.relays),
+            status: 'active',
+            atproto_did: user.atproto_did,
+            atproto_state: user.atproto_state,
+          },
+        })
+      } else if (user.status === 'revoked' || user.status === 'burned') {
+        itemsByUsername.set(user.username_canonical || user.name, {
+          username: user.username_canonical || user.name,
+          action: 'delete',
+        })
+      }
+    }
+
+    const items = Array.from(itemsByUsername.values())
+    const results = await syncBatch(env, items, { concurrency: 10 })
+    await clearFastlySyncTasks(env.DB, results.successes.map(result => result.username))
+    for (const failure of results.failures) {
+      const item = itemsByUsername.get(failure.username)
+      if (item) {
+        await enqueueFastlySyncTask(env.DB, item)
+      }
+    }
+    await markFastlySyncTaskFailures(
+      env.DB,
+      results.failures.map(result => ({ username: result.username, error: result.error }))
+    )
+
+    console.log(`Cron Fastly reconciliation: ${recentlyChanged.length} recent changes, ${queuedTasks.length} queued, ${results.synced} synced, ${results.deleted} deleted, ${results.failed} failed`)
   }
 }

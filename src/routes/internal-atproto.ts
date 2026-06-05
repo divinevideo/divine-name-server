@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
-import { getUsernameByName } from '../db/queries'
-import { parseRelayHints, syncUsernameToFastly } from '../utils/fastly-sync'
+import { enqueueFastlySyncTask, getUsernameByName } from '../db/queries'
+import { parseRelayHints, syncAndVerifyUsername } from '../utils/fastly-sync'
 
 type Bindings = {
   DB: D1Database
@@ -68,13 +68,21 @@ internalAtproto.post('/username/set-atproto', async (c) => {
     ).bind(atproto_did || null, atproto_state || null, now, canonical, name).run()
 
     if (existing.status === 'active' && existing.pubkey) {
-      await syncUsernameToFastly(c.env, canonical, {
+      const data = {
         pubkey: existing.pubkey,
         relays: parseRelayHints(existing.relays),
-        status: 'active',
+        status: 'active' as const,
         atproto_did: atproto_did || null,
         atproto_state: atproto_state || null,
-      })
+      }
+      const result = await syncAndVerifyUsername(c.env, canonical, data)
+      if (!result.success || !result.verified) {
+        await enqueueFastlySyncTask(c.env.DB, {
+          username: canonical,
+          action: 'sync',
+          data,
+        })
+      }
     }
 
     return c.json({
