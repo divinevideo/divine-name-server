@@ -5,6 +5,7 @@ compatibility_date = "2024-11-15"
 # Routes (must be top-level, before any [section] headers)
 routes = [
   { pattern = "divine.video/.well-known/*", zone_name = "divine.video" },
+  { pattern = "divine.video/nodeinfo/*", zone_name = "divine.video" },
   { pattern = "names.admin.divine.video/*", zone_name = "divine.video" },
   { pattern = "names.divine.video/*", zone_name = "divine.video" }
 ]

@@ -4,6 +4,7 @@
 import { Hono } from 'hono'
 import username from './routes/username'
 import nip05 from './routes/nip05'
+import webfinger from './routes/webfinger'
 import subdomain from './routes/subdomain'
 import admin from './routes/admin'
 // Auth routes are mounted inside admin.ts (same Hono app, exempt from auth middleware)
@@ -22,6 +23,7 @@ type Bindings = {
   ATPROTO_SYNC_TOKEN?: string
   KEYCAST_URL?: string
   KEYCAST_CLIENT_ID?: string
+  AP_ACTOR_BASE_URL?: string
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
@@ -65,6 +67,9 @@ app.route('/api/internal', internalAtproto)
 
 // NIP-05
 app.route('', nip05)
+
+// ActivityPub discovery: WebFinger + NodeInfo (read-only over usernames table)
+app.route('', webfinger)
 
 // Admin UI SPA fallback - serve index.html for non-API routes on admin subdomain
 app.get('*', async (c) => {
