@@ -49,24 +49,45 @@ npx wrangler secret delete FASTLY_STORE_ID
 
 After updating the secret, verify that D1 to Fastly KV sync succeeds.
 
-Use the admin backfill endpoint for an explicit result:
+Use the admin backfill endpoint for an explicit result. The endpoint is paginated, so repeat the request with the returned `cursor` until `cursor` is `null` and `remaining` is `0`:
 
 ```http
 POST /api/admin/sync/fastly
 ```
 
-Expected result:
+First request body:
+
+```json
+{
+  "limit": 500
+}
+```
+
+Follow-up request body when the response includes a cursor:
+
+```json
+{
+  "limit": 500,
+  "cursor": "12345"
+}
+```
+
+Expected response shape:
 
 ```json
 {
   "ok": true,
-  "failed": 0
+  "synced": 500,
+  "deleted": 0,
+  "failed": 0,
+  "remaining": 1500,
+  "cursor": "12345"
 }
 ```
 
-If the endpoint reports failures, inspect Worker logs for `Fastly API error` entries. `401` means the token value is wrong, expired, revoked, or lacks the required Fastly access.
+The final page returns `"cursor": null` and `"remaining": 0`. Treat the rotation as verified only after every page returns `"failed": 0`. If any page reports failures, inspect Worker logs for `Fastly API error` entries. `401` means the token value is wrong, expired, revoked, or lacks the required Fastly access.
 
-You can also verify passively after the next hourly cron run. The scheduled Worker reconciles all active D1 users to Fastly KV once per hour and logs the number synced and failed.
+The next hourly cron can confirm that the incremental path still runs, but it is not a full backfill. The scheduled Worker syncs recently changed users from the overlap window plus queued retry tasks, so unchanged active users are not re-pushed by cron alone.
 
 ## Runtime Sync Paths
 
@@ -74,8 +95,8 @@ The same secret is used by these code paths:
 
 - Public claim flow: `src/routes/username.ts` updates D1, then writes `user:{canonical_username}` to Fastly KV with `executionCtx.waitUntil`.
 - Admin assignment and revoke flow: `src/routes/admin.ts` writes or deletes Fastly KV after D1 changes.
-- Admin backfill: `POST /api/admin/sync/fastly` pushes all active D1 usernames to Fastly KV and returns failure counts.
-- Hourly cron: `src/index.ts` reconciles all active D1 usernames to Fastly KV every hour.
+- Admin backfill: `POST /api/admin/sync/fastly` pushes one page of active D1 usernames with pubkeys to Fastly KV and returns `failed`, `remaining`, and `cursor` fields for paging through the full backfill.
+- Hourly cron: `src/index.ts` incrementally syncs recently changed D1 usernames and queued retry tasks to Fastly KV every hour.
 - Vine import script: `scripts/import-vine-users.ts` has a separate one-off sync path that reads `FASTLY_API_TOKEN` and `FASTLY_STORE_ID` from the archived vines publisher `.env` file.
 
 The mutation paths are intentionally non-blocking. A user or admin request can succeed even if the Fastly write fails later, so use the admin backfill endpoint or logs to confirm the rotation.
@@ -88,7 +109,7 @@ If the automation token fails and the old personal token still works, rerun:
 npx wrangler secret put FASTLY_API_TOKEN
 ```
 
-Paste the previous token, then rerun `POST /api/admin/sync/fastly`. Treat this as temporary; the final state should be an automation token, not a personal token.
+Paste the previous token, then rerun the paginated `POST /api/admin/sync/fastly` verification until `cursor` is `null`. Treat this as temporary; the final state should be an automation token, not a personal token.
 
 ## Follow-Up: `divine-name-sync`
 
