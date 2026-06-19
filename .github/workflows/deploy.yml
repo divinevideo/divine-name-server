@@ -10,7 +10,7 @@ on:
 
 jobs:
   deploy:
-    runs-on: ubuntu-24.04-4core
+    runs-on: ubuntu-latest
     name: Deploy
     steps:
       - name: Checkout
