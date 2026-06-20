@@ -1114,6 +1114,10 @@ admin.get('/username/:name/nip05-status', async (c) => {
       return c.json({ ok: true, status: 'missing' })
     }
 
+    // Unreachable at runtime here (status is necessarily active with a non-null
+    // pubkey by this point; revoked/burned and active-without-pubkey both returned
+    // above), but load-bearing for the type checker: it narrows existing.pubkey from
+    // string | null to string for expectedFastly below. Removing it fails tsc (TS2345).
     if (!existing.pubkey) {
       return c.json({
         ok: true,

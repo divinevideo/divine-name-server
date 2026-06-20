@@ -384,6 +384,11 @@ export async function restoreUsername(
     ? `${existing.admin_notes}\n${auditLine}`
     : auditLine
 
+  // Pre-batch read: the name the batch will release, so the caller can delete its
+  // stale Fastly edge record. If a concurrent same-pubkey claim lands between this
+  // read and the batch, the reported released name can lag the actually-revoked one
+  // by a sync cycle; the DB stays correct (transactional batch + partial unique
+  // index) and nip05-status / the Fastly sync queue self-heal the edge.
   const existingActiveForPubkey = await getUsernameByPubkey(db, pubkey)
   const releasedUsernameCanonical = existingActiveForPubkey?.username_canonical &&
     existingActiveForPubkey.username_canonical !== nameCanonical

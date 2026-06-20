@@ -279,7 +279,10 @@ describe('restoreUsername', () => {
     expect(oldActive?.status).toBe('revoked')
   })
 
-  it('returns null and does not release an active name when the target is no longer restorable', async () => {
+  it('returns null at the pre-batch status guard when the target is already active', async () => {
+    // Target seeded active: restoreUsername short-circuits at the status precondition
+    // (before db.batch), so no other name is released. This covers the precondition
+    // check only, not the in-batch EXISTS guard (see the TOCTOU test below).
     const db = createFakeD1([
       {
         id: 1, name: 'oldactive', username_display: 'oldactive', username_canonical: 'oldactive',
@@ -298,6 +301,41 @@ describe('restoreUsername', () => {
     expect(result).toBeNull()
     const oldActive = await getUsernameByName(db, 'oldactive')
     expect(oldActive?.status).toBe('active')
+  })
+
+  it('returns null without releasing the prior active name when the target is claimed concurrently', async () => {
+    // TOCTOU: the target reads as restorable, but a concurrent claim flips it to active
+    // before the batch runs. The release statement's EXISTS guard must then make the
+    // release a no-op and the restore statement must match zero rows (meta.changes===0),
+    // so restoreUsername returns null and the target pubkey's existing name is untouched.
+    const records: MockRecord[] = [
+      {
+        id: 1, name: 'oldactive', username_display: 'oldactive', username_canonical: 'oldactive',
+        pubkey: 'new-owner', status: 'active',
+        created_at: 1700000000, updated_at: 1700000000, claimed_at: 1700000000,
+      },
+      {
+        id: 2, name: 'restoreme', username_display: 'restoreme', username_canonical: 'restoreme',
+        pubkey: 'prior-owner', status: 'burned',
+        created_at: 1700000000, updated_at: 1700000000, claimed_at: 1700000000, revoked_at: 1700000000,
+      },
+    ]
+    const db = createFakeD1(records, {
+      onBeforeBatch: () => {
+        const target = records.find((r) => r.username_canonical === 'restoreme')!
+        target.status = 'active'
+        target.pubkey = 'someone-else'
+      },
+    })
+
+    const result = await restoreUsername(db, 'restoreme', 'new-owner', null, 'admin@example.com')
+
+    expect(result).toBeNull()
+    const oldActive = await getUsernameByName(db, 'oldactive')
+    expect(oldActive?.status).toBe('active')
+    const target = await getUsernameByName(db, 'restoreme')
+    expect(target?.status).toBe('active')
+    expect(target?.pubkey).toBe('someone-else')
   })
 })
 

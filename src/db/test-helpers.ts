@@ -15,7 +15,10 @@ export type MockRecord = Partial<Username> & { name: string; username_canonical:
  * behavior with less coupling to query text and parameter ordering than the
  * old duplicated mocks.
  */
-export function createFakeD1(records: MockRecord[]) {
+export function createFakeD1(
+  records: MockRecord[],
+  options: { onBeforeBatch?: () => void } = {}
+) {
   const tags: { username_id: number; tag: string; created_at: number; created_by: string }[] = []
 
   return {
@@ -375,6 +378,10 @@ export function createFakeD1(records: MockRecord[]) {
       }
     },
     batch: async (statements: Array<{ run: () => Promise<unknown> }>) => {
+      // Lets a test mutate records between restoreUsername's pre-batch reads and the
+      // batch execution, reproducing a concurrent-claim TOCTOU that a single-threaded
+      // fake otherwise cannot, exercising the EXISTS guard + meta.changes===0 path.
+      options.onBeforeBatch?.()
       const results = []
       for (const statement of statements) {
         results.push(await statement.run())
