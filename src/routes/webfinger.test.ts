@@ -75,6 +75,30 @@ describe('WebFinger', () => {
     expect(jrd.subject).toBe('acct:alice@divine.video')
   })
 
+  it('rejects acct resources for foreign domains', async () => {
+    const db = createFakeD1(records)
+    const res = await worker.fetch(
+      new Request('https://divine.video/.well-known/webfinger?resource=acct:alice@example.com'),
+      env(db),
+      ctx
+    )
+
+    expect(res.status).toBe(404)
+  })
+
+  it('allows bare username resources', async () => {
+    const db = createFakeD1(records)
+    const res = await worker.fetch(
+      new Request('https://divine.video/.well-known/webfinger?resource=alice'),
+      env(db),
+      ctx
+    )
+
+    expect(res.status).toBe(200)
+    const jrd = await res.json() as any
+    expect(jrd.subject).toBe('acct:alice@divine.video')
+  })
+
   it('honors a configurable actor base URL', async () => {
     const db = createFakeD1(records)
     const res = await worker.fetch(

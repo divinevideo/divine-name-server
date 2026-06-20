@@ -30,12 +30,13 @@ webfinger.get('/.well-known/webfinger', async (c) => {
       })
     }
 
-    // Parse `acct:{user}@{domain}` — extract the user part before the @.
+    // Parse `acct:{user}@{domain}` and reject acct domains this service does not own.
     const acct = resource.startsWith('acct:') ? resource.slice('acct:'.length) : resource
     const atIndex = acct.lastIndexOf('@')
     const user = atIndex === -1 ? acct : acct.slice(0, atIndex)
+    const domain = atIndex === -1 ? null : acct.slice(atIndex + 1).toLowerCase()
 
-    if (!user) {
+    if (!user || (domain !== null && domain !== 'divine.video')) {
       return c.notFound()
     }
 

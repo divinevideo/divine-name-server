@@ -15,7 +15,10 @@ export type MockRecord = Partial<Username> & { name: string; username_canonical:
  * behavior with less coupling to query text and parameter ordering than the
  * old duplicated mocks.
  */
-export function createFakeD1(records: MockRecord[]) {
+export function createFakeD1(
+  records: MockRecord[],
+  options: { onBeforeBatch?: () => void } = {}
+) {
   const tags: { username_id: number; tag: string; created_at: number; created_by: string }[] = []
 
   return {
@@ -166,6 +169,12 @@ export function createFakeD1(records: MockRecord[]) {
                 return { count: filtered.length }
               }
 
+              // Active username lookup by pubkey
+              if (sql.includes('WHERE pubkey = ? AND status = ?')) {
+                const [pubkey, status] = boundParams
+                return records.find((u) => u.pubkey === pubkey && u.status === status) || null
+              }
+
               // Direct username lookup
               if (sql.includes('username_canonical = ?') || sql.includes('name = ?')) {
                 const lookupValues = boundParams.filter((p) => typeof p === 'string')
@@ -271,12 +280,18 @@ export function createFakeD1(records: MockRecord[]) {
                 sql.includes('revoked_at = NULL') &&
                 sql.includes('admin_notes = ?')
               ) {
-                const [newPubkey, claimedAt, updatedAt, newNotes, notesBy, notesAt, canonical] = boundParams
-                const rec = records.find(r => r.username_canonical === canonical || r.name === canonical)
+                const [relays, atprotoDid, atprotoState, newPubkey, claimedAt, updatedAt, newNotes, notesBy, notesAt, canonical] = boundParams
+                const rec = records.find(r =>
+                  (r.username_canonical === canonical || r.name === canonical) &&
+                  (sql.includes("status IN ('revoked', 'burned')") ? (r.status === 'revoked' || r.status === 'burned') : true)
+                )
                 if (rec) {
                   rec.status = 'active'
                   rec.recyclable = 1
                   rec.revoked_at = null
+                  rec.relays = relays
+                  rec.atproto_did = atprotoDid
+                  rec.atproto_state = atprotoState
                   rec.pubkey = newPubkey
                   rec.claimed_at = claimedAt
                   rec.updated_at = updatedAt
@@ -314,10 +329,13 @@ export function createFakeD1(records: MockRecord[]) {
                 sql.includes('pubkey = ?') &&
                 sql.includes("status = 'active'")
               ) {
-                const [revokedAt, updatedAt, pk, excludeCanonical] = boundParams
+                const [revokedAt, updatedAt, pk, excludeCanonical, targetCanonical] = boundParams
+                const targetIsRestorable = !targetCanonical || records.some(
+                  r => r.username_canonical === targetCanonical && (r.status === 'revoked' || r.status === 'burned')
+                )
                 let changes = 0
                 for (const r of records) {
-                  if (r.pubkey === pk && r.status === 'active' && r.username_canonical !== excludeCanonical) {
+                  if (targetIsRestorable && r.pubkey === pk && r.status === 'active' && r.username_canonical !== excludeCanonical) {
                     r.status = 'revoked'
                     r.revoked_at = revokedAt
                     r.updated_at = updatedAt
@@ -358,6 +376,17 @@ export function createFakeD1(records: MockRecord[]) {
           }
         },
       }
+    },
+    batch: async (statements: Array<{ run: () => Promise<unknown> }>) => {
+      // Lets a test mutate records between restoreUsername's pre-batch reads and the
+      // batch execution, reproducing a concurrent-claim TOCTOU that a single-threaded
+      // fake otherwise cannot, exercising the EXISTS guard + meta.changes===0 path.
+      options.onBeforeBatch?.()
+      const results = []
+      for (const statement of statements) {
+        results.push(await statement.run())
+      }
+      return results
     },
   } as unknown as D1Database
 }

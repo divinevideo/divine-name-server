@@ -540,7 +540,7 @@ admin.post('/username/restore', async (c) => {
     }
 
     const restoredBy = (c.get('adminEmail' as never) as string) || null
-    const updated = await restoreUsername(
+    const restoreResult = await restoreUsername(
       c.env.DB,
       usernameData.canonical,
       normalizedPubkey,
@@ -548,17 +548,35 @@ admin.post('/username/restore', async (c) => {
       restoredBy
     )
 
-    const relays = parseRelayHints(existing.relays)
+    if (!restoreResult) {
+      return c.json({
+        ok: false,
+        error: 'Username is no longer restorable; reload and try again',
+      }, 409)
+    }
+
+    const relays = restoreResult.ownerChanged ? [] : parseRelayHints(existing.relays)
     const fastlyData = {
       pubkey: normalizedPubkey,
       relays,
       status: 'active' as const,
-      atproto_did: existing.atproto_did || null,
-      atproto_state: existing.atproto_state || null,
+      atproto_did: restoreResult.ownerChanged ? null : existing.atproto_did || null,
+      atproto_state: restoreResult.ownerChanged ? null : existing.atproto_state || null,
     }
 
     c.executionCtx.waitUntil(
-      syncAndVerifyUsername(c.env, usernameData.canonical, fastlyData).then(async (result) => {
+      (async () => {
+        if (restoreResult.releasedUsernameCanonical) {
+          const deleteResult = await deleteUsernameFromFastly(c.env, restoreResult.releasedUsernameCanonical)
+          if (!deleteResult.success) {
+            await enqueueFastlySyncTask(c.env.DB, {
+              username: restoreResult.releasedUsernameCanonical,
+              action: 'delete',
+            })
+          }
+        }
+
+        const result = await syncAndVerifyUsername(c.env, usernameData.canonical, fastlyData)
         if (!result.success || !result.verified) {
           await enqueueFastlySyncTask(c.env.DB, {
             username: usernameData.canonical,
@@ -566,14 +584,14 @@ admin.post('/username/restore', async (c) => {
             data: fastlyData,
           })
         }
-      })
+      })()
     )
 
     console.log(
       `Username "${usernameData.canonical}" restored to ${normalizedPubkey.slice(0, 8)}... by ${restoredBy || 'unknown'}${reason ? ` (reason: ${reason})` : ''}`
     )
 
-    return c.json({ ok: true, username: updated })
+    return c.json({ ok: true, username: restoreResult.username })
   } catch (error) {
     console.error('Restore error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
@@ -1094,6 +1112,18 @@ admin.get('/username/:name/nip05-status', async (c) => {
 
     if (!fastly.data) {
       return c.json({ ok: true, status: 'missing' })
+    }
+
+    // Unreachable at runtime here (status is necessarily active with a non-null
+    // pubkey by this point; revoked/burned and active-without-pubkey both returned
+    // above), but load-bearing for the type checker: it narrows existing.pubkey from
+    // string | null to string for expectedFastly below. Removing it fails tsc (TS2345).
+    if (!existing.pubkey) {
+      return c.json({
+        ok: true,
+        status: 'not_applicable',
+        reason: 'No pubkey assigned',
+      })
     }
 
     const expectedFastly = {

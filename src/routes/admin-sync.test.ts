@@ -256,16 +256,17 @@ describe('GET /admin/username/:name/nip05-status', () => {
     expect(json.status).toBe('missing')
   })
 
-  it('returns not_applicable for non-active usernames', async () => {
+  it('returns missing for revoked usernames absent from Fastly', async () => {
     getUsernameByName.mockResolvedValue({ name: 'alice', pubkey: 'pk1', status: 'revoked', relays: null })
+    readUsernameFromFastly.mockResolvedValue({ success: true, data: undefined })
 
     const app = createTestApp()
     const req = new Request('http://localhost/admin/username/alice/nip05-status')
     const res = await app.fetch(req, baseEnv, ctx)
     const json = await res.json() as any
 
-    expect(json.status).toBe('not_applicable')
-    expect(readUsernameFromFastly).not.toHaveBeenCalled()
+    expect(json.status).toBe('missing')
+    expect(readUsernameFromFastly).toHaveBeenCalledWith(baseEnv, 'alice')
   })
 
   it('returns not_applicable for active usernames without pubkey', async () => {

@@ -1281,13 +1281,13 @@ describe('POST /api/admin/username/restore', () => {
     return app
   }
 
-  function callRestore(app: Hono<any>, env: any, body: any) {
+  function callRestore(app: Hono<any>, env: any, body: any, ctx: ExecutionContext = { waitUntil: () => {}, passThroughOnException: () => {}, props: {} }) {
     const req = new Request('http://localhost/api/admin/username/restore', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
-    return app.fetch(req, env, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    return app.fetch(req, env, ctx)
   }
 
   it('restores a burned username back to active for the provided pubkey', async () => {
@@ -1336,6 +1336,109 @@ describe('POST /api/admin/username/restore', () => {
     expect(json.username.status).toBe('active')
     expect(json.username.pubkey).toBe(VALID_PUBKEY)
     expect(json.username.revoked_at).toBeNull()
+  })
+
+  it('does not replay previous owner relay or ATProto identity when restoring to a new pubkey', async () => {
+    const db = createFakeD1([
+      {
+        id: 1, name: 'rev-user', username_display: 'rev-user', username_canonical: 'rev-user',
+        pubkey: OTHER_PUBKEY, email: null, relays: '["wss://relay.example"]', status: 'revoked',
+        atproto_did: 'did:plc:previous', atproto_state: 'ready',
+        recyclable: 1, created_at: 1700000000, updated_at: 1700000100,
+        claimed_at: 1700000000, revoked_at: 1700000100, reserved_reason: null,
+        admin_notes: null,
+      },
+    ])
+    mockFetch
+      .mockResolvedValueOnce(new Response('', { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        pubkey: VALID_PUBKEY,
+        relays: [],
+        status: 'active',
+        atproto_did: null,
+        atproto_state: null,
+      }), { status: 200 }))
+    const waitUntilPromises: Promise<unknown>[] = []
+    const ctx = {
+      waitUntil: (promise: Promise<unknown>) => { waitUntilPromises.push(promise) },
+      passThroughOnException: () => {},
+      props: {},
+    } as unknown as ExecutionContext
+
+    const app = createTestApp()
+    const res = await callRestore(app, {
+      DB: db,
+      BYPASS_LOCAL_AUTH: 'true',
+      FASTLY_API_TOKEN: 'test-token',
+      FASTLY_STORE_ID: 'test-store',
+    }, {
+      name: 'rev-user', pubkey: VALID_PUBKEY,
+    }, ctx)
+    await Promise.all(waitUntilPromises)
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json.username.relays).toBeNull()
+    expect(json.username.atproto_did).toBeNull()
+    expect(json.username.atproto_state).toBeNull()
+
+    const syncBody = JSON.parse(mockFetch.mock.calls[0][1].body)
+    expect(syncBody.relays).toEqual([])
+    expect(syncBody.atproto_did).toBeNull()
+    expect(syncBody.atproto_state).toBeNull()
+  })
+
+  it('deletes a released active name from Fastly when restore moves a pubkey', async () => {
+    const db = createFakeD1([
+      {
+        id: 1, name: 'current', username_display: 'current', username_canonical: 'current',
+        pubkey: VALID_PUBKEY, email: null, relays: null, status: 'active',
+        recyclable: 1, created_at: 1700000000, updated_at: 1700000000,
+        claimed_at: 1700000000, revoked_at: null, reserved_reason: null,
+        admin_notes: null,
+      },
+      {
+        id: 2, name: 'restoreme', username_display: 'restoreme', username_canonical: 'restoreme',
+        pubkey: OTHER_PUBKEY, email: null, relays: null, status: 'revoked',
+        recyclable: 1, created_at: 1700000000, updated_at: 1700000100,
+        claimed_at: 1700000000, revoked_at: 1700000100, reserved_reason: null,
+        admin_notes: null,
+      },
+    ])
+    mockFetch
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response('', { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        pubkey: VALID_PUBKEY,
+        relays: [],
+        status: 'active',
+        atproto_did: null,
+        atproto_state: null,
+      }), { status: 200 }))
+    const waitUntilPromises: Promise<unknown>[] = []
+    const ctx = {
+      waitUntil: (promise: Promise<unknown>) => { waitUntilPromises.push(promise) },
+      passThroughOnException: () => {},
+      props: {},
+    } as unknown as ExecutionContext
+
+    const app = createTestApp()
+    const res = await callRestore(app, {
+      DB: db,
+      BYPASS_LOCAL_AUTH: 'true',
+      FASTLY_API_TOKEN: 'test-token',
+      FASTLY_STORE_ID: 'test-store',
+    }, {
+      name: 'restoreme', pubkey: VALID_PUBKEY,
+    }, ctx)
+    await Promise.all(waitUntilPromises)
+
+    expect(res.status).toBe(200)
+    expect(mockFetch.mock.calls[0][0]).toContain('/keys/user%3Acurrent')
+    expect(mockFetch.mock.calls[0][1].method).toBe('DELETE')
+
+    const current = await getUsernameByName(db, 'current')
+    expect(current?.status).toBe('revoked')
   })
 
   it('returns 404 when the username does not exist', async () => {

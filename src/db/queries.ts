@@ -71,6 +71,12 @@ export interface FastlySyncQueueTask extends SyncItem {
   last_error: string | null
 }
 
+export interface RestoreUsernameResult {
+  username: Username
+  releasedUsernameCanonical: string | null
+  ownerChanged: boolean
+}
+
 export async function isReservedWord(
   db: D1Database,
   word: string
@@ -356,9 +362,6 @@ export async function revokeUsername(
  * Sets status='active', recyclable=1, pubkey=<provided>, clears revoked_at,
  * resets claimed_at to now, and appends an audit line to admin_notes.
  *
- * Caller must verify the row exists and is currently revoked/burned — this
- * function trusts the caller's status check and performs the update unconditionally.
- *
  * Releases any other active username currently held by the target pubkey
  * (mirrors assignUsername) so the partial unique index on (pubkey,status='active')
  * is not violated.
@@ -369,42 +372,71 @@ export async function restoreUsername(
   pubkey: string,
   reason: string | null,
   restoredBy: string | null
-): Promise<Username | null> {
+): Promise<RestoreUsernameResult | null> {
   const now = Math.floor(Date.now() / 1000)
 
   const existing = await getUsernameByName(db, nameCanonical)
   if (!existing) return null
+  if (existing.status !== 'revoked' && existing.status !== 'burned') return null
 
   const auditLine = `[${new Date(now * 1000).toISOString()} restored by ${restoredBy || 'unknown'}]${reason ? `: ${reason}` : ''}`
   const newNotes = existing.admin_notes && existing.admin_notes.length > 0
     ? `${existing.admin_notes}\n${auditLine}`
     : auditLine
 
-  // Release any other active name held by this pubkey before flipping this row
-  // back to active — the partial unique index forbids two active rows per pubkey.
-  await db.prepare(
+  // Pre-batch read: the name the batch will release, so the caller can delete its
+  // stale Fastly edge record. If a concurrent same-pubkey claim lands between this
+  // read and the batch, the reported released name can lag the actually-revoked one
+  // by a sync cycle; the DB stays correct (transactional batch + partial unique
+  // index) and nip05-status / the Fastly sync queue self-heal the edge.
+  const existingActiveForPubkey = await getUsernameByPubkey(db, pubkey)
+  const releasedUsernameCanonical = existingActiveForPubkey?.username_canonical &&
+    existingActiveForPubkey.username_canonical !== nameCanonical
+    ? existingActiveForPubkey.username_canonical
+    : null
+  const ownerChanged = existing.pubkey !== pubkey
+  const relays = ownerChanged ? null : existing.relays
+  const atprotoDid = ownerChanged ? null : existing.atproto_did
+  const atprotoState = ownerChanged ? null : existing.atproto_state
+
+  const releaseStatement = db.prepare(
     `UPDATE usernames
      SET status = 'revoked',
          revoked_at = ?,
          updated_at = ?
-     WHERE pubkey = ? AND status = 'active' AND username_canonical != ?`
-  ).bind(now, now, pubkey, nameCanonical).run()
+     WHERE pubkey = ?
+       AND status = 'active'
+       AND username_canonical != ?
+       AND EXISTS (
+         SELECT 1 FROM usernames
+         WHERE username_canonical = ? AND status IN ('revoked', 'burned')
+       )`
+  ).bind(now, now, pubkey, nameCanonical, nameCanonical)
 
-  await db.prepare(
+  const restoreStatement = db.prepare(
     `UPDATE usernames
      SET status = 'active',
          recyclable = 1,
          revoked_at = NULL,
+         relays = ?,
+         atproto_did = ?,
+         atproto_state = ?,
          pubkey = ?,
          claimed_at = ?,
          updated_at = ?,
          admin_notes = ?,
          admin_notes_updated_by = ?,
          admin_notes_updated_at = ?
-     WHERE username_canonical = ?`
-  ).bind(pubkey, now, now, newNotes, restoredBy, now, nameCanonical).run()
+     WHERE username_canonical = ? AND status IN ('revoked', 'burned')`
+  ).bind(relays, atprotoDid, atprotoState, pubkey, now, now, newNotes, restoredBy, now, nameCanonical)
 
-  return getUsernameByName(db, nameCanonical)
+  const [, restoreResult] = await db.batch([releaseStatement, restoreStatement])
+  if (!restoreResult.meta || restoreResult.meta.changes === 0) return null
+
+  const username = await getUsernameByName(db, nameCanonical)
+  if (!username) return null
+
+  return { username, releasedUsernameCanonical, ownerChanged }
 }
 
 export async function assignUsername(
