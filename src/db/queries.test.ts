@@ -2,7 +2,7 @@
 // ABOUTME: Validates search functionality with fake D1 database
 
 import { describe, it, expect } from 'vitest'
-import { searchUsernames, claimUsername, assignUsername, createReservation, reserveUsername, revokeUsername, addTag, removeTag, getTagsForUsername, getTagDetailsForUsername, getTagsForUsernames, getAllTags, getUsernameByName, getUsernameStats, updateAdminNotes, getActiveUsernamesPaginated, countActiveUsernames, enqueueFastlySyncTask, getQueuedFastlySyncTasks, clearFastlySyncTasks, markFastlySyncTaskFailures, type SearchParams, type Username } from './queries'
+import { searchUsernames, claimUsername, assignUsername, createReservation, reserveUsername, revokeUsername, restoreUsername, addTag, removeTag, getTagsForUsername, getTagDetailsForUsername, getTagsForUsernames, getAllTags, getUsernameByName, getUsernameStats, updateAdminNotes, getActiveUsernamesPaginated, countActiveUsernames, enqueueFastlySyncTask, getQueuedFastlySyncTasks, clearFastlySyncTasks, markFastlySyncTaskFailures, type SearchParams, type Username } from './queries'
 import { createFakeD1, type MockRecord } from './test-helpers'
 
 const mockRecords: MockRecord[] = [
@@ -245,6 +245,59 @@ describe('assignUsername', () => {
     const insertSql = sqlStatements[1]
     expect(insertSql).toContain('ON CONFLICT')
     expect(insertSql).toContain('revoked_at = NULL')
+  })
+})
+
+describe('restoreUsername', () => {
+  it('releases the target pubkey active name and clears previous owner identity on owner change', async () => {
+    const db = createFakeD1([
+      {
+        id: 1, name: 'oldactive', username_display: 'oldactive', username_canonical: 'oldactive',
+        pubkey: 'new-owner', status: 'active', relays: null, atproto_did: null, atproto_state: null,
+        created_at: 1700000000, updated_at: 1700000000, claimed_at: 1700000000,
+      },
+      {
+        id: 2, name: 'restoreme', username_display: 'restoreme', username_canonical: 'restoreme',
+        pubkey: 'prior-owner', status: 'burned', relays: '["wss://relay.example"]',
+        atproto_did: 'did:plc:prior', atproto_state: 'ready',
+        recyclable: 0, created_at: 1700000000, updated_at: 1700000000,
+        claimed_at: 1700000000, revoked_at: 1700000000,
+      },
+    ])
+
+    const result = await restoreUsername(db, 'restoreme', 'new-owner', 'appeal accepted', 'admin@example.com')
+
+    expect(result?.username.status).toBe('active')
+    expect(result?.username.pubkey).toBe('new-owner')
+    expect(result?.username.relays).toBeNull()
+    expect(result?.username.atproto_did).toBeNull()
+    expect(result?.username.atproto_state).toBeNull()
+    expect(result?.releasedUsernameCanonical).toBe('oldactive')
+    expect(result?.ownerChanged).toBe(true)
+
+    const oldActive = await getUsernameByName(db, 'oldactive')
+    expect(oldActive?.status).toBe('revoked')
+  })
+
+  it('returns null and does not release an active name when the target is no longer restorable', async () => {
+    const db = createFakeD1([
+      {
+        id: 1, name: 'oldactive', username_display: 'oldactive', username_canonical: 'oldactive',
+        pubkey: 'new-owner', status: 'active',
+        created_at: 1700000000, updated_at: 1700000000, claimed_at: 1700000000,
+      },
+      {
+        id: 2, name: 'restoreme', username_display: 'restoreme', username_canonical: 'restoreme',
+        pubkey: 'prior-owner', status: 'active',
+        created_at: 1700000000, updated_at: 1700000000, claimed_at: 1700000000,
+      },
+    ])
+
+    const result = await restoreUsername(db, 'restoreme', 'new-owner', null, 'admin@example.com')
+
+    expect(result).toBeNull()
+    const oldActive = await getUsernameByName(db, 'oldactive')
+    expect(oldActive?.status).toBe('active')
   })
 })
 
