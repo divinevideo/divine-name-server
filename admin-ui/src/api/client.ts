@@ -17,6 +17,29 @@ import type {
 
 const API_BASE = '/api/admin'
 
+// For endpoints whose callers render `result.error` directly, a non-2xx
+// response still carries a useful JSON body (e.g. validation messages,
+// `requiresOverride`). Return that parsed body instead of throwing on
+// `response.statusText`, which is an empty string over HTTP/2 (no reason
+// phrase) and produced messages like "Reserve failed:" with nothing after it.
+async function parseErrorResponse<T extends ApiResponse>(
+  response: Response,
+  fallback: string
+): Promise<T> {
+  try {
+    const body = (await response.json()) as T
+    if (body && typeof body.error === 'string') {
+      return body
+    }
+  } catch {
+    // Body was not JSON; fall through to a synthesized error.
+  }
+  return {
+    ok: false,
+    error: `${fallback}: ${response.statusText || `HTTP ${response.status}`}`
+  } as T
+}
+
 export async function searchUsernames(
   query: string,
   status?: string,
@@ -90,7 +113,7 @@ export async function reserveUsername(
   })
 
   if (!response.ok) {
-    throw new Error(`Reserve failed: ${response.statusText}`)
+    return parseErrorResponse<ReserveResponse>(response, 'Reserve failed')
   }
 
   return response.json()
@@ -107,7 +130,7 @@ export async function bulkReserveUsernames(
   })
 
   if (!response.ok) {
-    throw new Error(`Bulk reserve failed: ${response.statusText}`)
+    return parseErrorResponse<BulkReserveResponse>(response, 'Bulk reserve failed')
   }
 
   return response.json()
