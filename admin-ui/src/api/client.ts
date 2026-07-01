@@ -28,7 +28,9 @@ async function parseErrorResponse<T extends ApiResponse>(
 ): Promise<T> {
   try {
     const body = (await response.json()) as T
-    if (body && typeof body.error === 'string') {
+    // Only trust an error body that explicitly reports failure, so a
+    // contradictory { ok: true } on a non-2xx never masquerades as success.
+    if (body && body.ok === false && typeof body.error === 'string') {
       return body
     }
   } catch {
