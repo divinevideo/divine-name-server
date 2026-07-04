@@ -299,6 +299,57 @@ describe('Username Claiming - Case Insensitive', () => {
     expect(json2.error).toBe('That username is already taken')
   })
 
+  it('lets the same owner re-claim their own name when the pubkey case differs (#4199 H4)', async () => {
+    const app = createTestApp()
+    // Existing active name owned by a lower-cased pubkey.
+    const db = createMockDB([
+      { id: 1, name: 'MrBeast', username_display: 'MrBeast', username_canonical: 'mrbeast', pubkey: 'abc123', status: 'active', relays: null },
+    ])
+    // NIP-98 presents the SAME key, upper-cased.
+    vi.mocked(verifyNip98Event).mockResolvedValue('ABC123')
+
+    const req = new Request('http://localhost/api/username/claim', {
+      method: 'POST',
+      headers: { 'Authorization': 'Nostr base64...', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'MrBeast' })
+    })
+
+    const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    // Without the pubkey normalization this is a 409 (treated as a different owner).
+    expect(res.status).toBe(200)
+  })
+
+  it('answers the /claim CORS preflight so browsers can POST cross-origin (#4199 H1)', async () => {
+    const app = createTestApp()
+    const req = new Request('http://localhost/api/username/claim', {
+      method: 'OPTIONS',
+      headers: {
+        'Origin': 'https://app.divine.video',
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'authorization,content-type'
+      }
+    })
+
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(204)
+    expect(res.headers.get('access-control-allow-methods') || '').toContain('POST')
+    expect((res.headers.get('access-control-allow-headers') || '').toLowerCase()).toContain('authorization')
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
+  })
+
+  it('exposes exactly one Access-Control-Allow-Origin on GET /check (no duplicate) (#4199)', async () => {
+    const app = createTestApp()
+    const req = new Request('http://localhost/api/username/check/probe', {
+      headers: { 'Origin': 'https://app.divine.video' }
+    })
+
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    // Headers.get() joins duplicates with ", " — assert a single "*", not "*, *".
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
+  })
+
   it('should validate username format correctly', async () => {
     const app = createTestApp()
     

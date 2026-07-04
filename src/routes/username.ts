@@ -3,6 +3,7 @@
 // ABOUTME: Authenticated: POST /claim (NIP-98 auth - works for both custodial and non-custodial users)
 
 import { Hono } from 'hono'
+import { cors } from 'hono/cors'
 import { verifyNip98Event } from '../middleware/nip98'
 import { validateUsername, validateRelays, UsernameValidationError, RelayValidationError } from '../utils/validation'
 import {
@@ -41,6 +42,19 @@ type Bindings = {
 }
 
 const username = new Hono<{ Bindings: Bindings }>()
+
+// CORS for browser clients (e.g. the Flutter web app at app.divine.video).
+// Without an OPTIONS/preflight response, the browser blocks the cross-origin
+// POST /claim (Authorization + JSON body is a preflighted request), surfacing
+// as "Failed to claim username" on web while native works. See #4199.
+// `hono/cors` uses headers.set(), so the manual ACAO:* on some GET responses
+// is not duplicated.
+username.use('*', cors({
+  origin: '*',
+  allowMethods: ['GET', 'POST', 'OPTIONS'],
+  allowHeaders: ['Authorization', 'Content-Type'],
+  maxAge: 86400,
+}))
 
 // Public endpoint: check username availability (no auth required)
 // Used by Flutter app and web clients before attempting to claim
@@ -408,14 +422,17 @@ username.post('/claim', async (c) => {
     // Read raw body text first (needed for NIP-98 payload verification)
     const bodyText = await c.req.text()
 
-    // Verify NIP-98 authentication with payload
+    // Verify NIP-98 authentication with payload.
+    // Normalize the pubkey to lowercase so the owner comparison below, the
+    // by-pubkey lookup, and storage stay case-consistent — otherwise a
+    // same-owner re-claim with a differently-cased pubkey could 409. See #4199.
     const url = new URL(c.req.url)
-    const pubkey = await verifyNip98Event(
+    const pubkey = (await verifyNip98Event(
       c.req.raw.headers,
       'POST',
       url.toString(),
       bodyText
-    )
+    )).toLowerCase()
 
     // Parse request body
     const body = JSON.parse(bodyText) as { name: string; relays?: string[] }
