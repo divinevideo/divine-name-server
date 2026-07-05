@@ -76,9 +76,9 @@ function createMockDB(initialUsernames: any[] = []) {
               }
 
               // Check for pubkey lookup
-              if (sql.includes('pubkey = ?')) {
+              if (sql.includes('pubkey = ?') || sql.includes('LOWER(pubkey) = LOWER(?)')) {
                 const pubkey = boundParams[0]
-                return mockUsernames.find(u => u.pubkey === pubkey && u.status === 'active') || null
+                return mockUsernames.find(u => u.pubkey?.toLowerCase() === pubkey.toLowerCase() && u.status === 'active') || null
               }
 
               return null
@@ -155,6 +155,19 @@ function createMockDB(initialUsernames: any[] = []) {
                     reservation_expires_at: expiresAt,
                     subscription_expires_at: null
                   })
+                }
+                return { success: true, meta: { changes: 1 } }
+              }
+
+              // Handle active username revocation by pubkey
+              if (sql.includes("SET status = 'revoked'") && (sql.includes('pubkey = ?') || sql.includes('LOWER(pubkey) = LOWER(?)'))) {
+                const pubkey = boundParams[2]
+                for (const record of mockUsernames) {
+                  if (record.pubkey?.toLowerCase() === pubkey.toLowerCase() && record.status === 'active') {
+                    record.status = 'revoked'
+                    record.revoked_at = boundParams[0]
+                    record.updated_at = boundParams[1]
+                  }
                 }
                 return { success: true, meta: { changes: 1 } }
               }
@@ -297,6 +310,84 @@ describe('Username Claiming - Case Insensitive', () => {
     expect(res2.status).toBe(409) // Conflict
     const json2 = await res2.json() as any
     expect(json2.error).toBe('That username is already taken')
+  })
+
+  it('lets the same owner re-claim their own name when the pubkey case differs (#4199 H4)', async () => {
+    const app = createTestApp()
+    // Existing active name owned by a lower-cased pubkey.
+    const db = createMockDB([
+      { id: 1, name: 'MrBeast', username_display: 'MrBeast', username_canonical: 'mrbeast', pubkey: 'abc123', status: 'active', relays: null },
+    ])
+    // NIP-98 presents the SAME key, upper-cased.
+    vi.mocked(verifyNip98Event).mockResolvedValue('ABC123')
+
+    const req = new Request('http://localhost/api/username/claim', {
+      method: 'POST',
+      headers: { 'Authorization': 'Nostr base64...', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'MrBeast' })
+    })
+
+    const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    // Without the pubkey normalization this is a 409 (treated as a different owner).
+    expect(res.status).toBe(200)
+  })
+
+  it('releases a legacy mixed-case active username when the same pubkey claims a new name', async () => {
+    const app = createTestApp()
+    const db = createMockDB([
+      { id: 1, name: 'oldname', username_display: 'OldName', username_canonical: 'oldname', pubkey: 'ABC123', status: 'active', relays: null },
+    ])
+    vi.mocked(verifyNip98Event).mockResolvedValue('abc123')
+
+    const { deleteUsernameFromFastly } = await import('../utils/fastly-sync')
+    vi.mocked(deleteUsernameFromFastly).mockClear()
+
+    const req = new Request('http://localhost/api/username/claim', {
+      method: 'POST',
+      headers: { 'Authorization': 'Nostr base64...', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'newname' })
+    })
+
+    const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(200)
+    expect(db._mockUsernames.find(u => u.username_canonical === 'oldname')?.status).toBe('revoked')
+    expect(db._mockUsernames.find(u => u.username_canonical === 'newname')?.status).toBe('active')
+    expect(deleteUsernameFromFastly).toHaveBeenCalledWith(
+      expect.objectContaining({}),
+      'oldname'
+    )
+  })
+
+  it('answers the /claim CORS preflight so browsers can POST cross-origin (#4199 H1)', async () => {
+    const app = createTestApp()
+    const req = new Request('http://localhost/api/username/claim', {
+      method: 'OPTIONS',
+      headers: {
+        'Origin': 'https://app.divine.video',
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'authorization,content-type'
+      }
+    })
+
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    expect(res.status).toBe(204)
+    expect(res.headers.get('access-control-allow-methods') || '').toContain('POST')
+    expect((res.headers.get('access-control-allow-headers') || '').toLowerCase()).toContain('authorization')
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
+  })
+
+  it('exposes exactly one Access-Control-Allow-Origin on GET /check (no duplicate) (#4199)', async () => {
+    const app = createTestApp()
+    const req = new Request('http://localhost/api/username/check/probe', {
+      headers: { 'Origin': 'https://app.divine.video' }
+    })
+
+    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+
+    // Headers.get() joins duplicates with ", " — assert a single "*", not "*, *".
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
   })
 
   it('should validate username format correctly', async () => {

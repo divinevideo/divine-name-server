@@ -448,22 +448,22 @@ function createStatefulMockDB(initialRecords: Partial<Username>[] = []) {
                   lookupValues.includes(r.name as string)
                 ) as T) || null
               }
-              if (sql.includes('pubkey = ?') && sql.includes('status = ?')) {
+              if ((sql.includes('pubkey = ?') || sql.includes('LOWER(pubkey) = LOWER(?)')) && sql.includes('status = ?')) {
                 const pubkey = boundParams[0]
                 const status = boundParams[1]
-                return (records.find(r => r.pubkey === pubkey && r.status === status) as T) || null
+                return (records.find(r => r.pubkey?.toLowerCase() === pubkey.toLowerCase() && r.status === status) as T) || null
               }
               return null
             },
             all: async () => ({ results: records }),
             run: async () => {
               // UPDATE ... SET status = 'revoked', revoked_at = ? ... WHERE pubkey = ? AND status = 'active'
-              if (sql.includes("SET status = 'revoked'") && sql.includes('WHERE pubkey = ?')) {
+              if (sql.includes("SET status = 'revoked'") && (sql.includes('WHERE pubkey = ?') || sql.includes('WHERE LOWER(pubkey) = LOWER(?)'))) {
                 const revokedAt = boundParams[0]
                 const updatedAt = boundParams[1]
                 const pubkey = boundParams[2]
                 for (const r of records) {
-                  if (r.pubkey === pubkey && r.status === 'active') {
+                  if (r.pubkey?.toLowerCase() === pubkey.toLowerCase() && r.status === 'active') {
                     r.status = 'revoked'
                     r.revoked_at = revokedAt
                     r.updated_at = updatedAt
