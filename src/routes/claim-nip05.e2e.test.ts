@@ -122,10 +122,10 @@ function createE2EMockDB(initialUsernames: Partial<MockUsername>[] = []) {
               }
 
               // Username lookup by pubkey + status='active'
-              if (sql.includes('pubkey = ?') && sql.includes('status = ?')) {
+              if ((sql.includes('pubkey = ?') || sql.includes('LOWER(pubkey) = LOWER(?)')) && sql.includes('status = ?')) {
                 const pubkey = boundParams[0]
                 const status = boundParams[1]
-                return mockUsernames.find(u => u.pubkey === pubkey && u.status === status) ?? null
+                return mockUsernames.find(u => u.pubkey?.toLowerCase() === pubkey.toLowerCase() && u.status === status) ?? null
               }
 
               return null
@@ -144,9 +144,9 @@ function createE2EMockDB(initialUsernames: Partial<MockUsername>[] = []) {
               //   WHERE pubkey=? AND status='active'
               // Bound: [revoked_at, updated_at, pubkey]
               // -------------------------------------------------------------------
-              if (sql.includes("SET status = 'revoked'") && sql.includes('WHERE pubkey = ?')) {
+              if (sql.includes("SET status = 'revoked'") && (sql.includes('WHERE pubkey = ?') || sql.includes('WHERE LOWER(pubkey) = LOWER(?)'))) {
                 const pubkey = boundParams[2]
-                const record = mockUsernames.find(u => u.pubkey === pubkey && u.status === 'active')
+                const record = mockUsernames.find(u => u.pubkey?.toLowerCase() === pubkey.toLowerCase() && u.status === 'active')
                 if (record) {
                   record.status = 'revoked'
                   record.revoked_at = boundParams[0]

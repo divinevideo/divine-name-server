@@ -472,7 +472,7 @@ username.post('/claim', async (c) => {
     // Check if name exists (using canonical for lookup)
     const existing = await getUsernameByName(c.env.DB, nameCanonical)
     if (existing) {
-      if (existing.status === 'active' && existing.pubkey !== pubkey) {
+      if (existing.status === 'active' && existing.pubkey?.toLowerCase() !== pubkey) {
         return c.json({ ok: false, error: 'That username is already taken' }, 409)
       }
       if (existing.status === 'reserved') {

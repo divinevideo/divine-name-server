@@ -106,7 +106,7 @@ export async function getUsernameByPubkey(
   pubkey: string
 ): Promise<Username | null> {
   const result = await db.prepare(
-    'SELECT * FROM usernames WHERE pubkey = ? AND status = ?'
+    'SELECT * FROM usernames WHERE LOWER(pubkey) = LOWER(?) AND status = ?'
   ).bind(pubkey, 'active').first<Username>()
 
   return result
@@ -122,13 +122,14 @@ export async function claimUsername(
   const now = Math.floor(Date.now() / 1000)
   const relaysJson = relays ? JSON.stringify(relays) : null
 
-  // First, revoke any existing active username for this pubkey
+  // First, revoke any existing active username for this pubkey.
+  // Legacy rows may contain mixed-case hex pubkeys, so match case-insensitively.
   await db.prepare(
     `UPDATE usernames
      SET status = 'revoked',
          revoked_at = ?,
          updated_at = ?
-     WHERE pubkey = ? AND status = 'active'`
+     WHERE LOWER(pubkey) = LOWER(?) AND status = 'active'`
   ).bind(now, now, pubkey).run()
 
   // Then insert or update the new username using canonical for uniqueness
@@ -394,7 +395,7 @@ export async function restoreUsername(
     existingActiveForPubkey.username_canonical !== nameCanonical
     ? existingActiveForPubkey.username_canonical
     : null
-  const ownerChanged = existing.pubkey !== pubkey
+  const ownerChanged = existing.pubkey?.toLowerCase() !== pubkey.toLowerCase()
   const relays = ownerChanged ? null : existing.relays
   const atprotoDid = ownerChanged ? null : existing.atproto_did
   const atprotoState = ownerChanged ? null : existing.atproto_state
@@ -404,7 +405,7 @@ export async function restoreUsername(
      SET status = 'revoked',
          revoked_at = ?,
          updated_at = ?
-     WHERE pubkey = ?
+     WHERE LOWER(pubkey) = LOWER(?)
        AND status = 'active'
        AND username_canonical != ?
        AND EXISTS (
@@ -449,13 +450,14 @@ export async function assignUsername(
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000)
 
-  // Revoke existing username for this pubkey
+  // Revoke existing username for this pubkey.
+  // Legacy rows may contain mixed-case hex pubkeys, so match case-insensitively.
   await db.prepare(
     `UPDATE usernames
      SET status = 'revoked',
          revoked_at = ?,
          updated_at = ?
-     WHERE pubkey = ? AND status = 'active'`
+     WHERE LOWER(pubkey) = LOWER(?) AND status = 'active'`
   ).bind(now, now, pubkey).run()
 
   // Assign username using canonical for uniqueness

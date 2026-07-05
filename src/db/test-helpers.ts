@@ -170,9 +170,9 @@ export function createFakeD1(
               }
 
               // Active username lookup by pubkey
-              if (sql.includes('WHERE pubkey = ? AND status = ?')) {
+              if (sql.includes('WHERE pubkey = ? AND status = ?') || sql.includes('WHERE LOWER(pubkey) = LOWER(?) AND status = ?')) {
                 const [pubkey, status] = boundParams
-                return records.find((u) => u.pubkey === pubkey && u.status === status) || null
+                return records.find((u) => u.pubkey?.toLowerCase() === pubkey.toLowerCase() && u.status === status) || null
               }
 
               // Direct username lookup
@@ -321,12 +321,12 @@ export function createFakeD1(
                 }
                 return { success: true, meta: { changes: rec ? 1 : 0 } }
               }
-              // Release-other-active-name UPDATE (restoreUsername's first statement, also assignUsername's):
-              // WHERE pubkey = ? AND status = 'active' [AND username_canonical != ?]
+              // Release-other-active-name UPDATE (restoreUsername's first statement, also assignUsername's).
+              // Supports exact and LOWER(pubkey) matching shapes.
               if (
                 sql.includes('UPDATE usernames') &&
                 sql.includes("status = 'revoked'") &&
-                sql.includes('pubkey = ?') &&
+                (sql.includes('pubkey = ?') || sql.includes('LOWER(pubkey) = LOWER(?)')) &&
                 sql.includes("status = 'active'")
               ) {
                 const [revokedAt, updatedAt, pk, excludeCanonical, targetCanonical] = boundParams
@@ -335,7 +335,7 @@ export function createFakeD1(
                 )
                 let changes = 0
                 for (const r of records) {
-                  if (targetIsRestorable && r.pubkey === pk && r.status === 'active' && r.username_canonical !== excludeCanonical) {
+                  if (targetIsRestorable && r.pubkey?.toLowerCase() === pk.toLowerCase() && r.status === 'active' && r.username_canonical !== excludeCanonical) {
                     r.status = 'revoked'
                     r.revoked_at = revokedAt
                     r.updated_at = updatedAt
