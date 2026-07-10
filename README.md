@@ -1,6 +1,6 @@
 # Divine Name Server
 
-Cloudflare Worker that enables username-based Nostr identities at Divine.Video with NIP-05 verification and subdomain profile routing.
+Cloudflare Worker that enables username-based Nostr identities at Divine with NIP-05 verification and subdomain profile routing.
 
 This is part of the public edge, not the ArgoCD-managed GKE stack. Production ATProto rollout depends on this worker being deployed alongside `divine-router`, `pds.divine.video`, and `entryway.divine.video`.
 
@@ -185,7 +185,7 @@ Cache-Control: public, max-age=60
 
 ### GET https://\<username\>.divine.video/
 
-Subdomain profile routing. Proxies to the main Divine.Video application's profile page.
+Subdomain profile routing. Proxies to the main Divine application's profile page.
 
 **Behavior:**
 - Active username: Proxies request to `https://divine.video/profile/<npub>`
@@ -527,7 +527,7 @@ Nostr Client → /.well-known/nostr.json → Worker
 
 ### Key Design Decisions
 
-- **Standalone Worker**: Independent from main Divine.Video application for scalability
+- **Standalone Worker**: Independent from the main Divine application for scalability
 - **Edge Database**: D1 database for low-latency username lookups
 - **NIP-98 Auth**: Cryptographic proof of key ownership, no session state needed
 - **Proxy Pattern**: Subdomain routing proxies to existing profile pages, avoiding duplication
@@ -605,3 +605,7 @@ This plan includes:
 ## License
 
 MIT
+
+---
+
+Part of [Divine](https://divine.video) — your playground for human creativity · [Brand guidelines](https://github.com/divinevideo/brand-guidelines)
