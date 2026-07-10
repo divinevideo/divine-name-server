@@ -1,105 +1,163 @@
 # Divine Name Server
 
-Cloudflare Worker that enables username-based Nostr identities at Divine with NIP-05 verification and subdomain profile routing.
+A Cloudflare Worker that gives Divine members a human-readable identity: a `username` that works as a NIP-05 Nostr address, an ActivityPub/WebFinger handle, an ATProto handle, and a profile page at `username.divine.video`. One name, resolvable across the open social protocols.
 
-This is part of the public edge, not the ArgoCD-managed GKE stack. Production ATProto rollout depends on this worker being deployed alongside `divine-router`, `pds.divine.video`, and `entryway.divine.video`.
+The Worker owns the username registry, a public reservation and claiming flow, and an admin console. It runs on the public edge (not the ArgoCD-managed GKE stack) and mirrors its read model to Fastly KV so `divine-router` can answer identity lookups at the edge. Because it publishes the public identity model that other services consume, deploy it alongside `divine-router`, `pds.divine.video`, and `entryway.divine.video`.
 
 ## Features
 
-- **Username Claiming**: Users claim usernames via NIP-98 signed HTTP requests proving key ownership
-- **Subdomain Profiles**: `https://alice.divine.video/` serves user profiles by proxying to main app
-- **NIP-05 Verification**: Nostr identity verification at both root and subdomain `/.well-known/nostr.json` endpoints
-- **Admin Management**: Reserve, revoke, burn, or assign usernames with status tracking
-- **Relay Hints**: Store and serve up to 50 relay hints per user for better discoverability
-- **One Username Per Pubkey**: Database constraints ensure each pubkey has only one active username
-- **Recyclable Usernames**: Revoked usernames can be reclaimed; burned usernames are permanent
+- **Username claiming** — Members claim a username with a NIP-98 signed HTTP request that proves ownership of their Nostr key. No sessions, no passwords.
+- **Public reservation flow** — A pre-claim reservation path (`names.divine.video`) that gates names behind a Cashu payment or an invite code, confirms ownership by email, and expires unconfirmed holds after 48 hours.
+- **NIP-05 verification** — Serves `/.well-known/nostr.json` at both the root domain (`alice@divine.video`) and the per-user subdomain (`_@alice.divine.video`).
+- **Subdomain profiles** — `https://alice.divine.video/` renders the Divine web app shell with the user's profile pre-injected, plus Open Graph and Twitter card tags for rich sharing.
+- **ActivityPub discovery** — WebFinger and NodeInfo endpoints make `@alice@divine.video` resolvable on the fediverse and let Divine be counted as an instance.
+- **ATProto handles** — Links a username to a `did:plc:` identity so `alice.divine.video` resolves as an ATProto handle (served by `divine-router` from the mirrored record).
+- **Admin console** — A React admin UI plus API for reserving, revoking, burning, assigning, restoring, and tagging usernames, with search, stats, and CSV export.
+- **Edge mirror** — Every change is reconciled to Fastly KV via a durable sync queue and an hourly cron, so edge reads stay consistent with the D1 source of truth.
+- **One active name per pubkey** — A partial unique index guarantees each pubkey holds at most one active username; claiming a new one auto-revokes the old one.
 
-## Tech Stack
+## Architecture
 
-- **Hono**: Lightweight web framework optimized for Cloudflare Workers
-- **Cloudflare D1**: SQLite-based edge database for username registry
-- **Cloudflare Workers Assets**: Static file serving for admin UI
-- **React + Vite**: Admin UI for username management
-- **NIP-98**: HTTP authentication via Nostr event signatures using `@noble/secp256k1`
-- **TypeScript**: Type-safe implementation with Cloudflare Workers types
+The Divine Name Server is a **single Cloudflare Worker** (`src/index.ts`, built on [Hono](https://hono.dev)) that behaves differently depending on the hostname it is serving:
 
-## Development
+| Hostname | Purpose |
+|----------|---------|
+| `divine.video` | Root NIP-05 (`/.well-known/nostr.json`), WebFinger, NodeInfo |
+| `alice.divine.video` | Per-user subdomain: profile page + subdomain NIP-05 |
+| `names.divine.video` | Public landing page, reservation flow, email confirmation |
+| `names.admin.divine.video` | Admin UI (React SPA) and admin API |
+
+### Storage
+
+- **Cloudflare D1** (`DB`) — The source of truth: the `usernames` registry, `reserved_words`, reservations, tags, and the Fastly sync queue.
+- **Cloudflare KV** (`SESSION_KV`) — Keycast OAuth admin sessions.
+- **Fastly KV** — An edge mirror of the active username read model, consumed by `divine-router` to answer NIP-05 and ATProto handle lookups close to the user. D1 writes are pushed to Fastly on the request path and reconciled hourly by cron.
+
+### How identity resolves
+
+- **Root NIP-05** — `GET https://divine.video/.well-known/nostr.json?name=alice` returns the single mapping for `alice`. The endpoint requires a `name` parameter (it does not dump the full registry) and falls back to a dot-stripped lookup for legacy dotted handles.
+- **Subdomain NIP-05** — `GET https://alice.divine.video/.well-known/nostr.json` returns the user's pubkey under the reserved `_` name, with relay hints when present.
+- **Subdomain profile** — `GET https://alice.divine.video/` fetches the Divine web app shell, injects `window.__DIVINE_USER__` (pubkey, npub, display name, avatar pulled from `relay.divine.video`), rewrites the OG/Twitter meta tags, and returns the HTML so the SPA can render the profile. Static assets pass through to the origin.
+- **ActivityPub** — `GET /.well-known/webfinger?resource=acct:alice@divine.video` returns a JRD pointing at the user's profile and ActivityPub actor URL. `/.well-known/nodeinfo` and `/nodeinfo/2.1` advertise the instance.
+
+Service subdomains (`names`, `www`, `login`, `pds`, `feed`, `labeler`, `relay`, `media`) are excluded from user-profile routing.
+
+### Admin authentication
+
+Admin API routes are guarded on two axes:
+
+1. **Hostname guard** — Admin routes only activate on `names.admin.divine.video` (or `localhost`/`admin.localhost` in development), so the same Worker on `names.divine.video` cannot reach them.
+2. **Authentication** — A request must carry either a Cloudflare Access JWT (`Cf-Access-Jwt-Assertion`, injected at the edge) or a Keycast OAuth session cookie whose pubkey is in the `ADMIN_PUBKEYS` allowlist.
+
+### Cron reconciliation
+
+A scheduled handler runs hourly (`0 * * * *`):
+
+1. Expires unconfirmed reservations older than 48 hours.
+2. Reconciles usernames changed in the last six hours, plus anything left in the durable Fastly sync queue, into Fastly KV — syncing active names and deleting revoked/burned ones. Failures are re-queued with bounded retries.
+
+## Getting started
 
 ### Prerequisites
 
 - Node.js 18+
-- npm or similar package manager
-- Cloudflare account with Workers and D1 enabled
+- A Cloudflare account with Workers and D1 enabled
+- (Optional) [Bun](https://bun.sh) for the Vine import scripts
 
 ### Setup
 
 ```bash
-# Install dependencies
+# Install Worker dependencies
 npm install
 
-# Apply database migrations locally
+# Apply database migrations to the local D1 database
 npx wrangler d1 migrations apply divine-name-server-db --local
 ```
 
-### Local Development
+### Local development
 
 ```bash
-# Install admin UI dependencies (first time only)
-cd admin-ui && npm install && cd ..
+# Install and build the admin UI (first run, and after admin-ui/ changes)
+cd admin-ui && npm install && npm run build && cd ..
 
-# Build admin UI
-npm run build:admin
-
-# Start development server
+# Start the Worker
 npm run dev
-
-# Server runs at http://localhost:8787
-# Admin UI accessible at http://localhost:8787/admin (no authentication required locally)
+# Worker: http://localhost:8787
+# Admin UI: http://admin.localhost:8787/
 ```
 
-**Note**: Rebuild the admin UI (`npm run build:admin`) after making changes to `admin-ui/` code.
+Admin auth is enforced against the real Cloudflare Access / Keycast paths even locally. To bypass it during development, set `BYPASS_LOCAL_AUTH=true` in `.dev.vars`.
 
 ### Testing
 
 ```bash
-# Run tests in watch mode
-npm test
-
-# Run tests once
-npm test:once
+npm test            # Vitest, watch mode
+npm run test:once   # single run
 ```
 
-### Deployment
+## Configuration
+
+Bindings and variables live in `wrangler.toml`.
+
+### Bindings
+
+| Binding | Type | Purpose |
+|---------|------|---------|
+| `DB` | D1 database (`divine-name-server-db`) | Username registry and all persistent state |
+| `SESSION_KV` | KV namespace | Keycast OAuth admin sessions |
+| `ASSETS` | Static assets (`./admin-ui/dist`) | Admin UI SPA, served with `run_worker_first` |
+
+### Variables and secrets
+
+| Name | Kind | Purpose |
+|------|------|---------|
+| `KEYCAST_URL`, `KEYCAST_CLIENT_ID` | var | Keycast OAuth admin login (`login.divine.video`) |
+| `ADMIN_PUBKEYS` | var | Comma-separated hex pubkeys allowed to use Keycast admin sessions |
+| `FASTLY_STORE_ID` | var | Fastly KV store the edge mirror writes to |
+| `FASTLY_API_TOKEN` | secret | Auth for Fastly KV sync (`wrangler secret put`) |
+| `ATPROTO_SYNC_TOKEN` | secret | Bearer token for the internal ATProto sync endpoint |
+| `SENDGRID_API_KEY` | secret | Sends reservation-confirmation and assignment emails |
+| `ALLOWED_MINTS` | var | Comma-separated Cashu mint allowlist for paid reservations |
+| `NAME_PRICE_JSON` | var | Overrides the tiered reservation pricing (JSON of length tier → sats) |
+| `INVITE_FAUCET_URL` | var | Base URL of the invite-code faucet |
+| `AP_ACTOR_BASE_URL` | var | Base URL for ActivityPub actor links in WebFinger responses |
+
+Routes (Worker + zones) and the cron trigger are also declared in `wrangler.toml`.
+
+## Deployment
 
 ```bash
-# Apply migrations to production database
+# Apply migrations to the production database
 npx wrangler d1 migrations apply divine-name-server-db --remote
 
-# Deploy worker to Cloudflare
-npx wrangler deploy
+# Build the admin UI and deploy the Worker
+npm run deploy   # == npm run build:admin && wrangler deploy
 ```
 
-Deploy this after the GKE services are healthy, because it publishes the public read model that `divine-router` and ATProto handle discovery consume.
+Deploy this Worker **after** the GKE identity services are healthy: it publishes the public read model that `divine-router` and ATProto handle discovery consume.
 
-## API Endpoints
+## API reference
 
-### POST /api/username/claim
+### Public username API (`/api/username`)
 
-Claim a username with NIP-98 authentication.
+All endpoints send permissive CORS headers so the Divine web and Flutter clients can call them.
 
-**Authentication**: NIP-98 signed HTTP request
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/username/check/:name` | Check availability and validate format. No auth. |
+| `GET` | `/api/username/by-pubkey/:pubkey` | Look up the active username for a pubkey. No auth. |
+| `POST` | `/api/username/reserve` | Reserve a name with email + Cashu payment or invite code. |
+| `GET` | `/api/username/confirm` | JSON email-confirmation callback for a reservation token. |
+| `POST` | `/api/username/claim` | Claim a name with NIP-98 auth. |
 
-**Headers:**
-```
-Authorization: Nostr <base64-encoded-event>
-```
+#### POST /api/username/claim
 
-The NIP-98 event must be kind 27235 with:
-- `method` tag matching `POST`
-- `u` tag matching the full request URL
-- Timestamp within 60 seconds of current time
+Claim a username by proving key ownership.
 
-**Request Body:**
+**Authentication:** a NIP-98 event (kind `27235`) sent as `Authorization: Nostr <base64-event>`, with a `u` tag matching the request URL, a `method` tag matching `POST`, and a timestamp within 60 seconds.
+
+**Request body:**
+
 ```json
 {
   "name": "alice",
@@ -107,11 +165,11 @@ The NIP-98 event must be kind 27235 with:
 }
 ```
 
-Fields:
-- `name` (required): Username to claim (3-20 chars, lowercase alphanumeric)
-- `relays` (optional): Array of relay URLs (max 50, must be wss:// protocol)
+- `name` (required) — 3–20 lowercase alphanumeric characters, not a reserved word.
+- `relays` (optional) — up to 50 `wss://` relay hints.
 
-**Success Response (200):**
+**Success (200):**
+
 ```json
 {
   "ok": true,
@@ -126,481 +184,140 @@ Fields:
 }
 ```
 
-**Error Responses:**
-- `400`: Invalid username format or relay validation failed
-- `401`: Missing or invalid NIP-98 signature
-- `403`: Username is reserved or burned
-- `409`: Username already claimed by another pubkey
-- `500`: Internal server error
+**Errors:** `400` invalid username/relays · `401` bad NIP-98 signature · `403` reserved or burned · `409` claimed by another pubkey · `500` internal error.
 
-### GET /.well-known/nostr.json
+#### POST /api/username/reserve
 
-NIP-05 identity verification endpoint. Behavior differs based on hostname.
+Hold a name before claiming it. Requires an `email` plus **either** a `cashu_token` (validated against `ALLOWED_MINTS` and the tiered price for the name length) **or** an `invite_code`. Rate-limited to 5 reservations per email per hour. On success the Worker emails a confirmation link; the hold expires in 48 hours if unconfirmed.
 
-#### Subdomain Request
-
-When accessed via subdomain (e.g., `https://alice.divine.video/.well-known/nostr.json`):
-
-**Response (200):**
-```json
-{
-  "names": {
-    "_": "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d"
-  },
-  "relays": {
-    "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d": [
-      "wss://relay.damus.io",
-      "wss://nos.lol"
-    ]
-  }
-}
-```
-
-Returns a single user mapping with underscore (`_`) name for NIP-05 subdomain verification.
-
-#### Root Domain Request
-
-When accessed via root domain (e.g., `https://divine.video/.well-known/nostr.json`):
-
-**Response (200):**
-```json
-{
-  "names": {
-    "alice": "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d",
-    "bob": "82341f882b6eabcd2ba7f1ef90aad961cf074af15b9ef44a09f9d2a8fbfbe6a2"
-  },
-  "relays": {
-    "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d": ["wss://relay.damus.io"],
-    "82341f882b6eabcd2ba7f1ef90aad961cf074af15b9ef44a09f9d2a8fbfbe6a2": ["wss://relay.primal.net"]
-  }
-}
-```
-
-Returns all active username mappings for the domain.
-
-**Headers:**
-```
-Cache-Control: public, max-age=60
-```
-
-### GET https://\<username\>.divine.video/
-
-Subdomain profile routing. Proxies to the main Divine application's profile page.
-
-**Behavior:**
-- Active username: Proxies request to `https://divine.video/profile/<npub>`
-- Inactive/missing username: Returns 404 with user-friendly message
-- Converts hex pubkey to npub (Bech32) format for profile URL
-
-**Example:**
-- Request: `https://alice.divine.video/`
-- Proxies to: `https://divine.video/profile/npub180c...`
-
-### Admin Endpoints (Protected by Cloudflare Access)
-
-All admin endpoints require Cloudflare Access authentication configured at the edge.
-
-#### Admin UI Access
-
-The admin interface is available at `/admin` and provides a web UI for username management.
-
-**Local Development**: Access directly at `http://localhost:8787/admin` (no authentication)
-
-**Production**: Protected by Cloudflare Access. To add authorized emails:
-1. Go to Cloudflare Dashboard → Zero Trust → Access → Applications
-2. Find the application protecting your admin routes
-3. Edit the policy → Add include → Select "Emails"
-4. Enter email addresses to authorize
-5. Save application
-
-Authorized users receive a one-time code via email when accessing the admin UI.
-
-#### POST /api/admin/username/reserve
-
-Reserve a username to prevent user claims (e.g., brand protection).
-
-**Request Body:**
-```json
-{
-  "name": "brandname",
-  "reason": "Brand protection"
-}
-```
-
-**Response (200):**
-```json
-{
-  "ok": true,
-  "name": "brandname",
-  "status": "reserved"
-}
-```
-
-#### POST /api/admin/username/revoke
-
-Revoke or permanently burn a username.
-
-**Request Body:**
-```json
-{
-  "name": "badname",
-  "burn": true
-}
-```
-
-Fields:
-- `name` (required): Username to revoke
-- `burn` (optional): If true, permanently burns the name; if false, makes it recyclable
-
-The `pubkey` column is preserved on `revoked` and `burned` rows so the moderation service can later look up a banned user's names by pubkey and call `/api/admin/username/restore` if the ban is reversed.
-
-**Response (200):**
-```json
-{
-  "ok": true,
-  "name": "badname",
-  "status": "burned",
-  "recyclable": false
-}
-```
-
-#### POST /api/admin/username/restore
-
-Restore a previously revoked or burned username and re-bind it to a specific pubkey. Used by the moderation service when a ban is reversed: after `revoke {burn: true}`, the original `pubkey` is preserved on the row so the moderation service can find the user's burned names via `GET /api/admin/usernames/search?q=<pubkey>&status=burned` and call this endpoint to give the name back.
-
-**Request Body:**
-```json
-{
-  "name": "previouslybanned",
-  "pubkey": "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d",
-  "reason": "Ban reversed by moderation"
-}
-```
-
-Fields:
-- `name` (required): Username to restore (must currently be `revoked` or `burned`)
-- `pubkey` (required): The pubkey to re-bind the name to (hex or npub)
-- `reason` (optional): Audit reason; appended as a timestamped line to `admin_notes`
-
-**Behavior:**
-- Sets `status='active'`, `recyclable=1`, clears `revoked_at`, sets `pubkey`, resets `claimed_at` to now
-- Appends `[<iso-timestamp> restored by <admin-email>]: <reason>` to `admin_notes`
-- If the target pubkey already holds another active name, that other name is revoked first (matches `assign` behavior; required by the partial unique index)
-- Re-syncs the row to Fastly KV via `waitUntil`
-
-**Response (200):**
-```json
-{
-  "ok": true,
-  "username": { /* full updated row */ }
-}
-```
-
-**Errors:**
-- `400` — missing/invalid `name` or `pubkey`
-- `404` — username does not exist
-- `409` — username is currently `active` (response includes `current_pubkey`); silently overwriting an active claim is forbidden
-
-#### POST /api/admin/username/assign
-
-Directly assign a username to a pubkey, bypassing normal claim flow.
-
-**Request Body:**
-```json
-{
-  "name": "famousviner",
-  "pubkey": "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d"
-}
-```
-
-**Response (200):**
-```json
-{
-  "ok": true,
-  "name": "famousviner",
-  "pubkey": "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d",
-  "status": "active"
-}
-```
-
-#### POST /api/admin/username/set-atproto
-
-Link a username to an ATProto `did:plc` identity for handle resolution. This enables `username.divine.video/.well-known/atproto-did` to return the user's DID.
-
-**Request Body:**
 ```json
 {
   "name": "alice",
-  "atproto_did": "did:plc:abc123def456",
-  "atproto_state": "ready"
+  "email": "alice@example.com",
+  "cashu_token": "cashuA...",
+  "invite_code": "optional-instead-of-payment"
 }
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `name` | string | Username to update |
-| `atproto_did` | string \| null | The user's `did:plc:` identifier. Must start with `did:plc:`. Set to `null` to clear. |
-| `atproto_state` | string \| null | Lifecycle state: `pending`, `ready`, `failed`, `disabled`, or `null` |
+Reservation pricing is tiered by name length (shorter names cost more) with a curated premium-name list; defaults live in `src/utils/pricing.ts` and can be overridden with `NAME_PRICE_JSON`.
 
-**States:**
-- `pending` — DID assigned, awaiting PDS configuration
-- `ready` — Handle resolution is active (`/.well-known/atproto-did` returns the DID)
-- `failed` — PDS configuration failed
-- `disabled` — Handle resolution explicitly disabled (returns 404)
-- `null` — No ATProto identity configured
+### NIP-05 and discovery
 
-**Response (200):**
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/.well-known/nostr.json?name=<name>` | Root NIP-05 (requires `name`, returns one mapping) |
+| `GET` | `/.well-known/nostr.json` (on a subdomain) | Subdomain NIP-05, returns the `_` mapping |
+| `GET` | `/.well-known/webfinger?resource=acct:<user>@divine.video` | WebFinger JRD |
+| `GET` | `/.well-known/nodeinfo` | NodeInfo discovery document |
+| `GET` | `/nodeinfo/2.1` | NodeInfo 2.1 document (active user count) |
+
+**Subdomain NIP-05 (200):**
+
 ```json
 {
-  "ok": true,
-  "name": "alice",
-  "atproto_did": "did:plc:abc123def456",
-  "atproto_state": "ready"
+  "names": { "_": "3bf0c63f...aefa459d" },
+  "relays": { "3bf0c63f...aefa459d": ["wss://relay.damus.io", "wss://nos.lol"] }
 }
 ```
 
-**How it works:**
-1. Call this endpoint to set a user's ATProto DID and state
-2. The Fastly KV entry is updated with the ATProto fields
-3. `divine-router` reads the KV entry and serves `/.well-known/atproto-did`
-4. Only returns the DID when `status=active`, `atproto_state=ready`, and `atproto_did` is present
+**Root NIP-05 (200):**
 
-**Important:** The user's DID document (managed by their PDS) must also contain `alsoKnownAs: ["at://username.divine.video"]` for bidirectional handle verification to succeed. This endpoint does not mint or manage DIDs — they come from the ATProto control plane.
-
-**To disable resolution immediately:**
 ```json
 {
-  "name": "alice",
-  "atproto_did": "did:plc:abc123def456",
-  "atproto_state": "disabled"
+  "names": { "alice": "3bf0c63f...aefa459d" },
+  "relays": { "3bf0c63f...aefa459d": ["wss://relay.damus.io"] }
 }
 ```
 
-## Database Schema
+All identity responses send `Cache-Control: public, max-age=60`.
 
-See `migrations/0001_initial_schema.sql` for complete schema definition.
+### Admin API (`/api/admin`)
 
-### Tables
+Guarded by the hostname + auth rules above. Highlights:
 
-#### usernames
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/admin/usernames/search` | Search by name, pubkey, or status |
+| `GET` | `/api/admin/usernames/stats` | Registry counts |
+| `GET` | `/api/admin/username/:name` | Name detail, including tags |
+| `POST` | `/api/admin/username/reserve` · `/reserve-bulk` | Reserve one or many names |
+| `POST` | `/api/admin/username/revoke` | Revoke (recyclable) or burn (permanent) a name |
+| `POST` | `/api/admin/username/restore` | Re-bind a revoked/burned name to a pubkey |
+| `POST` | `/api/admin/username/assign` · `/assign-bulk` | Directly assign names to pubkeys |
+| `POST` | `/api/admin/username/set-atproto` | Set a name's `did:plc:` and handle-resolution state |
+| `GET` | `/api/admin/username/:name/nip05-status` | Compare D1 vs Fastly KV for a name |
+| `POST` | `/api/admin/username/:name/sync-to-fastly` · `/api/admin/sync/fastly` | Force edge re-sync |
+| `GET` | `/api/admin/export/csv` | Export the registry as CSV |
+| `GET`/`POST`/`DELETE` | `/api/admin/reserved-words[/:word]` | Manage reserved words |
+| `POST`/`DELETE` | `/api/admin/username/:name/tags[/:tag]` | Manage per-name tags |
+| `POST` | `/api/admin/notify-assignment` | Email a user their assigned name |
 
-Primary table mapping usernames to Nostr pubkeys.
+Admin sessions are established via the Keycast OAuth flow under `/api/admin/auth/` (`start`, `callback`, `status`, `logout`).
+
+#### Username lifecycle
+
+`revoke` preserves the `pubkey` on revoked and burned rows so the moderation service can later find a banned user's names (`search?q=<pubkey>&status=burned`) and `restore` them if a ban is reversed. `restore` sets the name back to `active`, clears `revoked_at`, re-binds the pubkey (revoking any other active name that pubkey holds), appends an audited note, and re-syncs to Fastly KV. Restoring an already-`active` name returns `409` rather than silently overwriting the current owner.
+
+#### ATProto handle resolution
+
+`set-atproto` records a `did:plc:` and a lifecycle `atproto_state` (`pending`, `ready`, `failed`, `disabled`, or `null`). The record is mirrored to Fastly KV, and `divine-router` serves `/.well-known/atproto-did` only when the name is `active`, the state is `ready`, and a DID is present. The user's PDS-managed DID document must also list `alsoKnownAs: ["at://username.divine.video"]` for bidirectional verification. This Worker does not mint or manage DIDs.
+
+### Internal API (`/api/internal`)
+
+`POST /api/internal/username/set-atproto` — service-to-service variant of the ATProto linking endpoint, authenticated with the `ATPROTO_SYNC_TOKEN` bearer token.
+
+## Database schema
+
+Migrations under `migrations/` define and evolve the schema (`0001_initial_schema.sql` onward). The core tables:
+
+### usernames
 
 | Column | Type | Description |
 |--------|------|-------------|
-| id | INTEGER | Primary key, auto-increment |
-| name | TEXT | Unique username (3-20 lowercase alphanumeric chars) |
-| pubkey | TEXT | Hex-encoded Nostr public key |
-| relays | TEXT | JSON array of relay URLs (max 50) |
-| status | TEXT | Status: 'active', 'reserved', 'revoked', 'burned' |
-| recyclable | INTEGER | Whether name can be reclaimed (0 or 1) |
-| created_at | INTEGER | Unix timestamp of creation |
-| updated_at | INTEGER | Unix timestamp of last update |
-| claimed_at | INTEGER | Unix timestamp when claimed by user |
-| revoked_at | INTEGER | Unix timestamp when revoked |
-| reserved_reason | TEXT | Admin reason for reservation |
-| admin_notes | TEXT | Admin notes about username |
-| atproto_did | TEXT | User's ATProto `did:plc:` identifier (set via admin API) |
-| atproto_state | TEXT | ATProto handle resolution state: pending/ready/failed/disabled |
+| `id` | INTEGER | Primary key |
+| `name` / `username_display` | TEXT | Display form of the username |
+| `username_canonical` | TEXT | Canonical (lowercased, punycode) form used for lookups |
+| `pubkey` | TEXT | Hex Nostr public key |
+| `relays` | TEXT | JSON array of relay hints (max 50) |
+| `status` | TEXT | `active`, `reserved`, `revoked`, `burned`, `pending-confirmation` |
+| `recyclable` | INTEGER | Whether a freed name can be reclaimed |
+| `atproto_did` / `atproto_state` | TEXT | ATProto handle linkage |
+| `created_at` / `updated_at` / `claimed_at` / `revoked_at` | INTEGER | Unix timestamps |
+| `reserved_reason` / `admin_notes` | TEXT | Admin metadata |
 
-**Indexes:**
-- `idx_usernames_pubkey_active`: Unique partial index ensuring one active username per pubkey
-- `idx_usernames_status`: Index on status for fast filtered queries
+A partial unique index enforces one `active` name per pubkey.
 
-#### reserved_words
+### reserved_words
 
-Protected words that cannot be claimed as usernames.
+Protected words (system routes, brand and protocol terms) that cannot be claimed, seeded by `0002_seed_reserved_words.sql` and editable via the admin API.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| word | TEXT | Reserved word (primary key) |
-| category | TEXT | Category: 'system', 'brand', 'protocol', 'app', 'subdomain' |
-| reason | TEXT | Human-readable reason for reservation |
-| created_at | INTEGER | Unix timestamp of creation |
+Additional tables cover reservations, spent Cashu proofs, username tags, and the Fastly sync queue — see the corresponding migrations.
 
-**Indexes:**
-- `idx_reserved_words_category`: Index on category for fast lookups
+## Username and relay rules
 
-See `migrations/0002_seed_reserved_words.sql` for the initial list of 30+ reserved words.
+**Usernames:** 3–20 characters, lowercase letters and digits only, not a reserved word, unique per active pubkey. Claiming a new name auto-revokes the old one.
 
-### Status Values
+**Relay hints:** optional; when present, each must be a valid `wss://` URL of at most 200 characters, with at most 50 per name.
 
-- **active**: Currently claimed and in use
-- **reserved**: Admin-reserved, cannot be claimed by users
-- **revoked**: Freed up and reclaimable (recyclable = 1)
-- **burned**: Permanently unavailable (recyclable = 0)
+## NIP-05 formats
 
-## Username Rules
+The service exposes the same pubkey in three forms:
 
-Usernames must meet these requirements:
+1. `alice@divine.video` — standard NIP-05, resolved at the root domain.
+2. `_@alice.divine.video` — subdomain NIP-05 using the reserved `_` name.
+3. `@alice.divine.video` — Bluesky-style display form, verified via the subdomain format.
 
-- **Length**: 3-20 characters
-- **Characters**: Lowercase letters (a-z) and numbers (0-9) only
-- **Reserved words**: Cannot use system routes, brand names, or protocol terms
-- **Uniqueness**: Each username can only be active for one pubkey at a time
-- **One per pubkey**: Each pubkey can only have one active username
-- **Auto-revocation**: Claiming a new username automatically revokes the old one
+## Security notes
 
-**Valid examples**: `alice`, `bob123`, `user2024`
+- **Cryptographic claims** — Every claim requires a valid, time-bound NIP-98 signature; there is no session state to hijack.
+- **Gated reservations** — Public reservations require payment or an invite code, are rate-limited per email, and are confirmed by email before activation.
+- **Admin defense in depth** — A hostname guard plus Cloudflare Access or an allowlisted Keycast session protect every admin route.
+- **Namespace protection** — Reserved words and service subdomains keep system routes and brand names unclaimable; burned names are permanently unavailable.
+- **No hijacking** — A partial unique index prevents taking over a name owned by another pubkey.
 
-**Invalid examples**:
-- `ab` (too short)
-- `thisusernameiswaytoolong` (too long)
-- `Alice` (uppercase letters)
-- `alice_bob` (special characters)
-- `api` (reserved word)
+## Documentation
 
-## Relay Validation
-
-Relay hints are optional but must meet these requirements when provided:
-
-- **Protocol**: Must use `wss://` (secure WebSocket)
-- **Count**: Maximum 50 relays per username
-- **Length**: Each relay URL must be ≤200 characters
-- **Format**: Must be valid URLs per URL standard
-
-**Valid examples**:
-- `wss://relay.damus.io`
-- `wss://nos.lol`
-- `wss://relay.primal.net`
-
-**Invalid examples**:
-- `https://relay.com` (wrong protocol)
-- `ws://relay.com` (insecure WebSocket)
-- `not-a-url` (invalid format)
-
-## Architecture Overview
-
-The Divine Name Server is a standalone Cloudflare Worker that handles three main flows:
-
-### 1. Username Claiming Flow
-
-```
-User → NIP-98 Signed Request → Worker
-                                   ↓
-                           Verify Signature
-                                   ↓
-                          Validate Username
-                                   ↓
-                          Check Reserved Words
-                                   ↓
-                       Query D1 for Conflicts
-                                   ↓
-                     Auto-revoke Old Username
-                                   ↓
-                      Insert/Update New Claim
-                                   ↓
-                      Return Profile URLs
-```
-
-### 2. Subdomain Profile Routing
-
-```
-User → alice.divine.video/ → Worker
-                                ↓
-                       Extract Subdomain
-                                ↓
-                        Query D1 by Name
-                                ↓
-                       Convert Hex to Npub
-                                ↓
-              Proxy to divine.video/profile/<npub>
-                                ↓
-                        Return Profile Page
-```
-
-### 3. NIP-05 Identity Verification
-
-```
-Nostr Client → /.well-known/nostr.json → Worker
-                                            ↓
-                                    Detect Hostname
-                                            ↓
-                           Subdomain? → Query Single User
-                              OR
-                             Root? → Query All Active Users
-                                            ↓
-                                  Format NIP-05 Response
-                                            ↓
-                              Cache for 60 seconds, Return
-```
-
-### Key Design Decisions
-
-- **Standalone Worker**: Independent from the main Divine application for scalability
-- **Edge Database**: D1 database for low-latency username lookups
-- **NIP-98 Auth**: Cryptographic proof of key ownership, no session state needed
-- **Proxy Pattern**: Subdomain routing proxies to existing profile pages, avoiding duplication
-- **Reserved Words**: Pre-seeded list protects system routes and brand names
-- **Status State Machine**: Clear state transitions (active → revoked → recyclable)
-
-### Worker + Admin UI Architecture
-
-The Divine Name Server is a **single Cloudflare Worker** that serves both the Hono API and a React-based admin UI:
-
-**How It Works:**
-- The Worker handles API routes via Hono (`/api/username`, `/api/admin`, etc.)
-- Static admin UI files are served automatically via Cloudflare Workers Assets
-- Configuration in `wrangler.toml` specifies the assets directory:
-  ```toml
-  [assets]
-  directory = "./admin-ui/dist"
-  ```
-
-**Routing Priority:**
-1. **Hono routes match first** - API endpoints and custom routes
-2. **Static files** - If no route matches, serve from `admin-ui/dist/`
-3. **SPA fallback** - For client-side routing, falls back to `index.html`
-
-**Request Examples:**
-- `GET /` → Hono route → Returns JSON service info
-- `GET /api/username/claim` → Hono route → API endpoint
-- `GET /admin` → Static assets → Serves React SPA
-- `GET /admin/settings` → Static assets → Serves React SPA (client-side routing)
-
-This architecture allows deploying the entire system (API + admin UI) as a single Worker with no separate static hosting needed.
-
-## NIP-05 Compatibility
-
-The service provides three NIP-05 identity formats:
-
-1. **Standard format**: `alice@divine.video`
-   - Resolved via `divine.video/.well-known/nostr.json`
-   - Works in all NIP-05 compatible clients
-
-2. **Subdomain format**: `_@alice.divine.video`
-   - Resolved via `alice.divine.video/.well-known/nostr.json`
-   - NIP-05 spec compliant using underscore name
-
-3. **Display format**: `@alice.divine.video`
-   - Clean Bluesky-style display (not directly resolvable)
-   - Maps to subdomain format for verification
-
-All formats identify the same pubkey and support optional relay hints.
-
-## Design Documentation
-
-For complete technical design, architecture decisions, and implementation details, see:
-
-**[docs/plans/2025-11-15-divine-name-server-implementation.md](/Users/rabble/code/andotherstuff/divine-name-server/docs/plans/2025-11-15-divine-name-server-implementation.md)**
-
-This plan includes:
-- Detailed task breakdown with acceptance criteria
-- NIP-98 verification implementation
-- Database migration steps
-- API endpoint specifications
-- Testing strategies
-- Deployment procedures
-
-## Security Considerations
-
-- **Cryptographic Authentication**: All username claims require valid NIP-98 signatures proving key ownership
-- **Admin Protection**: Admin endpoints protected by Cloudflare Access at the edge
-- **No Session State**: Stateless authentication eliminates session hijacking risks
-- **Namespace Protection**: Reserved words prevent claiming system routes and brand names
-- **Permanent Burning**: Offensive or abusive names can be permanently disabled
-- **No Hijacking**: Database constraints prevent claiming names owned by other pubkeys
-- **Time-bound Requests**: NIP-98 events expire after 60 seconds to prevent replay attacks
+Design and rollout notes live under `docs/` (see `docs/plans/` and `docs/superpowers/`). `AGENTS.md` documents contributor and PR conventions.
 
 ## License
 
