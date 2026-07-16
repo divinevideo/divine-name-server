@@ -1213,4 +1213,48 @@ describe('POST /release - burn own username', () => {
     const res = await app.fetch(releaseReq('alice'), { DB: db }, ctx)
     expect(res.status).toBe(401)
   })
+
+  it('returns 400 when the name is missing', async () => {
+    const app = createTestApp()
+    const db = createMockDB([])
+    const req = new Request('http://localhost/api/username/release', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Nostr base64...',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({})
+    })
+    const res = await app.fetch(req, { DB: db }, ctx)
+    expect(res.status).toBe(400)
+  })
+
+  it('a burned name can no longer be claimed by anyone', async () => {
+    const app = createTestApp()
+    const db = createMockDB([{
+      name: 'alice', username_display: 'alice', username_canonical: 'alice',
+      pubkey: '156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b',
+      status: 'active', recyclable: 1,
+    }])
+
+    const burn = await app.fetch(releaseReq('alice'), { DB: db }, ctx)
+    expect(burn.status).toBe(200)
+
+    // A different user tries to claim the now-burned name.
+    vi.mocked(verifyNip98Event).mockResolvedValue(
+      '345352a677feb41d624589f2169278dbd5a25ba940663f2020101d30a09ef96f'
+    )
+    const claimReq = new Request('http://localhost/api/username/claim', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Nostr base64...',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name: 'alice' })
+    })
+    const claim = await app.fetch(claimReq, { DB: db }, ctx)
+    expect(claim.status).toBe(403)
+    const json = await claim.json() as any
+    expect(json.error).toContain('permanently unavailable')
+  })
 })

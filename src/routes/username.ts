@@ -564,15 +564,27 @@ username.post('/release', async (c) => {
     const bodyText = await c.req.text()
 
     const url = new URL(c.req.url)
-    const pubkey = await verifyNip98Event(
-      c.req.raw.headers,
-      'POST',
-      url.toString(),
-      bodyText
-    )
+    // Lowercase for parity with /claim; getUsernameByPubkey compares
+    // case-insensitively, so this is defensive normalization.
+    const pubkey = (
+      await verifyNip98Event(
+        c.req.raw.headers,
+        'POST',
+        url.toString(),
+        bodyText
+      )
+    ).toLowerCase()
 
-    const body = JSON.parse(bodyText) as { name: string }
+    let body: { name?: unknown }
+    try {
+      body = JSON.parse(bodyText)
+    } catch {
+      return c.json({ ok: false, error: 'Invalid JSON body' }, 400)
+    }
     const { name } = body
+    if (typeof name !== 'string' || name.length === 0) {
+      return c.json({ ok: false, error: 'name is required' }, 400)
+    }
 
     let usernameData: { display: string; canonical: string }
     try {
@@ -597,7 +609,10 @@ username.post('/release', async (c) => {
       return c.json({ ok: false, error: 'You do not own that username' }, 403)
     }
 
-    // Burn: permanent, blocks re-registration (recyclable=0).
+    // Burn: permanent, blocks re-registration (recyclable=0). The ownership
+    // check above plus the unique username_canonical invariant ensure this
+    // hits exactly the caller's row, even though revokeUsername matches by
+    // canonical/name rather than pubkey.
     await revokeUsername(c.env.DB, nameCanonical, true)
 
     // Delete from Fastly so the burned name stops resolving at the edge.
