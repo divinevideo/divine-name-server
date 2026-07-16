@@ -575,13 +575,16 @@ username.post('/release', async (c) => {
       )
     ).toLowerCase()
 
-    let body: { name?: unknown }
+    let body: unknown
     try {
       body = JSON.parse(bodyText)
     } catch {
       return c.json({ ok: false, error: 'Invalid JSON body' }, 400)
     }
-    const { name } = body
+    if (typeof body !== 'object' || body === null) {
+      return c.json({ ok: false, error: 'Invalid JSON body' }, 400)
+    }
+    const { name } = body as { name?: unknown }
     if (typeof name !== 'string' || name.length === 0) {
       return c.json({ ok: false, error: 'name is required' }, 400)
     }

@@ -1214,19 +1214,27 @@ describe('POST /release - burn own username', () => {
     expect(res.status).toBe(401)
   })
 
-  it('returns 400 when the name is missing', async () => {
+  it('returns 400 for invalid bodies', async () => {
     const app = createTestApp()
     const db = createMockDB([])
-    const req = new Request('http://localhost/api/username/release', {
-      method: 'POST',
-      headers: {
-        'Authorization': 'Nostr base64...',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({})
-    })
-    const res = await app.fetch(req, { DB: db }, ctx)
-    expect(res.status).toBe(400)
+    const badBodies = [
+      JSON.stringify({}), // missing name
+      JSON.stringify({ name: 123 }), // non-string name
+      'null', // JSON null
+      '{not valid json' // malformed JSON
+    ]
+    for (const body of badBodies) {
+      const req = new Request('http://localhost/api/username/release', {
+        method: 'POST',
+        headers: {
+          'Authorization': 'Nostr base64...',
+          'Content-Type': 'application/json'
+        },
+        body
+      })
+      const res = await app.fetch(req, { DB: db }, ctx)
+      expect(res.status, `body=${body}`).toBe(400)
+    }
   })
 
   it('a burned name can no longer be claimed by anyone', async () => {
