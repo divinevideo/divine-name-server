@@ -185,6 +185,28 @@ function createMockDB(initialUsernames: any[] = []) {
                 return { success: true, meta: { changes: 1 } }
               }
 
+              // Handle revokeUsername (burn/revoke by canonical or name)
+              if (
+                sql.includes('SET status = ?') &&
+                sql.includes('recyclable = ?') &&
+                sql.includes('username_canonical = ?')
+              ) {
+                const status = boundParams[0]
+                const recyclable = boundParams[1]
+                const canonical = boundParams[4]
+                const name = boundParams[5]
+                for (const record of mockUsernames) {
+                  if (
+                    record.username_canonical === canonical ||
+                    record.name === name
+                  ) {
+                    record.status = status
+                    record.recyclable = recyclable
+                  }
+                }
+                return { success: true, meta: { changes: 1 } }
+              }
+
               // Handle INSERT/UPDATE operations for claim
               if (sql.includes('INSERT INTO usernames') || sql.includes('ON CONFLICT')) {
                 const display = boundParams[1] // username_display
@@ -1136,16 +1158,30 @@ describe('POST /release - burn own username', () => {
   }
 
   it('burns the caller\'s own active name', async () => {
+    const { deleteUsernameFromFastly } = await import('../utils/fastly-sync')
+    vi.mocked(deleteUsernameFromFastly).mockClear()
     const app = createTestApp()
     const db = createMockDB([{
       name: 'alice', username_display: 'alice', username_canonical: 'alice',
       pubkey: '156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b',
-      status: 'active',
+      status: 'active', recyclable: 1,
     }])
     const res = await app.fetch(releaseReq('alice'), { DB: db }, ctx)
     expect(res.status).toBe(200)
     const json = await res.json() as any
     expect(json).toMatchObject({ ok: true, released: true, name: 'alice', status: 'burned' })
+
+    // The row is actually burned (not merely revoked) and de-synced from
+    // Fastly, so a burn->revoke regression or a dropped Fastly delete fails here.
+    const row = (db as any)._mockUsernames.find(
+      (u: any) => u.username_canonical === 'alice'
+    )
+    expect(row.status).toBe('burned')
+    expect(row.recyclable).toBe(0)
+    expect(deleteUsernameFromFastly).toHaveBeenCalledWith(
+      expect.anything(),
+      'alice'
+    )
   })
 
   it('returns 403 when the caller owns a different active name', async () => {
