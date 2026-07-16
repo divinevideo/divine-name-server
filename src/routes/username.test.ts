@@ -1104,3 +1104,77 @@ describe('Public Name Reservation', () => {
     })
   })
 })
+
+describe('POST /release - burn own username', () => {
+  let verifyNip98Event: any
+
+  beforeEach(async () => {
+    const nip98Module = await import('../middleware/nip98')
+    verifyNip98Event = nip98Module.verifyNip98Event
+    vi.mocked(verifyNip98Event).mockResolvedValue(
+      '156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b'
+    )
+  })
+
+  function createTestApp() {
+    const app = new Hono<{ Bindings: { DB: D1Database } }>()
+    app.route('/api/username', username)
+    return app
+  }
+
+  const ctx = { waitUntil: () => {}, passThroughOnException: () => {}, props: {} }
+
+  function releaseReq(name: string) {
+    return new Request('http://localhost/api/username/release', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Nostr base64...',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name })
+    })
+  }
+
+  it('burns the caller\'s own active name', async () => {
+    const app = createTestApp()
+    const db = createMockDB([{
+      name: 'alice', username_display: 'alice', username_canonical: 'alice',
+      pubkey: '156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b',
+      status: 'active',
+    }])
+    const res = await app.fetch(releaseReq('alice'), { DB: db }, ctx)
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json).toMatchObject({ ok: true, released: true, name: 'alice', status: 'burned' })
+  })
+
+  it('returns 403 when the caller owns a different active name', async () => {
+    const app = createTestApp()
+    const db = createMockDB([{
+      name: 'bob', username_display: 'bob', username_canonical: 'bob',
+      pubkey: '156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b',
+      status: 'active',
+    }])
+    const res = await app.fetch(releaseReq('alice'), { DB: db }, ctx)
+    expect(res.status).toBe(403)
+  })
+
+  it('returns 200 no-op when the caller owns no active name', async () => {
+    const app = createTestApp()
+    const db = createMockDB([])
+    const res = await app.fetch(releaseReq('alice'), { DB: db }, ctx)
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json).toMatchObject({ ok: true, released: false, reason: 'no_active_name' })
+  })
+
+  it('returns 401 on NIP-98 failure', async () => {
+    vi.mocked(verifyNip98Event).mockRejectedValue(
+      Object.assign(new Error('bad auth'), { name: 'Nip98Error' })
+    )
+    const app = createTestApp()
+    const db = createMockDB([])
+    const res = await app.fetch(releaseReq('alice'), { DB: db }, ctx)
+    expect(res.status).toBe(401)
+  })
+})

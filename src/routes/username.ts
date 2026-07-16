@@ -1,6 +1,6 @@
 // ABOUTME: Username API endpoints for claiming, checking, and reserving usernames
 // ABOUTME: Public endpoints: GET /check/:name, GET /by-pubkey/:pubkey, POST /reserve, GET /confirm
-// ABOUTME: Authenticated: POST /claim (NIP-98 auth - works for both custodial and non-custodial users)
+// ABOUTME: Authenticated: POST /claim, POST /release (NIP-98 auth - works for both custodial and non-custodial users)
 
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -11,6 +11,7 @@ import {
   getUsernameByName,
   getUsernameByPubkey,
   claimUsername,
+  revokeUsername,
   countRecentReservationsByEmail,
   createReservation,
   getReservationByToken,
@@ -553,6 +554,75 @@ username.post('/claim', async (c) => {
       return c.json({ ok: false, error: error.message }, 401)
     }
     console.error('Claim error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+username.post('/release', async (c) => {
+  try {
+    // Read raw body text first (needed for NIP-98 payload verification)
+    const bodyText = await c.req.text()
+
+    const url = new URL(c.req.url)
+    const pubkey = await verifyNip98Event(
+      c.req.raw.headers,
+      'POST',
+      url.toString(),
+      bodyText
+    )
+
+    const body = JSON.parse(bodyText) as { name: string }
+    const { name } = body
+
+    let usernameData: { display: string; canonical: string }
+    try {
+      usernameData = validateUsername(name)
+    } catch (error) {
+      if (error instanceof UsernameValidationError) {
+        return c.json({ ok: false, error: error.message }, 400)
+      }
+      throw error
+    }
+    const { canonical: nameCanonical } = usernameData
+
+    // The caller must currently hold this exact active name. One active name
+    // per pubkey (partial unique index on pubkey, status='active').
+    const owned = await getUsernameByPubkey(c.env.DB, pubkey)
+    if (!owned) {
+      // Nothing active to release (e.g. already burned). Idempotent no-op.
+      return c.json({ ok: true, released: false, reason: 'no_active_name' })
+    }
+    const ownedCanonical = owned.username_canonical || owned.name?.toLowerCase()
+    if (ownedCanonical !== nameCanonical) {
+      return c.json({ ok: false, error: 'You do not own that username' }, 403)
+    }
+
+    // Burn: permanent, blocks re-registration (recyclable=0).
+    await revokeUsername(c.env.DB, nameCanonical, true)
+
+    // Delete from Fastly so the burned name stops resolving at the edge.
+    c.executionCtx.waitUntil(
+      deleteUsernameFromFastly(c.env, nameCanonical).then(async (result) => {
+        if (!result.success) {
+          await enqueueFastlySyncTask(c.env.DB, {
+            username: nameCanonical,
+            action: 'delete',
+          })
+        }
+      })
+    )
+
+    return c.json({
+      ok: true,
+      released: true,
+      name: owned.username_display || owned.name,
+      status: 'burned',
+    })
+  } catch (error) {
+    if (error instanceof Error && error.name === 'Nip98Error') {
+      return c.json({ ok: false, error: error.message }, 401)
+    }
+    console.error('Release error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
   }
 })
