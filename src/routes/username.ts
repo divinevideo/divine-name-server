@@ -564,6 +564,14 @@ username.post('/release', async (c) => {
     const bodyText = await c.req.text()
 
     const url = new URL(c.req.url)
+    // Wider NIP-98 timestamp window than the default 60s: for vine-import
+    // users /release is often their first-ever NIP-98 call, and the mobile
+    // client stamps created_at before a remote-signer RPC that can take up to
+    // ~30s; with clock skew a 60s window yields systematic 401s that trap the
+    // whole account deletion. Safe to widen here because /release is idempotent
+    // (re-burning an already-burned name is a no-op) and self-scoped (only ever
+    // acts on the signer's own single active name).
+    const releaseNip98MaxAgeSeconds = 300
     // Lowercase for parity with /claim; getUsernameByPubkey compares
     // case-insensitively, so this is defensive normalization.
     const pubkey = (
@@ -571,7 +579,8 @@ username.post('/release', async (c) => {
         c.req.raw.headers,
         'POST',
         url.toString(),
-        bodyText
+        bodyText,
+        releaseNip98MaxAgeSeconds
       )
     ).toLowerCase()
 
@@ -589,41 +598,40 @@ username.post('/release', async (c) => {
       return c.json({ ok: false, error: 'name is required' }, 400)
     }
 
-    let usernameData: { display: string; canonical: string }
-    try {
-      usernameData = validateUsername(name)
-    } catch (error) {
-      if (error instanceof UsernameValidationError) {
-        return c.json({ ok: false, error: error.message }, 400)
-      }
-      throw error
-    }
-    const { canonical: nameCanonical } = usernameData
-
-    // The caller must currently hold this exact active name. One active name
-    // per pubkey (partial unique index on pubkey, status='active').
+    // Resolve ownership against the caller's stored row. Do NOT run claim-time
+    // character validation on /release: legacy vine-import names (underscores,
+    // dots, Unicode) were stored before today's rules and must still be
+    // burnable. One active name per pubkey (partial unique index on pubkey,
+    // status='active').
     const owned = await getUsernameByPubkey(c.env.DB, pubkey)
     if (!owned) {
       // Nothing active to release (e.g. already burned). Idempotent no-op.
       return c.json({ ok: true, released: false, reason: 'no_active_name' })
     }
-    const ownedCanonical = owned.username_canonical || owned.name?.toLowerCase()
-    if (ownedCanonical !== nameCanonical) {
+    const ownedCanonical = (
+      owned.username_canonical ||
+      owned.name ||
+      ''
+    ).toLowerCase()
+    const ownedName = (owned.name || '').toLowerCase()
+    const requested = name.trim().toLowerCase()
+    // Confirm the caller means their own name, matching either the stored
+    // canonical or the stored display (both case-insensitively) so the client
+    // may send either form.
+    if (requested !== ownedCanonical && requested !== ownedName) {
       return c.json({ ok: false, error: 'You do not own that username' }, 403)
     }
 
-    // Burn: permanent, blocks re-registration (recyclable=0). The ownership
-    // check above plus the unique username_canonical invariant ensure this
-    // hits exactly the caller's row, even though revokeUsername matches by
-    // canonical/name rather than pubkey.
-    await revokeUsername(c.env.DB, nameCanonical, true)
+    // Burn the stored canonical: permanent, blocks re-registration
+    // (recyclable=0).
+    await revokeUsername(c.env.DB, ownedCanonical, true)
 
     // Delete from Fastly so the burned name stops resolving at the edge.
     c.executionCtx.waitUntil(
-      deleteUsernameFromFastly(c.env, nameCanonical).then(async (result) => {
+      deleteUsernameFromFastly(c.env, ownedCanonical).then(async (result) => {
         if (!result.success) {
           await enqueueFastlySyncTask(c.env.DB, {
-            username: nameCanonical,
+            username: ownedCanonical,
             action: 'delete',
           })
         }

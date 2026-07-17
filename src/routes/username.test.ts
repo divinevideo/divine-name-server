@@ -1182,6 +1182,49 @@ describe('POST /release - burn own username', () => {
       expect.anything(),
       'alice'
     )
+    // Pin the signed NIP-98 contract the client depends on: exact absolute
+    // URL, POST, raw unmodified body, and the wider release window.
+    expect(verifyNip98Event).toHaveBeenCalledWith(
+      expect.anything(),
+      'POST',
+      'http://localhost/api/username/release',
+      JSON.stringify({ name: 'alice' }),
+      300
+    )
+  })
+
+  it('burns a legacy underscore name (no claim-time char gate)', async () => {
+    const app = createTestApp()
+    const db = createMockDB([{
+      name: 'the_funny_vine', username_display: 'the_funny_vine',
+      username_canonical: 'the_funny_vine',
+      pubkey: '156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b',
+      status: 'active', recyclable: 1,
+    }])
+    const res = await app.fetch(releaseReq('the_funny_vine'), { DB: db }, ctx)
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json).toMatchObject({ released: true, status: 'burned' })
+    const row = (db as any)._mockUsernames.find(
+      (u: any) => u.username_canonical === 'the_funny_vine'
+    )
+    expect(row.status).toBe('burned')
+  })
+
+  it('burns a Unicode name via its stored punycode canonical', async () => {
+    const app = createTestApp()
+    const db = createMockDB([{
+      name: 'Café', username_display: 'Café', username_canonical: 'xn--caf-dma',
+      pubkey: '156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b',
+      status: 'active', recyclable: 1,
+    }])
+    // Client sends the stored canonical (round-trip-safe for legacy shapes).
+    const res = await app.fetch(releaseReq('xn--caf-dma'), { DB: db }, ctx)
+    expect(res.status).toBe(200)
+    const row = (db as any)._mockUsernames.find(
+      (u: any) => u.username_canonical === 'xn--caf-dma'
+    )
+    expect(row.status).toBe('burned')
   })
 
   it('returns 403 when the caller owns a different active name', async () => {
