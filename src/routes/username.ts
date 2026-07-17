@@ -11,7 +11,7 @@ import {
   getUsernameByName,
   getUsernameByPubkey,
   claimUsername,
-  revokeUsername,
+  revokeUsernameByPubkey,
   countRecentReservationsByEmail,
   createReservation,
   getReservationByToken,
@@ -622,9 +622,11 @@ username.post('/release', async (c) => {
       return c.json({ ok: false, error: 'You do not own that username' }, 403)
     }
 
-    // Burn the stored canonical: permanent, blocks re-registration
-    // (recyclable=0).
-    await revokeUsername(c.env.DB, ownedCanonical, true)
+    // Burn the caller's own row, scoped by pubkey (NOT the shared
+    // revokeUsername, whose `OR name = ?` could collaterally burn a different
+    // user's globally-unique row in the legacy name != canonical regime).
+    // Permanent; recyclable=0 blocks re-registration.
+    await revokeUsernameByPubkey(c.env.DB, pubkey, ownedCanonical, true)
 
     // Delete from Fastly so the burned name stops resolving at the edge.
     c.executionCtx.waitUntil(

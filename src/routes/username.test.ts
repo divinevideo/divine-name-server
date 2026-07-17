@@ -185,6 +185,28 @@ function createMockDB(initialUsernames: any[] = []) {
                 return { success: true, meta: { changes: 1 } }
               }
 
+              // Handle revokeUsernameByPubkey (scoped burn: canonical AND pubkey)
+              if (
+                sql.includes('SET status = ?') &&
+                sql.includes('recyclable = ?') &&
+                sql.includes('LOWER(pubkey)')
+              ) {
+                const status = boundParams[0]
+                const recyclable = boundParams[1]
+                const canonical = boundParams[4]
+                const pubkey = boundParams[5]
+                for (const record of mockUsernames) {
+                  if (
+                    record.username_canonical === canonical &&
+                    record.pubkey?.toLowerCase() === pubkey.toLowerCase()
+                  ) {
+                    record.status = status
+                    record.recyclable = recyclable
+                  }
+                }
+                return { success: true, meta: { changes: 1 } }
+              }
+
               // Handle revokeUsername (burn/revoke by canonical or name)
               if (
                 sql.includes('SET status = ?') &&
@@ -1225,6 +1247,39 @@ describe('POST /release - burn own username', () => {
       (u: any) => u.username_canonical === 'xn--caf-dma'
     )
     expect(row.status).toBe('burned')
+  })
+
+  it('does not collaterally burn another user\'s row via OR-name', async () => {
+    const attackerPubkey =
+      '156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b'
+    const victimPubkey =
+      '345352a677feb41d624589f2169278dbd5a25ba940663f2020101d30a09ef96f'
+    const app = createTestApp()
+    const db = createMockDB([
+      // Attacker owns a legacy row where name != canonical.
+      {
+        name: 'Alice2', username_display: 'Alice2', username_canonical: 'alice',
+        pubkey: attackerPubkey, status: 'active', recyclable: 1,
+      },
+      // A different user's active row whose display name equals the attacker's
+      // canonical — the exact collision the OR-name clause would burn.
+      {
+        name: 'alice', username_display: 'alice', username_canonical: 'alice-v',
+        pubkey: victimPubkey, status: 'active', recyclable: 1,
+      },
+    ])
+    // beforeEach mocks verifyNip98Event -> attackerPubkey.
+    const res = await app.fetch(releaseReq('alice'), { DB: db }, ctx)
+    expect(res.status).toBe(200)
+
+    const attacker = (db as any)._mockUsernames.find(
+      (u: any) => u.username_canonical === 'alice'
+    )
+    const victim = (db as any)._mockUsernames.find(
+      (u: any) => u.username_canonical === 'alice-v'
+    )
+    expect(attacker.status).toBe('burned') // caller's own row is burned
+    expect(victim.status).toBe('active') // the foreign row is untouched
   })
 
   it('returns 403 when the caller owns a different active name', async () => {

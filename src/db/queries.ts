@@ -358,6 +358,36 @@ export async function revokeUsername(
 }
 
 /**
+ * Revoke/burn a username scoped to a specific pubkey.
+ *
+ * Unlike revokeUsername (which matches `username_canonical = ? OR name = ?`
+ * for admin use, where naming either column is intentional), this only ever
+ * touches the row owned by `pubkey`. A self-service `/release` caller must not
+ * be able to collaterally burn a *different* user's globally-unique row when a
+ * legacy `name != canonical` row's `name` happens to equal the caller's
+ * canonical.
+ */
+export async function revokeUsernameByPubkey(
+  db: D1Database,
+  pubkey: string,
+  canonical: string,
+  burn: boolean
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000)
+  const status = burn ? 'burned' : 'revoked'
+  const recyclable = burn ? 0 : 1
+
+  await db.prepare(
+    `UPDATE usernames
+     SET status = ?,
+         recyclable = ?,
+         revoked_at = ?,
+         updated_at = ?
+     WHERE username_canonical = ? AND LOWER(pubkey) = LOWER(?)`
+  ).bind(status, recyclable, now, now, canonical, pubkey).run()
+}
+
+/**
  * Restore a previously revoked or burned username to a specific pubkey.
  *
  * Sets status='active', recyclable=1, pubkey=<provided>, clears revoked_at,
