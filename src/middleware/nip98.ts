@@ -55,7 +55,8 @@ export async function verifyNip98Event(
   headers: Headers,
   method: string,
   url: string,
-  body?: string
+  body?: string,
+  maxAgeSeconds: number = 60
 ): Promise<string> {
   const authHeader = headers.get('Authorization')
 
@@ -110,9 +111,9 @@ export async function verifyNip98Event(
     throw new Nip98Error('Signature verification failed')
   }
 
-  // Verify timestamp (within 60 seconds)
+  // Verify timestamp (within maxAgeSeconds of now; default 60s)
   const now = Math.floor(Date.now() / 1000)
-  if (Math.abs(now - event.created_at) > 60) {
+  if (Math.abs(now - event.created_at) > maxAgeSeconds) {
     throw new Nip98Error('Event timestamp too old or in future')
   }
 

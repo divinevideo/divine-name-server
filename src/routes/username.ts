@@ -1,6 +1,6 @@
 // ABOUTME: Username API endpoints for claiming, checking, and reserving usernames
 // ABOUTME: Public endpoints: GET /check/:name, GET /by-pubkey/:pubkey, POST /reserve, GET /confirm
-// ABOUTME: Authenticated: POST /claim (NIP-98 auth - works for both custodial and non-custodial users)
+// ABOUTME: Authenticated: POST /claim, POST /release (NIP-98 auth - works for both custodial and non-custodial users)
 
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -11,6 +11,7 @@ import {
   getUsernameByName,
   getUsernameByPubkey,
   claimUsername,
+  revokeUsernameByPubkey,
   countRecentReservationsByEmail,
   createReservation,
   getReservationByToken,
@@ -553,6 +554,103 @@ username.post('/claim', async (c) => {
       return c.json({ ok: false, error: error.message }, 401)
     }
     console.error('Claim error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+username.post('/release', async (c) => {
+  try {
+    // Read raw body text first (needed for NIP-98 payload verification)
+    const bodyText = await c.req.text()
+
+    const url = new URL(c.req.url)
+    // Wider NIP-98 timestamp window than the default 60s: for vine-import
+    // users /release is often their first-ever NIP-98 call, and the mobile
+    // client stamps created_at before a remote-signer RPC that can take up to
+    // ~30s; with clock skew a 60s window yields systematic 401s that trap the
+    // whole account deletion. Safe to widen here because /release is idempotent
+    // (re-burning an already-burned name is a no-op) and self-scoped (only ever
+    // acts on the signer's own single active name).
+    const releaseNip98MaxAgeSeconds = 300
+    // Lowercase for parity with /claim; getUsernameByPubkey compares
+    // case-insensitively, so this is defensive normalization.
+    const pubkey = (
+      await verifyNip98Event(
+        c.req.raw.headers,
+        'POST',
+        url.toString(),
+        bodyText,
+        releaseNip98MaxAgeSeconds
+      )
+    ).toLowerCase()
+
+    let body: unknown
+    try {
+      body = JSON.parse(bodyText)
+    } catch {
+      return c.json({ ok: false, error: 'Invalid JSON body' }, 400)
+    }
+    if (typeof body !== 'object' || body === null) {
+      return c.json({ ok: false, error: 'Invalid JSON body' }, 400)
+    }
+    const { name } = body as { name?: unknown }
+    if (typeof name !== 'string' || name.length === 0) {
+      return c.json({ ok: false, error: 'name is required' }, 400)
+    }
+
+    // Resolve ownership against the caller's stored row. Do NOT run claim-time
+    // character validation on /release: legacy vine-import names (underscores,
+    // dots, Unicode) were stored before today's rules and must still be
+    // burnable. One active name per pubkey (partial unique index on pubkey,
+    // status='active').
+    const owned = await getUsernameByPubkey(c.env.DB, pubkey)
+    if (!owned) {
+      // Nothing active to release (e.g. already burned). Idempotent no-op.
+      return c.json({ ok: true, released: false, reason: 'no_active_name' })
+    }
+    const ownedCanonical = (
+      owned.username_canonical ||
+      owned.name ||
+      ''
+    ).toLowerCase()
+    const ownedName = (owned.name || '').toLowerCase()
+    const requested = name.trim().toLowerCase()
+    // Confirm the caller means their own name, matching either the stored
+    // canonical or the stored display (both case-insensitively) so the client
+    // may send either form.
+    if (requested !== ownedCanonical && requested !== ownedName) {
+      return c.json({ ok: false, error: 'You do not own that username' }, 403)
+    }
+
+    // Burn the caller's own row, scoped by pubkey (NOT the shared
+    // revokeUsername, whose `OR name = ?` could collaterally burn a different
+    // user's globally-unique row in the legacy name != canonical regime).
+    // Permanent; recyclable=0 blocks re-registration.
+    await revokeUsernameByPubkey(c.env.DB, pubkey, ownedCanonical, true)
+
+    // Delete from Fastly so the burned name stops resolving at the edge.
+    c.executionCtx.waitUntil(
+      deleteUsernameFromFastly(c.env, ownedCanonical).then(async (result) => {
+        if (!result.success) {
+          await enqueueFastlySyncTask(c.env.DB, {
+            username: ownedCanonical,
+            action: 'delete',
+          })
+        }
+      })
+    )
+
+    return c.json({
+      ok: true,
+      released: true,
+      name: owned.username_display || owned.name,
+      status: 'burned',
+    })
+  } catch (error) {
+    if (error instanceof Error && error.name === 'Nip98Error') {
+      return c.json({ ok: false, error: error.message }, 401)
+    }
+    console.error('Release error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
   }
 })

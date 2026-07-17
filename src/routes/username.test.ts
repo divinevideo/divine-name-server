@@ -185,6 +185,50 @@ function createMockDB(initialUsernames: any[] = []) {
                 return { success: true, meta: { changes: 1 } }
               }
 
+              // Handle revokeUsernameByPubkey (scoped burn: canonical AND pubkey)
+              if (
+                sql.includes('SET status = ?') &&
+                sql.includes('recyclable = ?') &&
+                sql.includes('LOWER(pubkey)')
+              ) {
+                const status = boundParams[0]
+                const recyclable = boundParams[1]
+                const canonical = boundParams[4]
+                const pubkey = boundParams[5]
+                for (const record of mockUsernames) {
+                  if (
+                    record.username_canonical === canonical &&
+                    record.pubkey?.toLowerCase() === pubkey.toLowerCase()
+                  ) {
+                    record.status = status
+                    record.recyclable = recyclable
+                  }
+                }
+                return { success: true, meta: { changes: 1 } }
+              }
+
+              // Handle revokeUsername (burn/revoke by canonical or name)
+              if (
+                sql.includes('SET status = ?') &&
+                sql.includes('recyclable = ?') &&
+                sql.includes('username_canonical = ?')
+              ) {
+                const status = boundParams[0]
+                const recyclable = boundParams[1]
+                const canonical = boundParams[4]
+                const name = boundParams[5]
+                for (const record of mockUsernames) {
+                  if (
+                    record.username_canonical === canonical ||
+                    record.name === name
+                  ) {
+                    record.status = status
+                    record.recyclable = recyclable
+                  }
+                }
+                return { success: true, meta: { changes: 1 } }
+              }
+
               // Handle INSERT/UPDATE operations for claim
               if (sql.includes('INSERT INTO usernames') || sql.includes('ON CONFLICT')) {
                 const display = boundParams[1] // username_display
@@ -1102,5 +1146,221 @@ describe('Public Name Reservation', () => {
       const json = await res.json() as any
       expect(json.error).toContain('pending email confirmation')
     })
+  })
+})
+
+describe('POST /release - burn own username', () => {
+  let verifyNip98Event: any
+
+  beforeEach(async () => {
+    const nip98Module = await import('../middleware/nip98')
+    verifyNip98Event = nip98Module.verifyNip98Event
+    vi.mocked(verifyNip98Event).mockResolvedValue(
+      '156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b'
+    )
+  })
+
+  function createTestApp() {
+    const app = new Hono<{ Bindings: { DB: D1Database } }>()
+    app.route('/api/username', username)
+    return app
+  }
+
+  const ctx = { waitUntil: () => {}, passThroughOnException: () => {}, props: {} }
+
+  function releaseReq(name: string) {
+    return new Request('http://localhost/api/username/release', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Nostr base64...',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name })
+    })
+  }
+
+  it('burns the caller\'s own active name', async () => {
+    const { deleteUsernameFromFastly } = await import('../utils/fastly-sync')
+    vi.mocked(deleteUsernameFromFastly).mockClear()
+    const app = createTestApp()
+    const db = createMockDB([{
+      name: 'alice', username_display: 'alice', username_canonical: 'alice',
+      pubkey: '156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b',
+      status: 'active', recyclable: 1,
+    }])
+    const res = await app.fetch(releaseReq('alice'), { DB: db }, ctx)
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json).toMatchObject({ ok: true, released: true, name: 'alice', status: 'burned' })
+
+    // The row is actually burned (not merely revoked) and de-synced from
+    // Fastly, so a burn->revoke regression or a dropped Fastly delete fails here.
+    const row = (db as any)._mockUsernames.find(
+      (u: any) => u.username_canonical === 'alice'
+    )
+    expect(row.status).toBe('burned')
+    expect(row.recyclable).toBe(0)
+    expect(deleteUsernameFromFastly).toHaveBeenCalledWith(
+      expect.anything(),
+      'alice'
+    )
+    // Pin the signed NIP-98 contract the client depends on: exact absolute
+    // URL, POST, raw unmodified body, and the wider release window.
+    expect(verifyNip98Event).toHaveBeenCalledWith(
+      expect.anything(),
+      'POST',
+      'http://localhost/api/username/release',
+      JSON.stringify({ name: 'alice' }),
+      300
+    )
+  })
+
+  it('burns a legacy underscore name (no claim-time char gate)', async () => {
+    const app = createTestApp()
+    const db = createMockDB([{
+      name: 'the_funny_vine', username_display: 'the_funny_vine',
+      username_canonical: 'the_funny_vine',
+      pubkey: '156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b',
+      status: 'active', recyclable: 1,
+    }])
+    const res = await app.fetch(releaseReq('the_funny_vine'), { DB: db }, ctx)
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json).toMatchObject({ released: true, status: 'burned' })
+    const row = (db as any)._mockUsernames.find(
+      (u: any) => u.username_canonical === 'the_funny_vine'
+    )
+    expect(row.status).toBe('burned')
+  })
+
+  it('burns a Unicode name via its stored punycode canonical', async () => {
+    const app = createTestApp()
+    const db = createMockDB([{
+      name: 'Café', username_display: 'Café', username_canonical: 'xn--caf-dma',
+      pubkey: '156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b',
+      status: 'active', recyclable: 1,
+    }])
+    // Client sends the stored canonical (round-trip-safe for legacy shapes).
+    const res = await app.fetch(releaseReq('xn--caf-dma'), { DB: db }, ctx)
+    expect(res.status).toBe(200)
+    const row = (db as any)._mockUsernames.find(
+      (u: any) => u.username_canonical === 'xn--caf-dma'
+    )
+    expect(row.status).toBe('burned')
+  })
+
+  it('does not collaterally burn another user\'s row via OR-name', async () => {
+    const attackerPubkey =
+      '156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b'
+    const victimPubkey =
+      '345352a677feb41d624589f2169278dbd5a25ba940663f2020101d30a09ef96f'
+    const app = createTestApp()
+    const db = createMockDB([
+      // Attacker owns a legacy row where name != canonical.
+      {
+        name: 'Alice2', username_display: 'Alice2', username_canonical: 'alice',
+        pubkey: attackerPubkey, status: 'active', recyclable: 1,
+      },
+      // A different user's active row whose display name equals the attacker's
+      // canonical — the exact collision the OR-name clause would burn.
+      {
+        name: 'alice', username_display: 'alice', username_canonical: 'alice-v',
+        pubkey: victimPubkey, status: 'active', recyclable: 1,
+      },
+    ])
+    // beforeEach mocks verifyNip98Event -> attackerPubkey.
+    const res = await app.fetch(releaseReq('alice'), { DB: db }, ctx)
+    expect(res.status).toBe(200)
+
+    const attacker = (db as any)._mockUsernames.find(
+      (u: any) => u.username_canonical === 'alice'
+    )
+    const victim = (db as any)._mockUsernames.find(
+      (u: any) => u.username_canonical === 'alice-v'
+    )
+    expect(attacker.status).toBe('burned') // caller's own row is burned
+    expect(victim.status).toBe('active') // the foreign row is untouched
+  })
+
+  it('returns 403 when the caller owns a different active name', async () => {
+    const app = createTestApp()
+    const db = createMockDB([{
+      name: 'bob', username_display: 'bob', username_canonical: 'bob',
+      pubkey: '156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b',
+      status: 'active',
+    }])
+    const res = await app.fetch(releaseReq('alice'), { DB: db }, ctx)
+    expect(res.status).toBe(403)
+  })
+
+  it('returns 200 no-op when the caller owns no active name', async () => {
+    const app = createTestApp()
+    const db = createMockDB([])
+    const res = await app.fetch(releaseReq('alice'), { DB: db }, ctx)
+    expect(res.status).toBe(200)
+    const json = await res.json() as any
+    expect(json).toMatchObject({ ok: true, released: false, reason: 'no_active_name' })
+  })
+
+  it('returns 401 on NIP-98 failure', async () => {
+    vi.mocked(verifyNip98Event).mockRejectedValue(
+      Object.assign(new Error('bad auth'), { name: 'Nip98Error' })
+    )
+    const app = createTestApp()
+    const db = createMockDB([])
+    const res = await app.fetch(releaseReq('alice'), { DB: db }, ctx)
+    expect(res.status).toBe(401)
+  })
+
+  it('returns 400 for invalid bodies', async () => {
+    const app = createTestApp()
+    const db = createMockDB([])
+    const badBodies = [
+      JSON.stringify({}), // missing name
+      JSON.stringify({ name: 123 }), // non-string name
+      'null', // JSON null
+      '{not valid json' // malformed JSON
+    ]
+    for (const body of badBodies) {
+      const req = new Request('http://localhost/api/username/release', {
+        method: 'POST',
+        headers: {
+          'Authorization': 'Nostr base64...',
+          'Content-Type': 'application/json'
+        },
+        body
+      })
+      const res = await app.fetch(req, { DB: db }, ctx)
+      expect(res.status, `body=${body}`).toBe(400)
+    }
+  })
+
+  it('a burned name can no longer be claimed by anyone', async () => {
+    const app = createTestApp()
+    const db = createMockDB([{
+      name: 'alice', username_display: 'alice', username_canonical: 'alice',
+      pubkey: '156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b',
+      status: 'active', recyclable: 1,
+    }])
+
+    const burn = await app.fetch(releaseReq('alice'), { DB: db }, ctx)
+    expect(burn.status).toBe(200)
+
+    // A different user tries to claim the now-burned name.
+    vi.mocked(verifyNip98Event).mockResolvedValue(
+      '345352a677feb41d624589f2169278dbd5a25ba940663f2020101d30a09ef96f'
+    )
+    const claimReq = new Request('http://localhost/api/username/claim', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Nostr base64...',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name: 'alice' })
+    })
+    const claim = await app.fetch(claimReq, { DB: db }, ctx)
+    expect(claim.status).toBe(403)
+    const json = await claim.json() as any
+    expect(json.error).toContain('permanently unavailable')
   })
 })
