@@ -19,6 +19,9 @@
   "author": "",
   "license": "ISC",
   "type": "commonjs",
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
     "@noble/secp256k1": "^3.0.0",
     "@scure/base": "^2.0.0",

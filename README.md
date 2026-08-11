@@ -60,7 +60,7 @@ A scheduled handler runs hourly (`0 * * * *`):
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 22+
 - A Cloudflare account with Workers and D1 enabled
 - (Optional) [Bun](https://bun.sh) for the Vine import scripts
 
