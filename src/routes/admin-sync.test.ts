@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
+import { createExecutionContext } from '../db/test-helpers'
 
 const { getActiveUsernamesPaginated, countActiveUsernames, getUsernameByName, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, syncBatch, readUsernameFromFastly, syncAndVerifyUsername, deleteUsernameFromFastly } = vi.hoisted(() => ({
   getActiveUsernamesPaginated: vi.fn(),
@@ -37,7 +38,7 @@ function createTestApp() {
   return app
 }
 
-const ctx = { waitUntil: () => {}, passThroughOnException: () => {}, props: {} } as unknown as ExecutionContext
+const ctx = createExecutionContext()
 
 const baseEnv = {
   DB: {} as D1Database,

@@ -5,6 +5,17 @@ import type { Username } from './queries'
 
 export type MockRecord = Partial<Username> & { name: string; username_canonical: string }
 
+export function createExecutionContext(
+  overrides: Partial<ExecutionContext> = {}
+): ExecutionContext {
+  return {
+    waitUntil: () => {},
+    passThroughOnException: () => {},
+    props: {},
+    ...overrides,
+  } as ExecutionContext
+}
+
 /**
  * Create a fake D1 database backed by in-memory records.
  *

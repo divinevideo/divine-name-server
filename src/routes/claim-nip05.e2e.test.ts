@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import username from './username'
 import nip05 from './nip05'
+import { createExecutionContext } from '../db/test-helpers'
 
 // Mock NIP-98 middleware
 vi.mock('../middleware/nip98', () => ({
@@ -265,11 +266,7 @@ function createTestApp() {
   return app
 }
 
-const mockEnv = {
-  waitUntil: () => {},
-  passThroughOnException: () => {},
-  props: {}
-}
+const mockEnv = createExecutionContext()
 
 describe('Claim → NIP-05 resolution (e2e)', () => {
   beforeEach(async () => {
@@ -413,11 +410,9 @@ describe('Claim → NIP-05 resolution (e2e)', () => {
       headers: { 'Authorization': 'Nostr base64...', 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'dave' })
     })
-    await app.fetch(claimReq, { DB: db }, {
+    await app.fetch(claimReq, { DB: db }, createExecutionContext({
       waitUntil: (p: Promise<any>) => { waitUntilPromises.push(p) },
-      passThroughOnException: () => {},
-      props: {}
-    })
+    }))
 
     // Flush waitUntil promises so Fastly sync mock gets called
     await Promise.all(waitUntilPromises)

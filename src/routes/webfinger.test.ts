@@ -3,7 +3,7 @@
 
 import { describe, it, expect, vi } from 'vitest'
 import worker from '../index'
-import { createFakeD1, type MockRecord } from '../db/test-helpers'
+import { createExecutionContext, createFakeD1, type MockRecord } from '../db/test-helpers'
 
 // The cron/scheduled path pulls in fastly-sync; mock it so importing the worker
 // doesn't drag in real network code. Route handlers under test don't use it.
@@ -33,7 +33,7 @@ const env = (db: D1Database) => ({
   ASSETS: { fetch: async () => new Response('not found', { status: 404 }) },
 } as any)
 
-const ctx = { waitUntil: () => {}, passThroughOnException: () => {}, props: {} } as ExecutionContext
+const ctx = createExecutionContext()
 
 describe('WebFinger', () => {
   it('returns a valid JRD for a known active username', async () => {
