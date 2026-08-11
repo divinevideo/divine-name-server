@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import username from './username'
+import { createExecutionContext } from '../db/test-helpers'
 
 // Mock NIP-98 middleware
 vi.mock('../middleware/nip98', () => ({
@@ -314,7 +315,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: 'MrBeast' })
     })
     
-    const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    const res = await app.fetch(req, { DB: db }, createExecutionContext())
 
     expect(res.status).toBe(200)
     const json = await res.json() as any
@@ -336,7 +337,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: 'MrBeast' })
     })
 
-    const res1 = await app.fetch(req1, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    const res1 = await app.fetch(req1, { DB: db }, createExecutionContext())
     expect(res1.status).toBe(200)
 
     // Second claim: mrbeast (should fail)
@@ -350,7 +351,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: 'mrbeast' })
     })
 
-    const res2 = await app.fetch(req2, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    const res2 = await app.fetch(req2, { DB: db }, createExecutionContext())
     expect(res2.status).toBe(409) // Conflict
     const json2 = await res2.json() as any
     expect(json2.error).toBe('That username is already taken')
@@ -371,7 +372,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: 'MrBeast' })
     })
 
-    const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    const res = await app.fetch(req, { DB: db }, createExecutionContext())
     // Without the pubkey normalization this is a 409 (treated as a different owner).
     expect(res.status).toBe(200)
   })
@@ -392,7 +393,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: 'newname' })
     })
 
-    const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    const res = await app.fetch(req, { DB: db }, createExecutionContext())
 
     expect(res.status).toBe(200)
     expect(db._mockUsernames.find(u => u.username_canonical === 'oldname')?.status).toBe('revoked')
@@ -414,7 +415,7 @@ describe('Username Claiming - Case Insensitive', () => {
       }
     })
 
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    const res = await app.fetch(req, { DB: createMockDB() }, createExecutionContext())
 
     expect(res.status).toBe(204)
     expect(res.headers.get('access-control-allow-methods') || '').toContain('POST')
@@ -428,7 +429,7 @@ describe('Username Claiming - Case Insensitive', () => {
       headers: { 'Origin': 'https://app.divine.video' }
     })
 
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    const res = await app.fetch(req, { DB: createMockDB() }, createExecutionContext())
 
     // Headers.get() joins duplicates with ", " — assert a single "*", not "*, *".
     expect(res.headers.get('access-control-allow-origin')).toBe('*')
@@ -447,7 +448,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: 'alice_123' })
     })
     
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    const res = await app.fetch(req, { DB: createMockDB() }, createExecutionContext())
     expect(res.status).toBe(400)
     const json = await res.json() as any
     expect(json.error).toContain('underscores')
@@ -465,7 +466,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: '-alice' })
     })
 
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    const res = await app.fetch(req, { DB: createMockDB() }, createExecutionContext())
     expect(res.status).toBe(400)
     const json = await res.json() as any
     expect(json.error).toContain("can't start or end with a hyphen")
@@ -483,7 +484,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: 'alice-' })
     })
 
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    const res = await app.fetch(req, { DB: createMockDB() }, createExecutionContext())
     expect(res.status).toBe(400)
     const json = await res.json() as any
     expect(json.error).toContain("can't start or end with a hyphen")
@@ -502,7 +503,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: 'm-r-beast-123' })
     })
     
-    const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    const res = await app.fetch(req, { DB: db }, createExecutionContext())
     expect(res.status).toBe(200)
     const json = await res.json() as any
     expect(json.name).toBe('m-r-beast-123')
@@ -521,7 +522,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: 'a' })
     })
 
-    const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    const res = await app.fetch(req, { DB: db }, createExecutionContext())
     expect(res.status).toBe(200)
   })
 
@@ -538,7 +539,7 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: longName })
     })
 
-    const res = await app.fetch(req, { DB: createMockDB() }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+    const res = await app.fetch(req, { DB: createMockDB() }, createExecutionContext())
     expect(res.status).toBe(400)
     const json = await res.json() as any
     expect(json.error).toContain('1–63 characters')
@@ -559,7 +560,9 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: 'oldname' })
     })
 
-    await app.fetch(req1, { DB: db }, { waitUntil: (p: Promise<any>) => { waitUntilCalls.push(p) }, passThroughOnException: () => {}, props: {} })
+    await app.fetch(req1, { DB: db }, createExecutionContext({
+      waitUntil: (p: Promise<any>) => { waitUntilCalls.push(p) },
+    }))
 
     // Second claim: "newname" (same pubkey)
     const { deleteUsernameFromFastly } = await import('../utils/fastly-sync')
@@ -574,7 +577,9 @@ describe('Username Claiming - Case Insensitive', () => {
       body: JSON.stringify({ name: 'newname' })
     })
 
-    const res2 = await app.fetch(req2, { DB: db }, { waitUntil: (p: Promise<any>) => { waitUntilCalls.push(p) }, passThroughOnException: () => {}, props: {} })
+    const res2 = await app.fetch(req2, { DB: db }, createExecutionContext({
+      waitUntil: (p: Promise<any>) => { waitUntilCalls.push(p) },
+    }))
     expect(res2.status).toBe(200)
 
     // Verify deleteUsernameFromFastly was called with the old name
@@ -601,7 +606,7 @@ describe('Public Username Endpoints', () => {
         method: 'GET'
       })
 
-      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+      const res = await app.fetch(req, { DB: db }, createExecutionContext())
       expect(res.status).toBe(200)
       const json = await res.json() as any
       expect(json.ok).toBe(true)
@@ -618,7 +623,7 @@ describe('Public Username Endpoints', () => {
         method: 'GET'
       })
 
-      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+      const res = await app.fetch(req, { DB: db }, createExecutionContext())
       expect(res.status).toBe(200)
       const json = await res.json() as any
       expect(json.ok).toBe(true)
@@ -639,7 +644,7 @@ describe('Public Username Endpoints', () => {
         method: 'GET'
       })
 
-      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+      const res = await app.fetch(req, { DB: db }, createExecutionContext())
       expect(res.status).toBe(200)
       const json = await res.json() as any
       expect(json.ok).toBe(true)
@@ -662,7 +667,7 @@ describe('Public Username Endpoints', () => {
         method: 'GET'
       })
 
-      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+      const res = await app.fetch(req, { DB: db }, createExecutionContext())
       expect(res.status).toBe(200)
       const json = await res.json() as any
       expect(json.ok).toBe(true)
@@ -682,7 +687,7 @@ describe('Public Username Endpoints', () => {
         method: 'GET'
       })
 
-      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+      const res = await app.fetch(req, { DB: db }, createExecutionContext())
       expect(res.status).toBe(200)
       const json = await res.json() as any
       expect(json.ok).toBe(true)
@@ -715,7 +720,7 @@ describe('Public Username Endpoints', () => {
         method: 'GET'
       })
 
-      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+      const res = await app.fetch(req, { DB: db }, createExecutionContext())
       expect(res.status).toBe(200)
       const json = await res.json() as any
       expect(json.ok).toBe(true)
@@ -732,7 +737,7 @@ describe('Public Username Endpoints', () => {
         method: 'GET'
       })
 
-      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+      const res = await app.fetch(req, { DB: db }, createExecutionContext())
       expect(res.status).toBe(200)
       const json = await res.json() as any
       expect(json.name).toBe('MrBeast')
@@ -750,7 +755,7 @@ describe('Public Username Endpoints', () => {
         method: 'GET'
       })
 
-      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+      const res = await app.fetch(req, { DB: db }, createExecutionContext())
       expect(res.status).toBe(200)
       const json = await res.json() as any
       expect(json.ok).toBe(true)
@@ -766,7 +771,7 @@ describe('Public Username Endpoints', () => {
         method: 'GET'
       })
 
-      const res = await app.fetch(req, { DB: db }, { waitUntil: () => {}, passThroughOnException: () => {}, props: {} })
+      const res = await app.fetch(req, { DB: db }, createExecutionContext())
       expect(res.status).toBe(400)
       const json = await res.json() as any
       expect(json.ok).toBe(false)
@@ -793,7 +798,7 @@ describe('Public Name Reservation', () => {
     return `cashuA${b64}`
   }
 
-  const mockEnv = { waitUntil: () => {}, passThroughOnException: () => {}, props: {} }
+  const mockEnv = createExecutionContext()
 
   describe('POST /reserve - Reserve username with email', () => {
     it('should create a reservation for an available username', async () => {
@@ -1166,7 +1171,7 @@ describe('POST /release - burn own username', () => {
     return app
   }
 
-  const ctx = { waitUntil: () => {}, passThroughOnException: () => {}, props: {} }
+  const ctx = createExecutionContext()
 
   function releaseReq(name: string) {
     return new Request('http://localhost/api/username/release', {

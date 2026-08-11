@@ -1,9 +1,21 @@
-// ABOUTME: Shared D1 fake for tests. Operates on in-memory data with
-// ABOUTME: lighter SQL-shape coupling and no bound-parameter position indexing.
+// ABOUTME: Shared test helpers: execution-context factory and D1 fake. The fake
+// ABOUTME: operates on in-memory data with lighter SQL-shape coupling and no
+// ABOUTME: bound-parameter position indexing.
 
 import type { Username } from './queries'
 
 export type MockRecord = Partial<Username> & { name: string; username_canonical: string }
+
+export function createExecutionContext(
+  overrides: Partial<ExecutionContext> = {}
+): ExecutionContext {
+  return {
+    waitUntil: () => {},
+    passThroughOnException: () => {},
+    props: {},
+    ...overrides,
+  } as ExecutionContext
+}
 
 /**
  * Create a fake D1 database backed by in-memory records.
