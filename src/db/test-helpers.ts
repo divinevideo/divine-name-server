@@ -1,5 +1,6 @@
-// ABOUTME: Shared D1 fake for tests. Operates on in-memory data with
-// ABOUTME: lighter SQL-shape coupling and no bound-parameter position indexing.
+// ABOUTME: Shared test helpers: execution-context factory and D1 fake. The fake
+// ABOUTME: operates on in-memory data with lighter SQL-shape coupling and no
+// ABOUTME: bound-parameter position indexing.
 
 import type { Username } from './queries'
 
