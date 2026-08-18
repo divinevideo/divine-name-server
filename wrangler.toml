@@ -45,6 +45,17 @@ database_id = "e7e081c4-830d-449c-9de5-d93eaacefb34"
 [triggers]
 crons = ["0 * * * *"]
 
+# Persist console.log / exceptions (including the hourly cron). Sample 100%
+# so the single scheduled run is not dropped.
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+invocation_logs = true
+head_sampling_rate = 1
+
 # Admin UI static assets (run_worker_first so public UI isn't overridden)
 [assets]
 directory = "./admin-ui/dist"
