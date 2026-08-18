@@ -321,6 +321,13 @@ describe('Username Claiming - Case Insensitive', () => {
     const json = await res.json() as any
     expect(json.ok).toBe(true)
     expect(json.name).toBe('MrBeast') // Display name preserved
+    expect(verifyNip98Event).toHaveBeenCalledWith(
+      expect.anything(),
+      'POST',
+      'http://localhost/api/username/claim',
+      JSON.stringify({ name: 'MrBeast' }),
+      300
+    )
   })
 
   it('should prevent case-insensitive collisions', async () => {

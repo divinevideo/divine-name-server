@@ -418,6 +418,13 @@ username.get('/confirm', async (c) => {
   }
 })
 
+// Keycast remote-signer RPC + clock skew: mobile stamps created_at before
+// sign_event, which can take tens of seconds. The default 60s NIP-98 window
+// then 401s with "Event timestamp too old or in future" after a successful
+// availability check. /release already used 300s for this; /claim is the
+// same signer path. Replay is still bound to method, URL, and payload hash.
+const KEYCAST_NIP98_MAX_AGE_SECONDS = 300
+
 username.post('/claim', async (c) => {
   try {
     // Read raw body text first (needed for NIP-98 payload verification)
@@ -432,7 +439,8 @@ username.post('/claim', async (c) => {
       c.req.raw.headers,
       'POST',
       url.toString(),
-      bodyText
+      bodyText,
+      KEYCAST_NIP98_MAX_AGE_SECONDS
     )).toLowerCase()
 
     // Parse request body
@@ -564,14 +572,10 @@ username.post('/release', async (c) => {
     const bodyText = await c.req.text()
 
     const url = new URL(c.req.url)
-    // Wider NIP-98 timestamp window than the default 60s: for vine-import
-    // users /release is often their first-ever NIP-98 call, and the mobile
-    // client stamps created_at before a remote-signer RPC that can take up to
-    // ~30s; with clock skew a 60s window yields systematic 401s that trap the
-    // whole account deletion. Safe to widen here because /release is idempotent
-    // (re-burning an already-burned name is a no-op) and self-scoped (only ever
-    // acts on the signer's own single active name).
-    const releaseNip98MaxAgeSeconds = 300
+    // Same 300s NIP-98 window as /claim (KEYCAST_NIP98_MAX_AGE_SECONDS).
+    // For vine-import users /release is often their first-ever NIP-98 call.
+    // Safe to widen: /release is idempotent (re-burning is a no-op) and
+    // self-scoped (only the signer's own active name).
     // Lowercase for parity with /claim; getUsernameByPubkey compares
     // case-insensitively, so this is defensive normalization.
     const pubkey = (
@@ -580,7 +584,7 @@ username.post('/release', async (c) => {
         'POST',
         url.toString(),
         bodyText,
-        releaseNip98MaxAgeSeconds
+        KEYCAST_NIP98_MAX_AGE_SECONDS
       )
     ).toLowerCase()
 
