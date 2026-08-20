@@ -37,6 +37,9 @@ function createMockDB(initialUsernames: any[] = []) {
           boundParams = params
           return {
             first: async () => {
+              if (sql.includes('FROM username_release_attempts')) {
+                return null
+              }
               // Spent Cashu proof lookup
               if (sql.includes('FROM spent_cashu_proofs WHERE proof_secret = ?')) {
                 const secret = boundParams[0]
@@ -281,6 +284,7 @@ function createMockDB(initialUsernames: any[] = []) {
         }
       }
     },
+    batch: async (statements: Array<{ run: () => Promise<any> }>) => Promise.all(statements.map(statement => statement.run())),
     // Expose internals for test assertions
     _mockUsernames: mockUsernames,
     _mockReservationTokens: mockReservationTokens
@@ -662,6 +666,18 @@ describe('Public Username Endpoints', () => {
       expect(json.reason).toBe('Username is already taken')
     })
 
+    it('does not disclose that an unavailable name has a pending release', async () => {
+      const app = createTestApp()
+      const db = createMockDB([{
+        id: 1, name: 'alice', username_display: 'alice', username_canonical: 'alice',
+        pubkey: 'a'.repeat(64), status: 'pending-release', reservation_expires_at: null
+      }])
+      const res = await app.fetch(new Request('http://localhost/api/username/check/alice'), { DB: db }, createExecutionContext())
+      expect(await res.json()).toEqual(expect.objectContaining({ available: false, code: 'taken', reason: 'Username is already taken' }))
+      const secondResponse = await app.fetch(new Request('http://localhost/api/username/check/alice'), { DB: db }, createExecutionContext())
+      expect(JSON.stringify(await secondResponse.json())).not.toContain('pending-release')
+    })
+
     it('should normalize active username pubkey to lowercase', async () => {
       const app = createTestApp()
       const ownerPubkeyUpper = 'A'.repeat(64)
@@ -930,6 +946,20 @@ describe('Public Name Reservation', () => {
       const json = await res.json() as any
       expect(json.ok).toBe(false)
       expect(json.error).toContain('already taken')
+    })
+
+    it('fails closed when reserving a pending-release username', async () => {
+      const app = createTestApp()
+      const db = createMockDB([{
+        id: 1, name: 'alice', username_display: 'alice', username_canonical: 'alice',
+        pubkey: 'a'.repeat(64), status: 'pending-release', reservation_expires_at: null
+      }])
+      const req = new Request('http://localhost/api/username/reserve', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'alice', email: 'alice@example.com' })
+      })
+      const res = await app.fetch(req, { DB: db }, mockEnv)
+      expect(res.status).toBe(409)
     })
 
     it('should reject reservation of a confirmed-reserved username', async () => {

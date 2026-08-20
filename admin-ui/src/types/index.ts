@@ -1,6 +1,6 @@
 export type ClaimSource = 'self-service' | 'admin' | 'bulk-upload' | 'vine-import' | 'public-reservation' | 'unknown'
 export type SearchSort = 'relevance' | 'newest' | 'oldest' | 'updated'
-export type UsernameStatus = 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation'
+export type UsernameStatus = 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'pending-release'
 
 export interface TagDetail {
   tag: string
@@ -139,6 +139,7 @@ export interface UsernameStats {
     revoked: number
     burned: number
     pending_confirmation: number
+    pending_release: number
   }
   metadata: {
     with_notes: number

@@ -14,7 +14,8 @@ The Worker owns the username registry, a public reservation and claiming flow, a
 - **ATProto handles** — Links a username to a `did:plc:` identity so `alice.divine.video` resolves as an ATProto handle (served by `divine-router` from the mirrored record).
 - **Admin console** — A React admin UI plus API for reserving, revoking, burning, assigning, restoring, and tagging usernames, with search, stats, and CSV export.
 - **Edge mirror** — Every change is reconciled to Fastly KV via a durable sync queue and an hourly cron, so edge reads stay consistent with the D1 source of truth.
-- **One active name per pubkey** — A partial unique index guarantees each pubkey holds at most one active username; claiming a new one auto-revokes the old one.
+- **Recoverable account deletion** — Username release uses an owner-authenticated prepare/rollback lifecycle and a service-authenticated permanent finalize step.
+- **One owned name per pubkey** — A partial unique index guarantees each pubkey holds at most one active or pending-release username; claiming a new one auto-revokes the old one.
 
 ## Architecture
 
@@ -54,7 +55,8 @@ Admin API routes are guarded on two axes:
 A scheduled handler runs hourly (`0 * * * *`):
 
 1. Expires unconfirmed reservations older than 48 hours.
-2. Reconciles usernames changed in the last six hours, plus anything left in the durable Fastly sync queue, into Fastly KV — syncing active names and deleting revoked/burned ones. Failures are re-queued with bounded retries.
+2. Restores abandoned pending username releases after their recorded 72-hour recovery deadline; expiry never burns a name.
+3. Reconciles usernames changed in the last six hours, plus anything left in the durable Fastly sync queue, into Fastly KV — syncing active names and deleting revoked, burned, or pending-release names. Versioned queue entries prevent an older edge operation from clearing newer desired state.
 
 ## Getting started
 
@@ -149,12 +151,28 @@ All endpoints send permissive CORS headers so the Divine web and Flutter clients
 | `POST` | `/api/username/reserve` | Reserve a name with email + Cashu payment or invite code. |
 | `GET` | `/api/username/confirm` | JSON email-confirmation callback for a reservation token. |
 | `POST` | `/api/username/claim` | Claim a name with NIP-98 auth. |
+| `POST` | `/api/username/release/prepare` | Hide and hold an owned name for an opaque deletion attempt. NIP-98 auth. |
+| `GET` | `/api/username/release/attempt` | Read the caller's latest durable release-attempt state. NIP-98 auth. |
+| `POST` | `/api/username/release/rollback` | Restore a recoverable pending release. NIP-98 auth. |
+| `POST` | `/api/username/release` | Legacy immediate permanent burn; retained while callers migrate, with removal tracked in #78. |
 
 #### POST /api/username/claim
 
 Claim a username by proving key ownership.
 
-**Authentication:** a NIP-98 event (kind `27235`) sent as `Authorization: Nostr <base64-event>`, with a `u` tag matching the request URL, a `method` tag matching `POST`, and a timestamp within 60 seconds.
+**Authentication:** a NIP-98 event (kind `27235`) sent as `Authorization: Nostr <base64-event>`, with a `u` tag matching the request URL, a `method` tag matching `POST`, and a timestamp within 300 seconds.
+
+#### Recoverable release lifecycle
+
+The deletion coordinator supplies one opaque 16–128 character attempt ID across services. Preparing changes the owned row from `active` to `pending-release`; the name stops resolving but remains owned and unavailable to claims. The authenticated owner may roll it back to `active`, or the trusted deletion coordinator may finalize it to non-recyclable `burned`. Replays of the same transition are safe. A finalized attempt cannot be rolled back.
+
+```text
+active --prepare--> pending-release --rollback--------> active / cancelled
+                              |--72h expiry restore---> active / expired-restored
+                              `--service finalize-----> burned / finalized
+```
+
+`POST /api/internal/username/release/finalize` accepts `{ "attempt_id": "..." }` with `Authorization: Bearer <DELETION_COORDINATOR_TOKEN>`. Set that credential with `wrangler secret put DELETION_COORDINATOR_TOKEN`; it is intentionally separate from `ATPROTO_SYNC_TOKEN`.
 
 **Request body:**
 
@@ -279,13 +297,17 @@ Migrations under `migrations/` define and evolve the schema (`0001_initial_schem
 | `username_canonical` | TEXT | Canonical (lowercased, punycode) form used for lookups |
 | `pubkey` | TEXT | Hex Nostr public key |
 | `relays` | TEXT | JSON array of relay hints (max 50) |
-| `status` | TEXT | `active`, `reserved`, `revoked`, `burned`, `pending-confirmation` |
+| `status` | TEXT | `active`, `reserved`, `revoked`, `burned`, `pending-confirmation`, `pending-release` |
 | `recyclable` | INTEGER | Whether a freed name can be reclaimed |
 | `atproto_did` / `atproto_state` | TEXT | ATProto handle linkage |
 | `created_at` / `updated_at` / `claimed_at` / `revoked_at` | INTEGER | Unix timestamps |
 | `reserved_reason` / `admin_notes` | TEXT | Admin metadata |
 
-A partial unique index enforces one `active` name per pubkey.
+A partial unique index enforces one owned (`active` or `pending-release`) name per pubkey.
+
+### username_release_attempts
+
+Durable audit records keyed by opaque deletion-attempt ID. Each record stores the canonical name, owner pubkey, state (`pending`, `cancelled`, `finalized`, or `expired-restored`), timestamps, explicit expiry, and service finalizer identity. Admins can inspect recent attempts through `GET /api/admin/username-release-attempts`.
 
 ### reserved_words
 

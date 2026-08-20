@@ -254,6 +254,8 @@ function createE2EMockDB(initialUsernames: Partial<MockUsername>[] = []) {
       }
     },
 
+    batch: async (statements: Array<{ run: () => Promise<any> }>) => Promise.all(statements.map(statement => statement.run())),
+
     // Expose the live array so tests can assert on DB state
     _mockUsernames: mockUsernames,
   } as unknown as D1Database & { _mockUsernames: MockUsername[] }

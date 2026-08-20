@@ -2,7 +2,7 @@
 // ABOUTME: Public endpoints: GET /check/:name, GET /by-pubkey/:pubkey, POST /reserve, GET /confirm
 // ABOUTME: Authenticated: POST /claim, POST /release (NIP-98 auth - works for both custodial and non-custodial users)
 
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { cors } from 'hono/cors'
 import { verifyNip98Event } from '../middleware/nip98'
 import { validateUsername, validateRelays, UsernameValidationError, RelayValidationError } from '../utils/validation'
@@ -19,6 +19,10 @@ import {
   findSpentProofs,
   storeSpentProofs,
   enqueueFastlySyncTask,
+  getLatestReleaseAttemptByPubkey,
+  getReleaseAttemptById,
+  prepareReleaseAttempt,
+  rollbackReleaseAttempt,
 } from '../db/queries'
 import { syncAndVerifyUsername, deleteUsernameFromFastly } from '../utils/fastly-sync'
 import { sendReservationConfirmationEmail } from '../utils/email'
@@ -31,6 +35,7 @@ import {
   CashuValidationError
 } from '../utils/cashu'
 import { getRegistrationPrice } from '../utils/pricing'
+import { reconcileUsernameFastly } from '../utils/username-fastly-reconcile'
 
 type Bindings = {
   DB: D1Database
@@ -104,6 +109,17 @@ username.get('/check/:name', async (c) => {
           available: true,
           name: usernameData.display,
           canonical: usernameData.canonical
+        }, 200, { 'Access-Control-Allow-Origin': '*' })
+      }
+
+      if (existing.status === 'pending-release') {
+        return c.json({
+          ok: true,
+          available: false,
+          name: usernameData.display,
+          canonical: usernameData.canonical,
+          code: 'taken',
+          reason: 'Username is already taken'
         }, 200, { 'Access-Control-Allow-Origin': '*' })
       }
 
@@ -260,6 +276,9 @@ username.post('/reserve', async (c) => {
         }
         if (existing.status === 'pending-confirmation') {
           return c.json({ ok: false, error: 'Username is pending email confirmation' }, 409, { 'Access-Control-Allow-Origin': '*' })
+        }
+        if (existing.status !== 'revoked') {
+          return c.json({ ok: false, error: 'Username is unavailable' }, 409, { 'Access-Control-Allow-Origin': '*' })
         }
       }
       // Expired pending-confirmation or revoked: allow re-reservation
@@ -424,6 +443,31 @@ username.get('/confirm', async (c) => {
 // availability check. /release already used 300s for this; /claim is the
 // same signer path. Replay is still bound to method, URL, and payload hash.
 const KEYCAST_NIP98_MAX_AGE_SECONDS = 300
+const RELEASE_ATTEMPT_ID_PATTERN = /^[A-Za-z0-9._~-]{16,128}$/
+
+async function authenticateReleaseRequest(c: Context<{ Bindings: Bindings }>, bodyText: string): Promise<string> {
+  return (await verifyNip98Event(
+    c.req.raw.headers,
+    c.req.method,
+    new URL(c.req.url).toString(),
+    bodyText,
+    KEYCAST_NIP98_MAX_AGE_SECONDS
+  )).toLowerCase()
+}
+
+function parseReleaseAttemptBody(bodyText: string): { name: string; attemptId: string } | null {
+  let body: unknown
+  try {
+    body = JSON.parse(bodyText)
+  } catch {
+    return null
+  }
+  if (typeof body !== 'object' || body === null) return null
+  const { name, attempt_id } = body as { name?: unknown; attempt_id?: unknown }
+  if (typeof name !== 'string' || name.trim().length === 0) return null
+  if (typeof attempt_id !== 'string' || !RELEASE_ATTEMPT_ID_PATTERN.test(attempt_id)) return null
+  return { name, attemptId: attempt_id }
+}
 
 username.post('/claim', async (c) => {
   try {
@@ -478,6 +522,11 @@ username.post('/claim', async (c) => {
       return c.json({ ok: false, error: 'Username is reserved' }, 403)
     }
 
+    const releaseAttempt = await getLatestReleaseAttemptByPubkey(c.env.DB, pubkey)
+    if (releaseAttempt?.state === 'pending') {
+      return c.json({ ok: false, error: 'Username release is pending', code: 'release_pending' }, 409)
+    }
+
     // Check if name exists (using canonical for lookup)
     const existing = await getUsernameByName(c.env.DB, nameCanonical)
     if (existing) {
@@ -493,7 +542,9 @@ username.post('/claim', async (c) => {
       if (existing.status === 'pending-confirmation') {
         return c.json({ ok: false, error: 'Username is pending email confirmation' }, 409)
       }
-      // If revoked and recyclable, allow claim (continue below)
+      if (existing.status !== 'revoked' && !(existing.status === 'active' && existing.pubkey?.toLowerCase() === pubkey)) {
+        return c.json({ ok: false, error: 'Username is unavailable' }, 409)
+      }
     }
 
     // Check if pubkey already has an active username
@@ -561,11 +612,111 @@ username.post('/claim', async (c) => {
     if (error instanceof Error && error.name === 'Nip98Error') {
       return c.json({ ok: false, error: error.message }, 401)
     }
+    if (error instanceof Error && error.message === 'USERNAME_NOT_CLAIMABLE') {
+      return c.json({ ok: false, error: 'Username is unavailable' }, 409)
+    }
     console.error('Claim error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
   }
 })
 
+username.post('/release/prepare', async (c) => {
+  try {
+    const bodyText = await c.req.text()
+    const pubkey = await authenticateReleaseRequest(c, bodyText)
+    const body = parseReleaseAttemptBody(bodyText)
+    if (!body) return c.json({ ok: false, error: 'name and a valid attempt_id are required' }, 400)
+
+    const requested = body.name.trim().toLowerCase()
+    const owned = await getUsernameByPubkey(c.env.DB, pubkey)
+    let latest = null
+    if (!owned) {
+      latest = await getLatestReleaseAttemptByPubkey(c.env.DB, pubkey)
+      if (latest?.state === 'pending' && latest.attempt_id !== body.attemptId) {
+        return c.json({ ok: false, error: 'A different release attempt is already pending', code: 'attempt_conflict' }, 409)
+      }
+    }
+    const canonical = (owned?.username_canonical || owned?.name || latest?.username_canonical || requested).toLowerCase()
+    const display = (owned?.username_display || owned?.name || '').toLowerCase()
+    if (requested !== canonical && (!owned || requested !== display)) {
+      return c.json({ ok: false, error: 'You do not own that username' }, 403)
+    }
+
+    const now = Math.floor(Date.now() / 1000)
+    const result = await prepareReleaseAttempt(c.env.DB, pubkey, canonical, body.attemptId, now + 72 * 60 * 60, now)
+    if (result.outcome === 'conflict') {
+      return c.json({ ok: false, error: 'Release attempt conflicts with existing state', code: 'attempt_conflict' }, 409)
+    }
+    if (result.outcome === 'not_found') {
+      return c.json({ ok: false, error: 'No eligible active username found', code: 'not_eligible' }, 409)
+    }
+    await reconcileUsernameFastly(c.env, canonical)
+    return c.json({
+      ok: true,
+      attempt_id: result.attempt.attempt_id,
+      name: result.username.username_display || result.username.name,
+      state: result.attempt.state,
+      expires_at: result.attempt.expires_at,
+    })
+  } catch (error) {
+    if (error instanceof Error && error.name === 'Nip98Error') return c.json({ ok: false, error: error.message }, 401)
+    console.error('Prepare release error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+username.get('/release/attempt', async (c) => {
+  try {
+    const pubkey = await authenticateReleaseRequest(c, '')
+    const attempt = await getLatestReleaseAttemptByPubkey(c.env.DB, pubkey)
+    if (!attempt) return c.json({ ok: true, found: false })
+    return c.json({
+      ok: true,
+      found: true,
+      attempt_id: attempt.attempt_id,
+      name: attempt.username_canonical,
+      state: attempt.state,
+      created_at: attempt.created_at,
+      expires_at: attempt.expires_at,
+    })
+  } catch (error) {
+    if (error instanceof Error && error.name === 'Nip98Error') return c.json({ ok: false, error: error.message }, 401)
+    console.error('Release attempt lookup error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+username.post('/release/rollback', async (c) => {
+  try {
+    const bodyText = await c.req.text()
+    const pubkey = await authenticateReleaseRequest(c, bodyText)
+    const body = parseReleaseAttemptBody(bodyText)
+    if (!body) return c.json({ ok: false, error: 'name and a valid attempt_id are required' }, 400)
+    const requested = body.name.trim().toLowerCase()
+    const attempt = await getReleaseAttemptById(c.env.DB, body.attemptId)
+    const canonical = attempt?.username_canonical || requested
+    if (attempt && attempt.pubkey.toLowerCase() === pubkey && requested !== canonical) {
+      const stored = await getUsernameByName(c.env.DB, canonical)
+      const display = (stored?.username_display || stored?.name || '').toLowerCase()
+      if (requested !== display) return c.json({ ok: false, error: 'Release attempt conflicts with existing state', code: 'attempt_conflict' }, 409)
+    }
+    const result = await rollbackReleaseAttempt(c.env.DB, pubkey, canonical, body.attemptId)
+    if (result.outcome === 'not_found') return c.json({ ok: false, error: 'Release attempt not found' }, 404)
+    if (result.outcome === 'conflict') {
+      const code = result.attempt?.state === 'finalized' ? 'already_finalized' : 'attempt_conflict'
+      return c.json({ ok: false, error: 'Release attempt cannot be rolled back', code }, 409)
+    }
+    await reconcileUsernameFastly(c.env, canonical)
+    return c.json({ ok: true, attempt_id: result.attempt.attempt_id, name: canonical, state: 'cancelled' })
+  } catch (error) {
+    if (error instanceof Error && error.name === 'Nip98Error') return c.json({ ok: false, error: error.message }, 401)
+    console.error('Rollback release error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+// TODO(#78): Remove this immediate-burn compatibility endpoint after clients
+// migrate to the recoverable release lifecycle above.
 username.post('/release', async (c) => {
   try {
     // Read raw body text first (needed for NIP-98 payload verification)

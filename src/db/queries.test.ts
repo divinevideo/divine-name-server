@@ -1,7 +1,7 @@
 // ABOUTME: Tests for database query functions
 // ABOUTME: Validates search functionality with fake D1 database
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { searchUsernames, claimUsername, assignUsername, createReservation, reserveUsername, revokeUsername, restoreUsername, addTag, removeTag, getTagsForUsername, getTagDetailsForUsername, getTagsForUsernames, getAllTags, getUsernameByName, getUsernameStats, updateAdminNotes, getActiveUsernamesPaginated, countActiveUsernames, enqueueFastlySyncTask, getQueuedFastlySyncTasks, clearFastlySyncTasks, markFastlySyncTaskFailures, type SearchParams, type Username } from './queries'
 import { createFakeD1, type MockRecord } from './test-helpers'
 
@@ -192,10 +192,11 @@ describe('claimUsername', () => {
         sqlStatements.push(sql)
         return {
           bind: (..._params: any[]) => ({
-            run: async () => ({ success: true }),
+            run: async () => ({ success: true, meta: { changes: 1 } }),
           }),
         }
       },
+      batch: async (statements: Array<{ run: () => Promise<any> }>) => Promise.all(statements.map(statement => statement.run())),
     } as unknown as D1Database
 
     await claimUsername(mockDB, 'TestUser', 'testuser', 'abc123', null)
@@ -212,10 +213,11 @@ describe('claimUsername', () => {
         sqlStatements.push(sql)
         return {
           bind: (..._params: any[]) => ({
-            run: async () => ({ success: true }),
+            run: async () => ({ success: true, meta: { changes: 1 } }),
           }),
         }
       },
+      batch: async (statements: Array<{ run: () => Promise<any> }>) => Promise.all(statements.map(statement => statement.run())),
     } as unknown as D1Database
 
     await claimUsername(mockDB, 'TestUser', 'testuser', 'abc123', null)
@@ -537,6 +539,7 @@ function createStatefulMockDB(initialRecords: Partial<Username>[] = []) {
         },
       }
     },
+    batch: async (statements: Array<{ run: () => Promise<any> }>) => Promise.all(statements.map(statement => statement.run())),
   } as unknown as D1Database & { _records: Partial<Username>[] }
 }
 
@@ -745,10 +748,11 @@ type QueueRow = {
   last_attempt_at: number | null
   attempt_count: number
   last_error: string | null
+  generation?: number
 }
 
 function createFastlyQueueMock(initialRows: QueueRow[] = []) {
-  const rows = [...initialRows]
+  const rows = initialRows.map(row => ({ ...row, generation: row.generation ?? 1 }))
 
   return {
     _rows: rows,
@@ -768,6 +772,7 @@ function createFastlyQueueMock(initialRows: QueueRow[] = []) {
                 last_attempt_at: null,
                 attempt_count: 0,
                 last_error: null,
+                generation: 1,
               })
               return { success: true, meta: { changes: 1 } }
             }
@@ -777,6 +782,7 @@ function createFastlyQueueMock(initialRows: QueueRow[] = []) {
             existing.payload_json = payloadJson
             existing.updated_at = updatedAt
             if (changed) {
+              existing.generation = (existing.generation || 1) + 1
               existing.queued_at = queuedAt
               existing.last_attempt_at = null
               existing.attempt_count = 0
@@ -791,6 +797,13 @@ function createFastlyQueueMock(initialRows: QueueRow[] = []) {
               if (usernames.has(rows[i].username_canonical)) rows.splice(i, 1)
             }
             return { success: true, meta: { changes: 1 } }
+          }
+
+          if (sql.includes('DELETE FROM fastly_sync_queue WHERE username_canonical = ? AND generation = ?')) {
+            const [username, generation] = params
+            const index = rows.findIndex(row => row.username_canonical === username && row.generation === generation)
+            if (index >= 0) rows.splice(index, 1)
+            return { success: true, meta: { changes: index >= 0 ? 1 : 0 } }
           }
 
           if (sql.includes('UPDATE fastly_sync_queue') && sql.includes('attempt_count = attempt_count + 1')) {
@@ -829,6 +842,16 @@ function createFastlyQueueMock(initialRows: QueueRow[] = []) {
 }
 
 describe('Fastly sync queue helpers', () => {
+  it('does not clear a newer desired-state generation after an older operation succeeds', async () => {
+    const db = createFastlyQueueMock([{
+      username_canonical: 'alice', action: 'delete', payload_json: null, queued_at: 100, updated_at: 100,
+      last_attempt_at: null, attempt_count: 0, last_error: null, generation: 2,
+    }])
+    await clearFastlySyncTasks(db, [{ username: 'alice', generation: 1 }])
+    expect(db._rows).toHaveLength(1)
+    await clearFastlySyncTasks(db, [{ username: 'alice', generation: 2 }])
+    expect(db._rows).toHaveLength(0)
+  })
   it('enqueueFastlySyncTask preserves attempt metadata for unchanged queued work', async () => {
     const db = createFastlyQueueMock([{
       username_canonical: 'alice',
@@ -926,8 +949,15 @@ describe('Fastly sync queue helpers', () => {
     expect(db._rows.find((row) => row.username_canonical === 'user-0')?.attempt_count).toBe(2)
     expect(db._rows.find((row) => row.username_canonical === 'user-0')?.last_error).toBe('second')
 
-    await clearFastlySyncTasks(db, db._rows.map((row) => row.username_canonical))
+    const batchSpy = vi.spyOn(db as unknown as { batch: (statements: unknown[]) => Promise<unknown> }, 'batch')
+
+    await clearFastlySyncTasks(db, db._rows.map((row) => ({ username: row.username_canonical, generation: row.generation || 1 })))
     expect(db._rows).toHaveLength(0)
+
+    // Generation scoping needs one predicate per task, but they still travel
+    // together: 501 deletes are two chunked batches, not 501 round trips.
+    expect(batchSpy).toHaveBeenCalledTimes(2)
+    expect(batchSpy.mock.calls.map(([statements]) => (statements as unknown[]).length)).toEqual([500, 1])
   })
 })
 
