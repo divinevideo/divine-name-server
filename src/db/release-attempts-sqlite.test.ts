@@ -58,6 +58,26 @@ describe.skipIf(!sqliteAvailable())('release attempts against real SQLite', () =
     expect((await getUsernameByName(db, 'alice'))?.status).toBe('pending-release')
   })
 
+  it('reports the pending attempt when a cancelled one shares its timestamp', async () => {
+    const { db } = withOwnedName()
+    // created_at is whole seconds, so a cancel-and-retry inside one second
+    // leaves two attempts with the same value. Attempt ids are opaque and
+    // client-chosen, so the cancelled one can sort after the live one.
+    const cancelled = 'delete-attempt-zzzzzzzz'
+    const pending = 'delete-attempt-aaaaaaaa'
+
+    await prepareReleaseAttempt(db, OWNER, 'alice', cancelled, 999, 100)
+    await rollbackReleaseAttempt(db, OWNER, 'alice', cancelled, 'cancelled', 100)
+    expect((await prepareReleaseAttempt(db, OWNER, 'alice', pending, 999, 100)).outcome).toBe('transitioned')
+
+    // /claim gates on this lookup reporting 'pending'. If it returns the
+    // cancelled attempt instead, the claim proceeds and collides with the
+    // pending-release row on idx_usernames_pubkey_owned.
+    const latest = await getLatestReleaseAttemptByPubkey(db, OWNER)
+    expect(latest?.attempt_id).toBe(pending)
+    expect(latest?.state).toBe('pending')
+  })
+
   it('leaves the name untouched when the caller does not own it', async () => {
     const { db } = withOwnedName()
     const result = await prepareReleaseAttempt(db, OTHER, 'alice', ATTEMPT, 999, 100)

@@ -141,10 +141,14 @@ export async function getLatestReleaseAttemptByPubkey(
   db: D1Database,
   pubkey: string
 ): Promise<UsernameReleaseAttempt | null> {
+  // A pubkey has at most one pending attempt (partial unique index), and callers
+  // gate on that state. created_at is whole seconds, so a cancel-and-retry inside
+  // one second ties and falls through to attempt_id, which is client-chosen and
+  // could surface the cancelled attempt instead. Rank pending first.
   return db.prepare(
     `SELECT * FROM username_release_attempts
      WHERE LOWER(pubkey) = LOWER(?)
-     ORDER BY created_at DESC, attempt_id DESC LIMIT 1`
+     ORDER BY (state = 'pending') DESC, created_at DESC, attempt_id DESC LIMIT 1`
   ).bind(pubkey).first<UsernameReleaseAttempt>()
 }
 
