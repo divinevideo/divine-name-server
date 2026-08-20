@@ -14,7 +14,7 @@ export interface Username {
   pubkey: string | null
   email: string | null
   relays: string | null
-  status: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation'
+  status: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'pending-release'
   recyclable: number
   created_at: number
   updated_at: number
@@ -46,7 +46,7 @@ export interface ReservationToken {
 
 export interface SearchParams {
   query: string
-  status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'recovered'
+  status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'pending-release' | 'recovered'
   tag?: string
   sort?: SearchSort
   page?: number
@@ -64,11 +64,27 @@ export interface SearchResult {
 }
 
 export interface FastlySyncQueueTask extends SyncItem {
+  generation: number
   queued_at: number
   updated_at: number
   last_attempt_at: number | null
   attempt_count: number
   last_error: string | null
+}
+
+export type ReleaseAttemptState = 'pending' | 'cancelled' | 'finalized' | 'expired-restored'
+
+export interface UsernameReleaseAttempt {
+  attempt_id: string
+  username_canonical: string
+  pubkey: string
+  state: ReleaseAttemptState
+  created_at: number
+  updated_at: number
+  expires_at: number
+  cancelled_at: number | null
+  finalized_at: number | null
+  finalized_by: string | null
 }
 
 export interface RestoreUsernameResult {
@@ -112,6 +128,193 @@ export async function getUsernameByPubkey(
   return result
 }
 
+export async function getReleaseAttemptById(
+  db: D1Database,
+  attemptId: string
+): Promise<UsernameReleaseAttempt | null> {
+  return db.prepare(
+    'SELECT * FROM username_release_attempts WHERE attempt_id = ?'
+  ).bind(attemptId).first<UsernameReleaseAttempt>()
+}
+
+export async function getLatestReleaseAttemptByPubkey(
+  db: D1Database,
+  pubkey: string
+): Promise<UsernameReleaseAttempt | null> {
+  return db.prepare(
+    `SELECT * FROM username_release_attempts
+     WHERE LOWER(pubkey) = LOWER(?)
+     ORDER BY created_at DESC, attempt_id DESC LIMIT 1`
+  ).bind(pubkey).first<UsernameReleaseAttempt>()
+}
+
+export type ReleaseTransitionResult =
+  | { outcome: 'transitioned' | 'replayed'; attempt: UsernameReleaseAttempt; username: Username }
+  | { outcome: 'conflict'; attempt?: UsernameReleaseAttempt }
+  | { outcome: 'not_found'; attempt?: UsernameReleaseAttempt }
+
+export async function prepareReleaseAttempt(
+  db: D1Database,
+  pubkey: string,
+  usernameCanonical: string,
+  attemptId: string,
+  expiresAt: number,
+  now = Math.floor(Date.now() / 1000)
+): Promise<ReleaseTransitionResult> {
+  const existing = await getReleaseAttemptById(db, attemptId)
+  if (existing) {
+    if (existing.pubkey.toLowerCase() !== pubkey.toLowerCase() || existing.username_canonical !== usernameCanonical) {
+      return { outcome: 'conflict' }
+    }
+    const username = await getUsernameByName(db, usernameCanonical)
+    if (existing.state === 'pending' && username?.status === 'pending-release') {
+      return { outcome: 'replayed', attempt: existing, username }
+    }
+    return { outcome: 'conflict', attempt: existing }
+  }
+
+  const insertAttempt = db.prepare(
+    `INSERT OR IGNORE INTO username_release_attempts (
+       attempt_id, username_canonical, pubkey, state, created_at, updated_at, expires_at
+     )
+     SELECT ?, username_canonical, pubkey, 'pending', ?, ?, ?
+     FROM usernames
+     WHERE username_canonical = ? AND LOWER(pubkey) = LOWER(?) AND status = 'active'`
+  ).bind(attemptId, now, now, expiresAt, usernameCanonical, pubkey)
+  const markPending = db.prepare(
+    `UPDATE usernames
+     SET status = 'pending-release', updated_at = ?
+     WHERE username_canonical = ? AND LOWER(pubkey) = LOWER(?) AND status = 'active'
+       AND EXISTS (
+         SELECT 1 FROM username_release_attempts
+         WHERE attempt_id = ? AND username_canonical = ?
+           AND LOWER(pubkey) = LOWER(?) AND state = 'pending'
+       )`
+  ).bind(now, usernameCanonical, pubkey, attemptId, usernameCanonical, pubkey)
+
+  const [insertResult, updateResult] = await db.batch([insertAttempt, markPending])
+  const attempt = await getReleaseAttemptById(db, attemptId)
+  const username = await getUsernameByName(db, usernameCanonical)
+  if (!insertResult.meta?.changes || !updateResult.meta?.changes) {
+    if (attempt && attempt.pubkey.toLowerCase() === pubkey.toLowerCase() &&
+        attempt.username_canonical === usernameCanonical && attempt.state === 'pending' &&
+        username?.status === 'pending-release') {
+      return { outcome: 'replayed', attempt, username }
+    }
+    const pendingForPubkey = await getLatestReleaseAttemptByPubkey(db, pubkey)
+    return pendingForPubkey?.state === 'pending' || attempt ? { outcome: 'conflict', attempt: attempt || undefined } : { outcome: 'not_found' }
+  }
+  if (!attempt || !username) return { outcome: 'not_found' }
+  return { outcome: 'transitioned', attempt, username }
+}
+
+export async function rollbackReleaseAttempt(
+  db: D1Database,
+  pubkey: string,
+  usernameCanonical: string,
+  attemptId: string,
+  terminalState: 'cancelled' | 'expired-restored' = 'cancelled',
+  now = Math.floor(Date.now() / 1000)
+): Promise<ReleaseTransitionResult> {
+  const existing = await getReleaseAttemptById(db, attemptId)
+  if (!existing) return { outcome: 'not_found' }
+  if (existing.pubkey.toLowerCase() !== pubkey.toLowerCase() || existing.username_canonical !== usernameCanonical) {
+    return { outcome: 'conflict' }
+  }
+  const currentUsername = await getUsernameByName(db, usernameCanonical)
+  if (existing.state === terminalState && currentUsername?.status === 'active') {
+    return { outcome: 'replayed', attempt: existing, username: currentUsername }
+  }
+  if (existing.state !== 'pending') return { outcome: 'conflict', attempt: existing }
+
+  const restore = db.prepare(
+    `UPDATE usernames SET status = 'active', revoked_at = NULL, updated_at = ?
+     WHERE username_canonical = ? AND LOWER(pubkey) = LOWER(?) AND status = 'pending-release'
+       AND EXISTS (SELECT 1 FROM username_release_attempts WHERE attempt_id = ? AND state = 'pending')`
+  ).bind(now, usernameCanonical, pubkey, attemptId)
+  const finishAttempt = db.prepare(
+    `UPDATE username_release_attempts
+     SET state = ?, updated_at = ?, cancelled_at = ?
+     WHERE attempt_id = ? AND state = 'pending'
+       AND EXISTS (SELECT 1 FROM usernames WHERE username_canonical = ? AND status = 'active')`
+  ).bind(terminalState, now, now, attemptId, usernameCanonical)
+  const [restoreResult, attemptResult] = await db.batch([restore, finishAttempt])
+  const attempt = await getReleaseAttemptById(db, attemptId)
+  const username = await getUsernameByName(db, usernameCanonical)
+  if (!restoreResult.meta?.changes || !attemptResult.meta?.changes) {
+    if (attempt?.state === terminalState && username?.status === 'active') {
+      return { outcome: 'replayed', attempt, username }
+    }
+    return { outcome: 'conflict', attempt: attempt || undefined }
+  }
+  if (!attempt || !username) return { outcome: 'conflict' }
+  return { outcome: 'transitioned', attempt, username }
+}
+
+export async function finalizeReleaseAttempt(
+  db: D1Database,
+  attemptId: string,
+  finalizedBy: string,
+  now = Math.floor(Date.now() / 1000)
+): Promise<ReleaseTransitionResult> {
+  const existing = await getReleaseAttemptById(db, attemptId)
+  if (!existing) return { outcome: 'not_found' }
+  const currentUsername = await getUsernameByName(db, existing.username_canonical)
+  if (existing.state === 'finalized' && currentUsername?.status === 'burned') {
+    return { outcome: 'replayed', attempt: existing, username: currentUsername }
+  }
+  if (existing.state !== 'pending') return { outcome: 'conflict', attempt: existing }
+
+  const burn = db.prepare(
+    `UPDATE usernames
+     SET status = 'burned', recyclable = 0, revoked_at = ?, updated_at = ?
+     WHERE username_canonical = ? AND LOWER(pubkey) = LOWER(?) AND status = 'pending-release'
+       AND EXISTS (SELECT 1 FROM username_release_attempts WHERE attempt_id = ? AND state = 'pending')`
+  ).bind(now, now, existing.username_canonical, existing.pubkey, attemptId)
+  const finishAttempt = db.prepare(
+    `UPDATE username_release_attempts
+     SET state = 'finalized', updated_at = ?, finalized_at = ?, finalized_by = ?
+     WHERE attempt_id = ? AND state = 'pending'
+       AND EXISTS (SELECT 1 FROM usernames WHERE username_canonical = ? AND status = 'burned')`
+  ).bind(now, now, finalizedBy, attemptId, existing.username_canonical)
+  const [burnResult, attemptResult] = await db.batch([burn, finishAttempt])
+  const attempt = await getReleaseAttemptById(db, attemptId)
+  const username = await getUsernameByName(db, existing.username_canonical)
+  if (!burnResult.meta?.changes || !attemptResult.meta?.changes) {
+    if (attempt?.state === 'finalized' && username?.status === 'burned') {
+      return { outcome: 'replayed', attempt, username }
+    }
+    return { outcome: 'conflict', attempt: attempt || undefined }
+  }
+  if (!attempt || !username) return { outcome: 'conflict' }
+  return { outcome: 'transitioned', attempt, username }
+}
+
+export async function getStaleReleaseAttempts(
+  db: D1Database,
+  now = Math.floor(Date.now() / 1000),
+  limit = 100
+): Promise<UsernameReleaseAttempt[]> {
+  const result = await db.prepare(
+    `SELECT * FROM username_release_attempts
+     WHERE state = 'pending' AND expires_at <= ?
+     ORDER BY expires_at ASC LIMIT ?`
+  ).bind(now, limit).all<UsernameReleaseAttempt>()
+  return result.results
+}
+
+export async function listReleaseAttempts(
+  db: D1Database,
+  state?: ReleaseAttemptState,
+  limit = 100
+): Promise<UsernameReleaseAttempt[]> {
+  const statement = state
+    ? db.prepare(`SELECT * FROM username_release_attempts WHERE state = ? ORDER BY updated_at DESC LIMIT ?`).bind(state, limit)
+    : db.prepare(`SELECT * FROM username_release_attempts ORDER BY updated_at DESC LIMIT ?`).bind(limit)
+  const result = await statement.all<UsernameReleaseAttempt>()
+  return result.results
+}
+
 export async function claimUsername(
   db: D1Database,
   nameDisplay: string,
@@ -122,18 +325,28 @@ export async function claimUsername(
   const now = Math.floor(Date.now() / 1000)
   const relaysJson = relays ? JSON.stringify(relays) : null
 
-  // First, revoke any existing active username for this pubkey.
-  // Legacy rows may contain mixed-case hex pubkeys, so match case-insensitively.
-  await db.prepare(
+  // Keep the release and claim in one D1 transaction. The EXISTS predicate is
+  // repeated in both statements so an unavailable (including pending-release)
+  // target can never cause the caller's current name to be revoked.
+  const releaseCurrent = db.prepare(
     `UPDATE usernames
      SET status = 'revoked',
          revoked_at = ?,
          updated_at = ?
-     WHERE LOWER(pubkey) = LOWER(?) AND status = 'active'`
-  ).bind(now, now, pubkey).run()
+     WHERE LOWER(pubkey) = LOWER(?) AND status = 'active'
+       AND username_canonical != ?
+       AND (
+         NOT EXISTS (SELECT 1 FROM usernames WHERE username_canonical = ?)
+         OR EXISTS (
+           SELECT 1 FROM usernames
+           WHERE username_canonical = ?
+             AND (status = 'revoked' OR (status = 'active' AND LOWER(pubkey) = LOWER(?)))
+         )
+       )`
+  ).bind(now, now, pubkey, nameCanonical, nameCanonical, nameCanonical, pubkey)
 
   // Then insert or update the new username using canonical for uniqueness
-  await db.prepare(
+  const claimTarget = db.prepare(
     `INSERT INTO usernames (name, username_display, username_canonical, pubkey, relays, status, claim_source, created_at, updated_at, claimed_at)
      VALUES (?, ?, ?, ?, ?, 'active', 'self-service', ?, ?, ?)
      ON CONFLICT(username_canonical) DO UPDATE SET
@@ -146,8 +359,15 @@ export async function claimUsername(
        created_by = NULL,
        revoked_at = NULL,
        updated_at = excluded.updated_at,
-       claimed_at = excluded.claimed_at`
-  ).bind(nameCanonical, nameDisplay, nameCanonical, pubkey, relaysJson, now, now, now).run()
+       claimed_at = excluded.claimed_at
+     WHERE usernames.status = 'revoked'
+        OR (usernames.status = 'active' AND LOWER(usernames.pubkey) = LOWER(excluded.pubkey))`
+  ).bind(nameCanonical, nameDisplay, nameCanonical, pubkey, relaysJson, now, now, now)
+
+  const [, claimResult] = await db.batch([releaseCurrent, claimTarget])
+  if (!claimResult.meta || claimResult.meta.changes === 0) {
+    throw new Error('USERNAME_NOT_CLAIMABLE')
+  }
 }
 
 export async function getActiveUsernamesPaginated(
@@ -188,7 +408,7 @@ export async function getUsernamesUpdatedSince(
   sinceEpoch: number
 ): Promise<Username[]> {
   const result = await db.prepare(
-    `SELECT * FROM usernames WHERE updated_at >= ? AND status IN ('active', 'revoked', 'burned')`
+    `SELECT * FROM usernames WHERE updated_at >= ? AND status IN ('active', 'revoked', 'burned', 'pending-release')`
   ).bind(sinceEpoch).all<Username>()
 
   return result.results
@@ -203,8 +423,8 @@ export async function enqueueFastlySyncTask(
 
   await db.prepare(
     `INSERT INTO fastly_sync_queue (
-       username_canonical, action, payload_json, queued_at, updated_at, last_attempt_at, attempt_count, last_error
-     ) VALUES (?, ?, ?, ?, ?, NULL, 0, NULL)
+       username_canonical, action, payload_json, queued_at, updated_at, last_attempt_at, attempt_count, last_error, generation
+     ) VALUES (?, ?, ?, ?, ?, NULL, 0, NULL, 1)
      ON CONFLICT(username_canonical) DO UPDATE SET
        action = excluded.action,
        payload_json = excluded.payload_json,
@@ -215,6 +435,12 @@ export async function enqueueFastlySyncTask(
          ELSE fastly_sync_queue.queued_at
        END,
        updated_at = excluded.updated_at,
+       generation = CASE
+         WHEN fastly_sync_queue.action != excluded.action
+           OR COALESCE(fastly_sync_queue.payload_json, '') != COALESCE(excluded.payload_json, '')
+         THEN fastly_sync_queue.generation + 1
+         ELSE fastly_sync_queue.generation
+       END,
        last_attempt_at = CASE
          WHEN fastly_sync_queue.action != excluded.action
            OR COALESCE(fastly_sync_queue.payload_json, '') != COALESCE(excluded.payload_json, '')
@@ -241,7 +467,7 @@ export async function getQueuedFastlySyncTasks(
   limit = 1000
 ): Promise<FastlySyncQueueTask[]> {
   const result = await db.prepare(
-    `SELECT username_canonical, action, payload_json, queued_at, updated_at, last_attempt_at, attempt_count, last_error
+    `SELECT username_canonical, action, payload_json, queued_at, updated_at, last_attempt_at, attempt_count, last_error, generation
      FROM fastly_sync_queue
      ORDER BY updated_at ASC
      LIMIT ?`
@@ -254,6 +480,7 @@ export async function getQueuedFastlySyncTasks(
     last_attempt_at: number | null
     attempt_count: number
     last_error: string | null
+    generation: number
   }>()
 
   return result.results.map((row) => ({
@@ -265,21 +492,54 @@ export async function getQueuedFastlySyncTasks(
     last_attempt_at: row.last_attempt_at,
     attempt_count: row.attempt_count,
     last_error: row.last_error,
+    generation: row.generation,
   }))
+}
+
+export async function getQueuedFastlySyncTask(
+  db: D1Database,
+  usernameCanonical: string
+): Promise<FastlySyncQueueTask | null> {
+  const tasks = await db.prepare(
+    `SELECT username_canonical, action, payload_json, queued_at, updated_at,
+            last_attempt_at, attempt_count, last_error, generation
+     FROM fastly_sync_queue WHERE username_canonical = ?`
+  ).bind(usernameCanonical).all<{
+    username_canonical: string
+    action: 'sync' | 'delete'
+    payload_json: string | null
+    queued_at: number
+    updated_at: number
+    last_attempt_at: number | null
+    attempt_count: number
+    last_error: string | null
+    generation: number
+  }>()
+  const row = tasks.results[0]
+  if (!row) return null
+  return {
+    username: row.username_canonical,
+    action: row.action,
+    data: row.payload_json ? JSON.parse(row.payload_json) as UsernameKVData : undefined,
+    queued_at: row.queued_at,
+    updated_at: row.updated_at,
+    last_attempt_at: row.last_attempt_at,
+    attempt_count: row.attempt_count,
+    last_error: row.last_error,
+    generation: row.generation,
+  }
 }
 
 export async function clearFastlySyncTasks(
   db: D1Database,
-  usernames: string[]
+  tasks: Array<{ username: string; generation: number }>
 ): Promise<void> {
-  if (usernames.length === 0) return
+  if (tasks.length === 0) return
 
-  for (let i = 0; i < usernames.length; i += 500) {
-    const chunk = usernames.slice(i, i + 500)
-    const placeholders = chunk.map(() => '?').join(', ')
+  for (const task of tasks) {
     await db.prepare(
-      `DELETE FROM fastly_sync_queue WHERE username_canonical IN (${placeholders})`
-    ).bind(...chunk).run()
+      'DELETE FROM fastly_sync_queue WHERE username_canonical = ? AND generation = ?'
+    ).bind(task.username, task.generation).run()
   }
 }
 
@@ -673,7 +933,7 @@ export async function deleteReservedWord(
 
 export async function exportUsernamesByStatus(
   db: D1Database,
-  status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'recovered'
+  status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'pending-release' | 'recovered'
 ): Promise<Username[]> {
   if (status === 'recovered') {
     const result = await db.prepare(
@@ -936,6 +1196,7 @@ export interface UsernameStats {
     revoked: number
     burned: number
     pending_confirmation: number
+    pending_release: number
   }
   metadata: {
     with_notes: number
@@ -966,6 +1227,7 @@ export async function getUsernameStats(db: D1Database): Promise<UsernameStats> {
          SUM(CASE WHEN u.status = 'revoked' THEN 1 ELSE 0 END) AS revoked_count,
          SUM(CASE WHEN u.status = 'burned' THEN 1 ELSE 0 END) AS burned_count,
          SUM(CASE WHEN u.status = 'pending-confirmation' THEN 1 ELSE 0 END) AS pending_confirmation_count,
+         SUM(CASE WHEN u.status = 'pending-release' THEN 1 ELSE 0 END) AS pending_release_count,
          SUM(CASE WHEN u.admin_notes IS NOT NULL AND TRIM(u.admin_notes) != '' THEN 1 ELSE 0 END) AS with_notes_count,
          SUM(CASE WHEN tagged.username_id IS NOT NULL THEN 1 ELSE 0 END) AS with_tags_count,
          SUM(CASE WHEN tagged.username_id IS NULL THEN 1 ELSE 0 END) AS untagged_count,
@@ -988,6 +1250,7 @@ export async function getUsernameStats(db: D1Database): Promise<UsernameStats> {
       revoked_count: number
       burned_count: number
       pending_confirmation_count: number
+      pending_release_count: number
       with_notes_count: number
       with_tags_count: number
       untagged_count: number
@@ -1009,6 +1272,7 @@ export async function getUsernameStats(db: D1Database): Promise<UsernameStats> {
     revoked_count: 0,
     burned_count: 0,
     pending_confirmation_count: 0,
+    pending_release_count: 0,
     with_notes_count: 0,
     with_tags_count: 0,
     untagged_count: 0,
@@ -1027,6 +1291,7 @@ export async function getUsernameStats(db: D1Database): Promise<UsernameStats> {
       revoked: stats.revoked_count,
       burned: stats.burned_count,
       pending_confirmation: stats.pending_confirmation_count,
+      pending_release: stats.pending_release_count,
     },
     metadata: {
       with_notes: stats.with_notes_count,

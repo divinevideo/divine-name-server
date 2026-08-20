@@ -10,7 +10,8 @@ import admin from './routes/admin'
 // Auth routes are mounted inside admin.ts (same Hono app, exempt from auth middleware)
 import publicRoutes from './routes/public'
 import internalAtproto from './routes/internal-atproto'
-import { getUsernamesUpdatedSince, expireStaleReservations, getQueuedFastlySyncTasks, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures } from './db/queries'
+import internalDeletion from './routes/internal-deletion'
+import { getUsernamesUpdatedSince, expireStaleReservations, getQueuedFastlySyncTasks, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, getStaleReleaseAttempts, rollbackReleaseAttempt } from './db/queries'
 import { syncBatch, parseRelayHints, type UsernameKVData } from './utils/fastly-sync'
 
 type Bindings = {
@@ -21,6 +22,7 @@ type Bindings = {
   FASTLY_API_TOKEN?: string
   FASTLY_STORE_ID?: string
   ATPROTO_SYNC_TOKEN?: string
+  DELETION_COORDINATOR_TOKEN?: string
   KEYCAST_URL?: string
   KEYCAST_CLIENT_ID?: string
   AP_ACTOR_BASE_URL?: string
@@ -64,6 +66,7 @@ app.route('/api/admin', admin)
 
 // Internal service API (service-authenticated bearer token)
 app.route('/api/internal', internalAtproto)
+app.route('/api/internal', internalDeletion)
 
 // NIP-05
 app.route('', nip05)
@@ -110,6 +113,22 @@ export default {
       console.log(`Cron: expired ${expired} stale pending-confirmation reservations`)
     }
 
+    const staleReleaseAttempts = await getStaleReleaseAttempts(env.DB)
+    let restoredReleaseAttempts = 0
+    for (const attempt of staleReleaseAttempts) {
+      const result = await rollbackReleaseAttempt(
+        env.DB,
+        attempt.pubkey,
+        attempt.username_canonical,
+        attempt.attempt_id,
+        'expired-restored'
+      )
+      if (result.outcome === 'transitioned' || result.outcome === 'replayed') restoredReleaseAttempts += 1
+    }
+    if (restoredReleaseAttempts > 0) {
+      console.log(`Cron: restored ${restoredReleaseAttempts} expired username release attempts`)
+    }
+
     // Six-hour overlap covers delayed cron firings while the durable queue
     // preserves retries for anything that still fails after bounded Fastly retries.
     const sixHoursAgo = Math.floor(Date.now() / 1000) - (6 * 60 * 60)
@@ -139,7 +158,7 @@ export default {
             atproto_state: user.atproto_state,
           },
         })
-      } else if (user.status === 'revoked' || user.status === 'burned') {
+      } else if (user.status === 'revoked' || user.status === 'burned' || user.status === 'pending-release') {
         itemsByUsername.set(user.username_canonical || user.name, {
           username: user.username_canonical || user.name,
           action: 'delete',
@@ -149,7 +168,16 @@ export default {
 
     const items = Array.from(itemsByUsername.values())
     const results = await syncBatch(env, items, { concurrency: 10 })
-    await clearFastlySyncTasks(env.DB, results.successes.map(result => result.username))
+    const queuedByUsername = new Map(queuedTasks.map(task => [task.username, task]))
+    const completedQueuedTasks = results.successes.flatMap(result => {
+      const queued = queuedByUsername.get(result.username)
+      const attempted = itemsByUsername.get(result.username)
+      if (!queued || !attempted) return []
+      const sameAction = queued.action === attempted.action
+      const samePayload = JSON.stringify(queued.data || null) === JSON.stringify(attempted.data || null)
+      return sameAction && samePayload ? [{ username: queued.username, generation: queued.generation }] : []
+    })
+    await clearFastlySyncTasks(env.DB, completedQueuedTasks)
     for (const failure of results.failures) {
       const item = itemsByUsername.get(failure.username)
       if (item) {

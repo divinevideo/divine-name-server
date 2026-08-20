@@ -14,10 +14,12 @@ export default function StatusBadge({ status, isRecovered }: StatusBadgeProps) {
     revoked: 'bg-gray-100 text-gray-800',
     burned: 'bg-red-100 text-red-800',
     'pending-confirmation': 'bg-cyan-100 text-cyan-800',
+    'pending-release': 'bg-orange-100 text-orange-800',
     recovered: 'bg-purple-100 text-purple-800'
   }
   const labels: Record<string, string> = {
     'pending-confirmation': 'pending confirmation',
+    'pending-release': 'pending release',
   }
 
   const displayStatus = isRecovered ? 'recovered' : status

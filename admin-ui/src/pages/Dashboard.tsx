@@ -170,6 +170,7 @@ export default function Dashboard() {
             { label: 'Active', value: stats.totals.active, tone: 'bg-green-50 border-green-200 text-green-900' },
             { label: 'Reserved', value: stats.totals.reserved, tone: 'bg-yellow-50 border-yellow-200 text-yellow-900' },
             { label: 'Pending Confirm.', value: stats.totals.pending_confirmation, tone: 'bg-cyan-50 border-cyan-200 text-cyan-900' },
+            { label: 'Pending Release', value: stats.totals.pending_release, tone: 'bg-orange-50 border-orange-200 text-orange-900' },
             { label: 'With Notes', value: stats.metadata.with_notes, tone: 'bg-blue-50 border-blue-200 text-blue-900' },
             { label: 'With Tags', value: stats.metadata.with_tags, tone: 'bg-indigo-50 border-indigo-200 text-indigo-900' },
             { label: 'Untagged', value: stats.metadata.untagged, tone: 'bg-orange-50 border-orange-200 text-orange-900' },
@@ -220,6 +221,7 @@ export default function Dashboard() {
               <option value="active">Active</option>
               <option value="reserved">Reserved</option>
               <option value="pending-confirmation">Pending Confirmation</option>
+              <option value="pending-release">Pending Release</option>
               <option value="recovered">Recovered (Vine)</option>
               <option value="revoked">Revoked</option>
               <option value="burned">Burned</option>

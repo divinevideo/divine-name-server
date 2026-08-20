@@ -5,14 +5,14 @@ import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
 import { bech32 } from '@scure/base'
 import { getSession } from '../auth/keycast-oauth'
-import { reserveUsername, revokeUsername, restoreUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getActiveUsernamesPaginated, countActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags, getUsernameStats, updateAdminNotes, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, type SearchSort } from '../db/queries'
+import { reserveUsername, revokeUsername, restoreUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getActiveUsernamesPaginated, countActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags, getUsernameStats, updateAdminNotes, enqueueFastlySyncTask, getQueuedFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, listReleaseAttempts, type ReleaseAttemptState, type SearchSort } from '../db/queries'
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
 import { syncUsernameToFastly, deleteUsernameFromFastly, syncBatch, parseRelayHints, readUsernameFromFastly, syncAndVerifyUsername, usernameKVDataMatches } from '../utils/fastly-sync'
 import { sendAssignmentNotificationEmail } from '../utils/email'
 import authRoutes from './auth'
 
 const MAX_ADMIN_NOTES_LENGTH = 5000
-const VALID_ADMIN_STATUSES = ['active', 'reserved', 'revoked', 'burned', 'pending-confirmation', 'recovered'] as const
+const VALID_ADMIN_STATUSES = ['active', 'reserved', 'revoked', 'burned', 'pending-confirmation', 'pending-release', 'recovered'] as const
 type AdminStatusFilter = (typeof VALID_ADMIN_STATUSES)[number]
 
 /** Convert a 64-char hex pubkey to npub bech32 format */
@@ -191,6 +191,19 @@ admin.get('/usernames/stats', async (c) => {
     return c.json({ ok: true, ...stats })
   } catch (error) {
     console.error('Username stats error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.get('/username-release-attempts', async (c) => {
+  try {
+    const state = c.req.query('state') as ReleaseAttemptState | undefined
+    const validStates: ReleaseAttemptState[] = ['pending', 'cancelled', 'finalized', 'expired-restored']
+    if (state && !validStates.includes(state)) return c.json({ ok: false, error: 'Invalid state parameter' }, 400)
+    const attempts = await listReleaseAttempts(c.env.DB, state)
+    return c.json({ ok: true, attempts })
+  } catch (error) {
+    console.error('Release attempt list error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
   }
 })
@@ -463,6 +476,9 @@ admin.post('/username/revoke', async (c) => {
     if (!existing) {
       return c.json({ ok: false, error: 'Username not found' }, 404)
     }
+    if (existing.status === 'pending-release') {
+      return c.json({ ok: false, error: 'Username has a pending release attempt; roll it back or finalize it first' }, 409)
+    }
 
     await revokeUsername(c.env.DB, usernameData.canonical, burn)
 
@@ -639,6 +655,10 @@ admin.post('/username/assign', async (c) => {
     }
 
     const createdBy = (c.get('adminEmail' as never) as string) || null
+    const existing = await getUsernameByName(c.env.DB, usernameData.canonical)
+    if (existing?.status === 'pending-release') {
+      return c.json({ ok: false, error: 'Username has a pending release attempt; roll it back or finalize it first' }, 409)
+    }
     await assignUsername(c.env.DB, usernameData.display, usernameData.canonical, normalizedPubkey, 'admin', createdBy)
 
     // Sync to Fastly KV with read-back verification
@@ -725,6 +745,10 @@ admin.post('/username/assign-bulk', async (c) => {
         // Check if already exists
         const existing = await getUsernameByName(c.env.DB, usernameData.canonical)
         if (existing) {
+          if (existing.status === 'pending-release') {
+            results.push({ name, success: false, error: 'Username has a pending release attempt', status: existing.status })
+            continue
+          }
           if (existing.pubkey === normalizedPubkey) {
             // Already assigned to this pubkey
             results.push({ name, pubkey: normalizedPubkey, success: true, status: 'already_assigned' })
@@ -894,8 +918,15 @@ admin.post('/sync/fastly', async (c) => {
     }))
 
     const results = await syncBatch(c.env, items, { concurrency: 10 })
-    await clearFastlySyncTasks(c.env.DB, results.successes.map(result => result.username))
     const itemsByUsername = new Map(items.map((item) => [item.username, item]))
+    const completedQueuedTasks = (await Promise.all(results.successes.map(async result => {
+      const queued = await getQueuedFastlySyncTask(c.env.DB, result.username)
+      const attempted = itemsByUsername.get(result.username)
+      if (!queued || !attempted || queued.action !== attempted.action ||
+          JSON.stringify(queued.data || null) !== JSON.stringify(attempted.data || null)) return null
+      return { username: queued.username, generation: queued.generation }
+    }))).filter((task): task is { username: string; generation: number } => task !== null)
+    await clearFastlySyncTasks(c.env.DB, completedQueuedTasks)
     for (const failure of results.failures) {
       const item = itemsByUsername.get(failure.username)
       if (item) {
@@ -1073,7 +1104,7 @@ admin.get('/username/:name/nip05-status', async (c) => {
       })
     }
 
-    if (!['active', 'revoked', 'burned'].includes(existing.status)) {
+    if (!['active', 'revoked', 'burned', 'pending-release'].includes(existing.status)) {
       return c.json({
         ok: true,
         status: 'not_applicable',
@@ -1090,7 +1121,7 @@ admin.get('/username/:name/nip05-status', async (c) => {
       return c.json({ ok: true, status: 'error', detail: fastly.error })
     }
 
-    if (existing.status === 'revoked' || existing.status === 'burned') {
+    if (existing.status === 'revoked' || existing.status === 'burned' || existing.status === 'pending-release') {
       if (!fastly.data) {
         return c.json({ ok: true, status: 'missing' })
       }
@@ -1167,7 +1198,7 @@ admin.post('/username/:name/sync-to-fastly', async (c) => {
       return c.json({ ok: false, error: 'Username not found' }, 404)
     }
 
-    if (existing.status === 'burned' || existing.status === 'revoked') {
+    if (existing.status === 'burned' || existing.status === 'revoked' || existing.status === 'pending-release') {
       const deleteResult = await deleteUsernameFromFastly(c.env, canonical)
       if (!deleteResult.success) {
         await enqueueFastlySyncTask(c.env.DB, {

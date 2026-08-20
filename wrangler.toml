@@ -21,6 +21,7 @@ routes = [
 # NAME_PRICE_SATS: minimum sat amount required to reserve a name (default: 1000)
 # INVITE_FAUCET_URL: base URL of the invite code faucet service (e.g. "https://faucet.example.com")
 # Set via wrangler secret put SENDGRID_API_KEY
+# Recoverable username-release finalization: wrangler secret put DELETION_COORDINATOR_TOKEN
 [vars]
 KEYCAST_URL = "https://login.divine.video"
 KEYCAST_CLIENT_ID = "divine-name-server"

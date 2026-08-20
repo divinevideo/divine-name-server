@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { enqueueFastlySyncTask, getUsernameByName } from '../db/queries'
 import { parseRelayHints, syncAndVerifyUsername } from '../utils/fastly-sync'
+import { requireServiceToken } from '../middleware/service-auth'
 
 type Bindings = {
   DB: D1Database
@@ -13,24 +14,7 @@ type AtprotoState = 'pending' | 'ready' | 'failed' | 'disabled' | null
 
 const internalAtproto = new Hono<{ Bindings: Bindings }>()
 
-internalAtproto.use('*', async (c, next) => {
-  const configured = c.env.ATPROTO_SYNC_TOKEN
-  if (!configured) {
-    return c.json({ ok: false, error: 'ATProto sync token is not configured' }, 503)
-  }
-
-  const auth = c.req.header('Authorization') || ''
-  if (!auth.startsWith('Bearer ')) {
-    return c.json({ ok: false, error: 'Unauthorized' }, 401)
-  }
-
-  const token = auth.slice('Bearer '.length)
-  if (token !== configured) {
-    return c.json({ ok: false, error: 'Unauthorized' }, 401)
-  }
-
-  await next()
-})
+internalAtproto.use('/username/set-atproto', requireServiceToken('ATPROTO_SYNC_TOKEN', 'ATProto sync'))
 
 internalAtproto.post('/username/set-atproto', async (c) => {
   try {
