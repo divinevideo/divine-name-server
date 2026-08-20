@@ -1,11 +1,16 @@
 -- ABOUTME: Adds recoverable username-release attempts and versioned Fastly reconciliation.
 -- ABOUTME: Enforces one owned (active or pending-release) username per pubkey.
 
-DROP INDEX IF EXISTS idx_usernames_pubkey_active;
-
+-- Create the replacement before dropping the old guard. This index re-keys on
+-- LOWER(pubkey), which the case-sensitive index it replaces did not enforce, so
+-- legacy rows differing only by pubkey case make the CREATE fail. In that order
+-- the migration aborts with the old guard still in place; the other way round it
+-- would leave usernames with no one-name-per-pubkey constraint at all.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_usernames_pubkey_owned
   ON usernames(LOWER(pubkey))
   WHERE pubkey IS NOT NULL AND status IN ('active', 'pending-release');
+
+DROP INDEX IF EXISTS idx_usernames_pubkey_active;
 
 CREATE TABLE IF NOT EXISTS username_release_attempts (
   attempt_id TEXT PRIMARY KEY,
