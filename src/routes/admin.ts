@@ -5,15 +5,28 @@ import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
 import { bech32 } from '@scure/base'
 import { getSession } from '../auth/keycast-oauth'
-import { reserveUsername, revokeUsername, restoreUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getActiveUsernamesPaginated, countActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags, getUsernameStats, updateAdminNotes, enqueueFastlySyncTask, getQueuedFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, listReleaseAttempts, type ReleaseAttemptState, type SearchSort } from '../db/queries'
+import { reserveUsername, revokeUsername, restoreUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getActiveUsernamesPaginated, countActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags, getUsernameStats, updateAdminNotes, enqueueFastlySyncTask, getQueuedFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, getLatestReleaseAttemptByPubkey, listReleaseAttempts, type ReleaseAttemptState, type SearchSort } from '../db/queries'
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
 import { syncUsernameToFastly, deleteUsernameFromFastly, syncBatch, parseRelayHints, readUsernameFromFastly, syncAndVerifyUsername, usernameKVDataMatches } from '../utils/fastly-sync'
 import { sendAssignmentNotificationEmail } from '../utils/email'
 import authRoutes from './auth'
 
 const MAX_ADMIN_NOTES_LENGTH = 5000
+const PENDING_RELEASE_OWNER_ERROR =
+  'That pubkey has a pending release attempt; roll it back or finalize it first'
+
 const VALID_ADMIN_STATUSES = ['active', 'reserved', 'revoked', 'burned', 'pending-confirmation', 'pending-release', 'recovered'] as const
 type AdminStatusFilter = (typeof VALID_ADMIN_STATUSES)[number]
+
+/**
+ * True while the pubkey is mid-release. The owned-name unique index counts
+ * `pending-release` rows, but the release statements in assignUsername and
+ * restoreUsername only revoke `active` ones, so writing a second name for this
+ * owner would violate the index instead of returning a usable error.
+ */
+async function hasPendingRelease(db: D1Database, pubkey: string): Promise<boolean> {
+  return (await getLatestReleaseAttemptByPubkey(db, pubkey))?.state === 'pending'
+}
 
 /** Convert a 64-char hex pubkey to npub bech32 format */
 function hexToNpub(hex: string): string {
@@ -555,6 +568,10 @@ admin.post('/username/restore', async (c) => {
       }, 409)
     }
 
+    if (await hasPendingRelease(c.env.DB, normalizedPubkey)) {
+      return c.json({ ok: false, error: PENDING_RELEASE_OWNER_ERROR }, 409)
+    }
+
     const restoredBy = (c.get('adminEmail' as never) as string) || null
     const restoreResult = await restoreUsername(
       c.env.DB,
@@ -659,6 +676,9 @@ admin.post('/username/assign', async (c) => {
     if (existing?.status === 'pending-release') {
       return c.json({ ok: false, error: 'Username has a pending release attempt; roll it back or finalize it first' }, 409)
     }
+    if (await hasPendingRelease(c.env.DB, normalizedPubkey)) {
+      return c.json({ ok: false, error: PENDING_RELEASE_OWNER_ERROR }, 409)
+    }
     await assignUsername(c.env.DB, usernameData.display, usernameData.canonical, normalizedPubkey, 'admin', createdBy)
 
     // Sync to Fastly KV with read-back verification
@@ -741,6 +761,11 @@ admin.post('/username/assign-bulk', async (c) => {
 
         // Validate pubkey
         const normalizedPubkey = validateAndNormalizePubkey(pubkey)
+
+        if (await hasPendingRelease(c.env.DB, normalizedPubkey)) {
+          results.push({ name, success: false, error: PENDING_RELEASE_OWNER_ERROR })
+          continue
+        }
 
         // Check if already exists
         const existing = await getUsernameByName(c.env.DB, usernameData.canonical)
