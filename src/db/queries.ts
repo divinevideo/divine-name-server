@@ -540,10 +540,24 @@ export async function clearFastlySyncTasks(
 ): Promise<void> {
   if (tasks.length === 0) return
 
-  for (const task of tasks) {
-    await db.prepare(
+  // Generation scoping needs a predicate per task, so this can no longer be one
+  // IN (...) delete. Send them together anyway: the hourly cron reads up to 5000
+  // queued tasks, and one round trip each would dominate the run.
+  const statements = tasks.map((task) =>
+    db.prepare(
       'DELETE FROM fastly_sync_queue WHERE username_canonical = ? AND generation = ?'
-    ).bind(task.username, task.generation).run()
+    ).bind(task.username, task.generation)
+  )
+
+  if (typeof (db as { batch?: unknown }).batch === 'function') {
+    for (let i = 0; i < statements.length; i += 500) {
+      await db.batch(statements.slice(i, i + 500))
+    }
+    return
+  }
+
+  for (const statement of statements) {
+    await statement.run()
   }
 }
 

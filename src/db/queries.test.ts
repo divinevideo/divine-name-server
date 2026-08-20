@@ -1,7 +1,7 @@
 // ABOUTME: Tests for database query functions
 // ABOUTME: Validates search functionality with fake D1 database
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { searchUsernames, claimUsername, assignUsername, createReservation, reserveUsername, revokeUsername, restoreUsername, addTag, removeTag, getTagsForUsername, getTagDetailsForUsername, getTagsForUsernames, getAllTags, getUsernameByName, getUsernameStats, updateAdminNotes, getActiveUsernamesPaginated, countActiveUsernames, enqueueFastlySyncTask, getQueuedFastlySyncTasks, clearFastlySyncTasks, markFastlySyncTaskFailures, type SearchParams, type Username } from './queries'
 import { createFakeD1, type MockRecord } from './test-helpers'
 
@@ -949,8 +949,15 @@ describe('Fastly sync queue helpers', () => {
     expect(db._rows.find((row) => row.username_canonical === 'user-0')?.attempt_count).toBe(2)
     expect(db._rows.find((row) => row.username_canonical === 'user-0')?.last_error).toBe('second')
 
+    const batchSpy = vi.spyOn(db as unknown as { batch: (statements: unknown[]) => Promise<unknown> }, 'batch')
+
     await clearFastlySyncTasks(db, db._rows.map((row) => ({ username: row.username_canonical, generation: row.generation || 1 })))
     expect(db._rows).toHaveLength(0)
+
+    // Generation scoping needs one predicate per task, but they still travel
+    // together: 501 deletes are two chunked batches, not 501 round trips.
+    expect(batchSpy).toHaveBeenCalledTimes(2)
+    expect(batchSpy.mock.calls.map(([statements]) => (statements as unknown[]).length)).toEqual([500, 1])
   })
 })
 
