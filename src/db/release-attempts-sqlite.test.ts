@@ -49,6 +49,14 @@ describe.skipIf(!sqliteAvailable())('release attempts against real SQLite', () =
     expect((await rollbackReleaseAttempt(db, OWNER, 'alice', ATTEMPT)).outcome).toBe('conflict')
   })
 
+  it('does not finalize after the recovery deadline', async () => {
+    const { db } = withOwnedName()
+    await prepareReleaseAttempt(db, OWNER, 'alice', ATTEMPT, 200, 100)
+
+    expect((await finalizeReleaseAttempt(db, ATTEMPT, 'coordinator', 200)).outcome).toBe('conflict')
+    expect((await getUsernameByName(db, 'alice'))?.status).toBe('pending-release')
+  })
+
   it('rejects a non-owner rollback and a second pending attempt', async () => {
     const { db } = withOwnedName()
     await prepareReleaseAttempt(db, OWNER, 'alice', ATTEMPT, 999, 100)

@@ -637,7 +637,8 @@ username.post('/release/prepare', async (c) => {
       }
     }
     const canonical = (owned?.username_canonical || owned?.name || latest?.username_canonical || requested).toLowerCase()
-    if (owned && requested !== canonical && requested !== owned.name.toLowerCase()) {
+    const display = (owned?.username_display || owned?.name || '').toLowerCase()
+    if (requested !== canonical && (!owned || requested !== display)) {
       return c.json({ ok: false, error: 'You do not own that username' }, 403)
     }
 

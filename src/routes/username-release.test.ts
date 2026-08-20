@@ -76,6 +76,14 @@ describe('recoverable username release routes', () => {
     expect(JSON.stringify(await response.json())).not.toContain(attemptId)
   })
 
+  it('rejects a prepare replay when the submitted name does not match the stored attempt', async () => {
+    mocks.getUsernameByPubkey.mockResolvedValue(null)
+    mocks.getLatestReleaseAttemptByPubkey.mockResolvedValue(pendingAttempt)
+    const response = await app().fetch(post('/release/prepare', { name: 'bob', attempt_id: attemptId }), { DB: {} as D1Database }, createExecutionContext())
+    expect(response.status).toBe(403)
+    expect(mocks.prepareReleaseAttempt).not.toHaveBeenCalled()
+  })
+
   it('returns caller-scoped attempt state after reinstall', async () => {
     mocks.getLatestReleaseAttemptByPubkey.mockResolvedValue(pendingAttempt)
     const request = new Request('http://localhost/api/username/release/attempt', { headers: { Authorization: 'Nostr test' } })

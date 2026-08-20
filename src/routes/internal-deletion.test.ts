@@ -69,4 +69,15 @@ describe('internal deletion finalization', () => {
     expect(response.status).toBe(409)
     expect(await response.json()).toMatchObject({ code: 'attempt_cancelled' })
   })
+
+  it('does not finalize a pending attempt after its recovery deadline', async () => {
+    mocks.finalizeReleaseAttempt.mockResolvedValue({
+      outcome: 'conflict',
+      attempt: { ...attempt, state: 'pending', expires_at: Math.floor(Date.now() / 1000) - 1 },
+    })
+    const app = new Hono(); app.route('/api/internal', internalDeletion)
+    const response = await app.fetch(request(), { DB: {} as D1Database, DELETION_COORDINATOR_TOKEN: 'secret' }, createExecutionContext())
+    expect(response.status).toBe(409)
+    expect(await response.json()).toMatchObject({ code: 'attempt_expired' })
+  })
 })

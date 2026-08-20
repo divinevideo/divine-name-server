@@ -25,9 +25,11 @@ internalDeletion.post('/username/release/finalize', async (c) => {
     const result = await finalizeReleaseAttempt(c.env.DB, body.attempt_id, 'deletion-coordinator')
     if (result.outcome === 'not_found') return c.json({ ok: false, error: 'Release attempt not found' }, 404)
     if (result.outcome === 'conflict') {
-      const code = result.attempt?.state === 'cancelled' || result.attempt?.state === 'expired-restored'
-        ? 'attempt_cancelled'
-        : 'attempt_conflict'
+      const code = result.attempt?.state === 'pending' && result.attempt.expires_at <= Math.floor(Date.now() / 1000)
+        ? 'attempt_expired'
+        : result.attempt?.state === 'cancelled' || result.attempt?.state === 'expired-restored'
+          ? 'attempt_cancelled'
+          : 'attempt_conflict'
       return c.json({ ok: false, error: 'Release attempt cannot be finalized', code }, 409)
     }
     await reconcileUsernameFastly(c.env, result.attempt.username_canonical)

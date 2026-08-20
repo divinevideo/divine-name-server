@@ -268,13 +268,17 @@ export async function finalizeReleaseAttempt(
     return { outcome: 'replayed', attempt: existing, username: currentUsername }
   }
   if (existing.state !== 'pending') return { outcome: 'conflict', attempt: existing }
+  if (existing.expires_at <= now) return { outcome: 'conflict', attempt: existing }
 
   const burn = db.prepare(
     `UPDATE usernames
      SET status = 'burned', recyclable = 0, revoked_at = ?, updated_at = ?
      WHERE username_canonical = ? AND LOWER(pubkey) = LOWER(?) AND status = 'pending-release'
-       AND EXISTS (SELECT 1 FROM username_release_attempts WHERE attempt_id = ? AND state = 'pending')`
-  ).bind(now, now, existing.username_canonical, existing.pubkey, attemptId)
+       AND EXISTS (
+         SELECT 1 FROM username_release_attempts
+         WHERE attempt_id = ? AND state = 'pending' AND expires_at > ?
+       )`
+  ).bind(now, now, existing.username_canonical, existing.pubkey, attemptId, now)
   const finishAttempt = db.prepare(
     `UPDATE username_release_attempts
      SET state = 'finalized', updated_at = ?, finalized_at = ?, finalized_by = ?
