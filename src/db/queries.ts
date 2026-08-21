@@ -2,6 +2,12 @@
 // ABOUTME: Provides type-safe D1 database operations
 
 import type { SyncItem, UsernameKVData } from '../utils/fastly-sync'
+import { validateAndNormalizePubkey } from '../utils/validation'
+
+// SQLite raises "LIKE or GLOB pattern too complex" once a LIKE pattern exceeds
+// SQLITE_MAX_LIKE_PATTERN_LENGTH (50). Our search wraps the term as `%term%`,
+// so any term longer than 48 chars would overflow it.
+const MAX_LIKE_PATTERN_LENGTH = 50
 
 export type ClaimSource = 'self-service' | 'admin' | 'bulk-upload' | 'vine-import' | 'public-reservation' | 'unknown'
 export type SearchSort = 'relevance' | 'newest' | 'oldest' | 'updated'
@@ -800,14 +806,43 @@ export async function searchUsernames(
 ): Promise<SearchResult> {
   const { query, status, sort = 'relevance', page = 1, limit = 50 } = params
   const offset = (page - 1) * limit
+  const trimmedQuery = query ? query.trim() : ''
+
+  // A full public key (hex or npub) is an exact identity, and wrapped as
+  // `%<key>%` its LIKE pattern overflows SQLite's limit. Match pubkey exactly
+  // instead — which is also what an admin means by pasting a whole key.
+  let pubkeyExact: string | null = null
+  if (trimmedQuery.startsWith('npub1') || /^[0-9a-f]{64}$/i.test(trimmedQuery)) {
+    try {
+      pubkeyExact = validateAndNormalizePubkey(trimmedQuery)
+    } catch {
+      pubkeyExact = null
+    }
+  }
+
+  // A non-pubkey query (full pubkeys are handled above) can only be served as a
+  // `%term%` substring match, which SQLite refuses once the pattern exceeds the
+  // cap ("LIKE or GLOB pattern too complex"). Return empty rather than error.
+  // Known casualty: a >48-char email/admin_notes fragment can't be searched.
+  if (!pubkeyExact && trimmedQuery && escapeLikePattern(trimmedQuery).length + 2 > MAX_LIKE_PATTERN_LENGTH) {
+    return {
+      results: [],
+      pagination: { page, limit, total: 0, total_pages: 0 },
+    }
+  }
 
   // Build WHERE clause
   let whereClause = ''
   const queryParams: any[] = []
-  const escapedQuery = query && query.length > 0 ? escapeLikePattern(query) : ''
+  const escapedQuery = !pubkeyExact && trimmedQuery ? escapeLikePattern(trimmedQuery) : ''
 
-  // Search across name, pubkey, email, admin_notes, and tags
-  if (escapedQuery) {
+  if (pubkeyExact) {
+    // Exact pubkey match (hex or decoded npub). LOWER() mirrors every other
+    // pubkey lookup in this file so legacy mixed-case hex rows still match.
+    whereClause = 'LOWER(pubkey) = LOWER(?)'
+    queryParams.push(pubkeyExact)
+  } else if (escapedQuery) {
+    // Search across name, pubkey, email, admin_notes, and tags
     const searchPattern = `%${escapedQuery}%`
     whereClause = `(name LIKE ? OR username_display LIKE ? OR username_canonical LIKE ? OR pubkey LIKE ? OR email LIKE ? OR admin_notes LIKE ? OR EXISTS (SELECT 1 FROM username_tags ut WHERE ut.username_id = usernames.id AND ut.tag LIKE ?))`
     queryParams.push(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern)
@@ -868,7 +903,7 @@ export async function searchUsernames(
     orderClause = 'created_at DESC'
   } else if (escapedQuery) {
     // sort === 'relevance' with a search query: rank by match quality
-    const canonical = query!.toLowerCase()
+    const canonical = trimmedQuery.toLowerCase()
     const prefixPattern = `${escapedQuery}%`
     const containsPattern = `%${escapedQuery}%`
     orderClause = `CASE

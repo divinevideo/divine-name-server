@@ -58,6 +58,174 @@ describe('searchUsernames', () => {
     expect(result.results[0].email).toBe('bob@example.com')
   })
 
+  // A full pubkey wrapped as %<key>% exceeds SQLite's 50-char LIKE pattern
+  // limit and raises "LIKE or GLOB pattern too complex". These cover the
+  // exact-match path that avoids it.
+  const FULL_HEX = '7a03f75a183a470fcb759f3462ea6b153be5448eb5d207d4e4cc0978ec3660bc'
+  const FULL_NPUB = 'npub10gplwksc8frsljm4nu6x96ntz5a723ywkhfq048yesyh3mpkvz7qj4cdrw'
+  const hexRecords: MockRecord[] = [
+    {
+      id: 10, name: 'keyholder', username_display: 'keyholder', username_canonical: 'keyholder',
+      pubkey: FULL_HEX, email: 'keyholder@example.com', status: 'active',
+      created_at: 1700001000, updated_at: 1700001000, claimed_at: 1700001000,
+      reserved_reason: null, claim_source: 'unknown',
+    },
+  ]
+
+  it('should find a record by full 64-character hex pubkey', async () => {
+    const db = createFakeD1(hexRecords)
+    const result = await searchUsernames(db, { query: FULL_HEX })
+
+    expect(result.results).toHaveLength(1)
+    expect(result.results[0].pubkey).toBe(FULL_HEX)
+    expect(result.pagination.total).toBe(1)
+  })
+
+  it('should find a record by npub (decoded to hex)', async () => {
+    const db = createFakeD1(hexRecords)
+    const result = await searchUsernames(db, { query: FULL_NPUB })
+
+    expect(result.results).toHaveLength(1)
+    expect(result.results[0].pubkey).toBe(FULL_HEX)
+  })
+
+  it('should return empty results (not error) for an over-long non-pubkey query', async () => {
+    const db = createFakeD1(hexRecords)
+    const result = await searchUsernames(db, { query: 'z'.repeat(60) })
+
+    expect(result.results).toHaveLength(0)
+    expect(result.pagination.total).toBe(0)
+  })
+
+  it('should still substring-match a short pubkey prefix', async () => {
+    const db = createFakeD1(hexRecords)
+    const result = await searchUsernames(db, { query: FULL_HEX.slice(0, 12) })
+
+    expect(result.results).toHaveLength(1)
+    expect(result.results[0].pubkey).toBe(FULL_HEX)
+  })
+
+  it('should match a legacy mixed-case stored pubkey case-insensitively', async () => {
+    const stored = FULL_HEX.toUpperCase()
+    const db = createFakeD1([
+      {
+        id: 11, name: 'legacy', username_display: 'legacy', username_canonical: 'legacy',
+        pubkey: stored, email: null, status: 'active',
+        created_at: 1700002000, updated_at: 1700002000, claimed_at: 1700002000,
+        reserved_reason: null, claim_source: 'unknown',
+      },
+    ])
+    const result = await searchUsernames(db, { query: FULL_HEX })
+
+    expect(result.results).toHaveLength(1)
+    expect(result.results[0].pubkey).toBe(stored)
+  })
+
+  // The bug is an off-by-one at pattern length 50 (query > 48 chars). These pin
+  // both sides of that edge so drift in MAX_LIKE_PATTERN_LENGTH or the `+ 2`
+  // formula turns one of them red.
+  it('should run a substring search at the 48-character LIKE limit', async () => {
+    const note = 'n'.repeat(48)
+    const db = createFakeD1([
+      {
+        id: 12, name: 'noted', username_display: 'noted', username_canonical: 'noted',
+        pubkey: 'noted-pk', email: null, admin_notes: note, status: 'active',
+        created_at: 1700002100, updated_at: 1700002100, claimed_at: 1700002100,
+        reserved_reason: null, claim_source: 'unknown',
+      },
+    ])
+    const result = await searchUsernames(db, { query: note })
+
+    expect(result.results).toHaveLength(1)
+  })
+
+  it('should return empty just past the LIKE limit (49 characters) without erroring', async () => {
+    const note = 'n'.repeat(49)
+    const db = createFakeD1([
+      {
+        id: 13, name: 'noted2', username_display: 'noted2', username_canonical: 'noted2',
+        pubkey: 'noted-pk2', email: null, admin_notes: note, status: 'active',
+        created_at: 1700002200, updated_at: 1700002200, claimed_at: 1700002200,
+        reserved_reason: null, claim_source: 'unknown',
+      },
+    ])
+    const result = await searchUsernames(db, { query: note })
+
+    expect(result.results).toHaveLength(0)
+    expect(result.pagination.total).toBe(0)
+  })
+
+  it('should scope a recovered-status filter to the exact pubkey', async () => {
+    const otherHex = 'b'.repeat(64)
+    const db = createFakeD1([
+      {
+        id: 14, name: 'vinerec', username_display: 'vinerec', username_canonical: 'vinerec',
+        pubkey: FULL_HEX, email: null, status: 'active',
+        reserved_reason: 'Imported from Vine account', claim_source: 'vine-import',
+        created_at: 1700003000, updated_at: 1700003000, claimed_at: 1700003000,
+      },
+      {
+        id: 15, name: 'othervine', username_display: 'othervine', username_canonical: 'othervine',
+        pubkey: otherHex, email: null, status: 'active',
+        reserved_reason: 'Imported from Vine account', claim_source: 'vine-import',
+        created_at: 1700003100, updated_at: 1700003100, claimed_at: 1700003100,
+      },
+    ])
+    const result = await searchUsernames(db, { query: FULL_HEX, status: 'recovered' })
+
+    expect(result.results).toHaveLength(1)
+    expect(result.results[0].pubkey).toBe(FULL_HEX)
+    expect(result.pagination.total).toBe(1)
+  })
+
+  it('should filter by an exact tag and count only tagged rows', async () => {
+    const db = createFakeD1([
+      {
+        id: 16, name: 'tagged', username_display: 'tagged', username_canonical: 'tagged',
+        pubkey: 'tagged-pk', email: null, status: 'active',
+        created_at: 1700004000, updated_at: 1700004000, claimed_at: 1700004000,
+        reserved_reason: null, claim_source: 'unknown',
+      },
+      {
+        id: 17, name: 'untagged', username_display: 'untagged', username_canonical: 'untagged',
+        pubkey: 'untagged-pk', email: null, status: 'active',
+        created_at: 1700004100, updated_at: 1700004100, claimed_at: 1700004100,
+        reserved_reason: null, claim_source: 'unknown',
+      },
+    ])
+    await addTag(db, 16, 'vip', 'admin')
+    const result = await searchUsernames(db, { query: '', tag: 'vip' })
+
+    expect(result.results).toHaveLength(1)
+    expect(result.results[0].name).toBe('tagged')
+    expect(result.pagination.total).toBe(1)
+  })
+
+  it('should combine an exact pubkey match with a tag filter', async () => {
+    const otherHex = 'c'.repeat(64)
+    const db = createFakeD1([
+      {
+        id: 18, name: 'keyed', username_display: 'keyed', username_canonical: 'keyed',
+        pubkey: FULL_HEX, email: null, status: 'active',
+        created_at: 1700004200, updated_at: 1700004200, claimed_at: 1700004200,
+        reserved_reason: null, claim_source: 'unknown',
+      },
+      {
+        id: 19, name: 'otherkeyed', username_display: 'otherkeyed', username_canonical: 'otherkeyed',
+        pubkey: otherHex, email: null, status: 'active',
+        created_at: 1700004300, updated_at: 1700004300, claimed_at: 1700004300,
+        reserved_reason: null, claim_source: 'unknown',
+      },
+    ])
+    await addTag(db, 18, 'vip', 'admin')
+    await addTag(db, 19, 'vip', 'admin')
+    const result = await searchUsernames(db, { query: FULL_HEX, tag: 'vip' })
+
+    expect(result.results).toHaveLength(1)
+    expect(result.results[0].pubkey).toBe(FULL_HEX)
+    expect(result.pagination.total).toBe(1)
+  })
+
   it('should filter by status', async () => {
     const db = createFakeD1(mockRecords)
     const result = await searchUsernames(db, { query: '', status: 'active' })

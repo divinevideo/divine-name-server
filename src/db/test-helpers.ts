@@ -74,12 +74,62 @@ export function createFakeD1(
         )
       }
 
+      // Mirror SQLite's SQLITE_MAX_LIKE_PATTERN_LENGTH (50): a LIKE pattern
+      // longer than 50 chars raises "LIKE or GLOB pattern too complex".
+      // Enforcing it here lets tests catch query paths (e.g. a 64-char hex
+      // pubkey wrapped as %..%) that would throw against real D1.
+      function assertLikePatternLimit(): void {
+        for (const p of boundParams) {
+          if (typeof p === 'string' && p.includes('%') && p.length > 50) {
+            throw new Error('LIKE or GLOB pattern too complex: SQLITE_ERROR')
+          }
+        }
+      }
+
+      // Exact pubkey search, used when the query is a full pubkey/npub and the
+      // substring path would overflow the LIKE limit. Model SQLite collation:
+      // `LOWER(pubkey) = LOWER(?)` is case-insensitive, while a bare
+      // `pubkey = ?` is BINARY (case-sensitive) — so a missing LOWER() in
+      // production (which breaks legacy mixed-case rows) fails a test here.
+      function applyExactPubkey(data: MockRecord[]): MockRecord[] {
+        const pk = boundParams.find(
+          (p) => typeof p === 'string' && /^[0-9a-f]{64}$/i.test(p)
+        ) as string | undefined
+        if (!pk) return data
+        const caseInsensitive = sql.includes('LOWER(pubkey)')
+        return data.filter((u) =>
+          caseInsensitive
+            ? u.pubkey?.toLowerCase() === pk.toLowerCase()
+            : u.pubkey === pk
+        )
+      }
+
       // Filter records by status
       function applyStatusFilter(data: MockRecord[]): MockRecord[] {
         if (!sql.includes('status = ?')) return data
         const status = extractStatus()
         if (!status) return data
         return data.filter((u) => u.status === status)
+      }
+
+      // Exact tag filter (WHERE ... EXISTS(... ut.tag = ?)). Scope to the WHERE
+      // clause (the relevance ORDER BY CASE also uses ut.tag = ?), and pick the
+      // tag param while skipping % patterns, status literals, and 64-hex pubkeys
+      // — so it survives an exact-pubkey search that binds a pubkey ahead of it.
+      // Assumes a real tag is none of those, which holds: tags are trimmed,
+      // lowercased, and ≤50 chars, so never a status word or a 64-hex string.
+      function applyTagFilter(data: MockRecord[]): MockRecord[] {
+        if (!sql.split('ORDER BY')[0].includes('ut.tag = ?')) return data
+        const tagParam = boundParams.find(
+          (p) =>
+            typeof p === 'string' &&
+            !p.includes('%') &&
+            !['active', 'reserved', 'revoked', 'burned', 'pending-confirmation'].includes(p) &&
+            !/^[0-9a-f]{64}$/i.test(p)
+        ) as string | undefined
+        if (!tagParam) return data
+        const taggedIds = new Set(tags.filter((t) => t.tag === tagParam).map((t) => t.username_id))
+        return data.filter((u) => u.id != null && taggedIds.has(u.id))
       }
 
       // Apply recovered filter (special case — not a simple status match)
@@ -107,6 +157,7 @@ export function createFakeD1(
           boundParams = params
           return {
             first: async () => {
+              assertLikePatternLimit()
               // Stats COUNT queries on username_tags (not search queries with EXISTS subqueries)
               if (sql.includes('COUNT(DISTINCT username_id)') && sql.includes('FROM username_tags')) {
                 if (sql.includes('tag = ?')) {
@@ -141,7 +192,21 @@ export function createFakeD1(
 
               // COUNT query
               if (sql.includes('COUNT(*)')) {
-                // Search COUNT (has LIKE patterns) — handle first to avoid matching stats patterns
+                // Search COUNT by exact pubkey (WHERE LOWER(pubkey) = LOWER(?)).
+                // Checked before LIKE because a recovered-status filter injects
+                // `reserved_reason LIKE '%Vine%'`, which must not shadow the
+                // pubkey predicate.
+                if (sql.includes('pubkey = ?') || sql.includes('pubkey) = LOWER(?)')) {
+                  let filtered = applyExactPubkey([...records])
+                  if (sql.includes("status = 'active'") && sql.includes('reserved_reason')) {
+                    filtered = applyRecoveredFilter(filtered)
+                  } else {
+                    filtered = applyStatusFilter(filtered)
+                  }
+                  filtered = applyTagFilter(filtered)
+                  return { count: filtered.length }
+                }
+                // Search COUNT (has LIKE patterns) — handle before stats patterns
                 if (sql.includes('LIKE')) {
                   let filtered = [...records]
                   filtered = applySearch(filtered)
@@ -150,6 +215,7 @@ export function createFakeD1(
                   } else {
                     filtered = applyStatusFilter(filtered)
                   }
+                  filtered = applyTagFilter(filtered)
                   return { count: filtered.length }
                 }
                 // Stats: admin_notes presence
@@ -171,13 +237,14 @@ export function createFakeD1(
                   return { count: records.filter(u => (u.updated_at || 0) >= since).length }
                 }
 
-                // Non-search COUNT (status filter only, no LIKE)
+                // Non-search COUNT (status and/or tag filter, no LIKE)
                 let filtered = [...records]
                 if (sql.includes("status = 'active'") && sql.includes('reserved_reason')) {
                   filtered = applyRecoveredFilter(filtered)
                 } else {
                   filtered = applyStatusFilter(filtered)
                 }
+                filtered = applyTagFilter(filtered)
                 return { count: filtered.length }
               }
 
@@ -208,6 +275,7 @@ export function createFakeD1(
             },
 
             all: async () => {
+              assertLikePatternLimit()
               // Tag queries (but not search queries that reference tags in EXISTS subqueries)
               if (sql.includes('username_tags') && !sql.includes('FROM usernames')) {
                 // SELECT tag FROM username_tags WHERE username_id = ?
@@ -243,27 +311,24 @@ export function createFakeD1(
                 return { results: [] }
               }
 
-              // Search query
+              // Search query. Exact-pubkey is checked before LIKE because a
+              // recovered-status filter injects `reserved_reason LIKE '%Vine%'`,
+              // which must not shadow the pubkey predicate. Scope the check to the
+              // WHERE clause: the relevance ORDER BY CASE also contains `pubkey = ?`
+              // and must not be mistaken for an exact-pubkey search.
               let filtered = [...records]
-              if (sql.includes('LIKE')) filtered = applySearch(filtered)
+              const wherePart = sql.split('ORDER BY')[0]
+              const isExactPubkeySearch = wherePart.includes('pubkey) = LOWER(?)') || wherePart.includes('pubkey = ?')
+              if (isExactPubkeySearch) filtered = applyExactPubkey(filtered)
+              else if (sql.includes('LIKE')) filtered = applySearch(filtered)
               if (sql.includes("status = 'active'") && sql.includes('reserved_reason')) {
                 filtered = applyRecoveredFilter(filtered)
               } else {
                 filtered = applyStatusFilter(filtered)
               }
 
-              // Tag filter via exact-match EXISTS subquery in WHERE clause (AND ut.tag = ?)
-              // The ORDER BY CASE also uses ut.tag = ? for relevance ranking — distinguish
-              // by checking for the pattern in the WHERE clause (before ORDER BY)
-              const whereClause = sql.split('ORDER BY')[0]
-              if (whereClause.includes('ut.tag = ?')) {
-                // The exact tag param is the last non-% string before limit/offset
-                const tagParam = boundParams.find(p => typeof p === 'string' && !p.includes('%') && !['active', 'reserved', 'revoked', 'burned', 'pending-confirmation'].includes(p))
-                if (tagParam) {
-                  const taggedIds = new Set(tags.filter(t => t.tag === tagParam).map(t => t.username_id))
-                  filtered = filtered.filter(u => u.id != null && taggedIds.has(u.id))
-                }
-              }
+              // Tag filter (WHERE ... EXISTS(... ut.tag = ?))
+              filtered = applyTagFilter(filtered)
 
               const { limit, offset } = extractPagination()
 
