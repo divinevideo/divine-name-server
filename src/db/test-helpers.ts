@@ -6,6 +6,10 @@ import type { Username } from './queries'
 
 export type MockRecord = Partial<Username> & { name: string; username_canonical: string }
 
+const USERNAME_STATUSES = [
+  'active', 'reserved', 'revoked', 'burned', 'pending-confirmation', 'pending-release',
+]
+
 export function createExecutionContext(
   overrides: Partial<ExecutionContext> = {}
 ): ExecutionContext {
@@ -50,8 +54,7 @@ export function createFakeD1(
       // contain "active", but applyStatusFilter gates on sql.includes('status = ?')
       // which is only present when a status filter was actually requested.
       function extractStatus(): string | null {
-        const statuses = ['active', 'reserved', 'revoked', 'burned', 'pending-confirmation']
-        return boundParams.find((p) => typeof p === 'string' && statuses.includes(p)) || null
+        return boundParams.find((p) => typeof p === 'string' && USERNAME_STATUSES.includes(p)) || null
       }
 
       // Filter records by search term (matches name, display, canonical, pubkey, email, admin_notes, tags)
@@ -79,8 +82,9 @@ export function createFakeD1(
       // Enforcing it here lets tests catch query paths (e.g. a 64-char hex
       // pubkey wrapped as %..%) that would throw against real D1.
       function assertLikePatternLimit(): void {
+        if (!sql.includes('LIKE ?')) return
         for (const p of boundParams) {
-          if (typeof p === 'string' && p.includes('%') && p.length > 50) {
+          if (typeof p === 'string' && p.includes('%') && new TextEncoder().encode(p).byteLength > 50) {
             throw new Error('LIKE or GLOB pattern too complex: SQLITE_ERROR')
           }
         }
@@ -104,6 +108,19 @@ export function createFakeD1(
         )
       }
 
+      // Oversized non-pubkey terms use exact equality across searchable fields.
+      function applyExactSearch(data: MockRecord[]): MockRecord[] {
+        const term = boundParams[0]
+        if (typeof term !== 'string') return data
+        const canonical = term.toLowerCase()
+        return data.filter((u) => {
+          const values = [u.name, u.username_display, u.username_canonical, u.pubkey, u.email, u.admin_notes]
+          const userTags = tags.filter((t) => t.username_id === u.id).map((t) => t.tag)
+          return values.some((value) => value?.toLowerCase() === canonical) ||
+            userTags.some((tag) => tag.toLowerCase() === canonical)
+        })
+      }
+
       // Filter records by status
       function applyStatusFilter(data: MockRecord[]): MockRecord[] {
         if (!sql.includes('status = ?')) return data
@@ -112,22 +129,15 @@ export function createFakeD1(
         return data.filter((u) => u.status === status)
       }
 
-      // Exact tag filter (WHERE ... EXISTS(... ut.tag = ?)). Scope to the WHERE
-      // clause (the relevance ORDER BY CASE also uses ut.tag = ?), and pick the
-      // tag param while skipping % patterns, status literals, and 64-hex pubkeys
-      // — so it survives an exact-pubkey search that binds a pubkey ahead of it.
-      // Assumes a real tag is none of those, which holds: tags are trimmed,
-      // lowercased, and ≤50 chars, so never a status word or a 64-hex string.
+      // Exact tag filters are the final placeholder in WHERE. Count only WHERE
+      // placeholders so relevance parameters in ORDER BY cannot be mistaken for
+      // the tag, regardless of the query or status value.
       function applyTagFilter(data: MockRecord[]): MockRecord[] {
-        if (!sql.split('ORDER BY')[0].includes('ut.tag = ?')) return data
-        const tagParam = boundParams.find(
-          (p) =>
-            typeof p === 'string' &&
-            !p.includes('%') &&
-            !['active', 'reserved', 'revoked', 'burned', 'pending-confirmation'].includes(p) &&
-            !/^[0-9a-f]{64}$/i.test(p)
-        ) as string | undefined
-        if (!tagParam) return data
+        const wherePart = sql.split('ORDER BY')[0]
+        if (!wherePart.includes('ut.tag = ?')) return data
+        const whereParamCount = wherePart.match(/\?/g)?.length ?? 0
+        const tagParam = boundParams[whereParamCount - 1]
+        if (typeof tagParam !== 'string') return data
         const taggedIds = new Set(tags.filter((t) => t.tag === tagParam).map((t) => t.username_id))
         return data.filter((u) => u.id != null && taggedIds.has(u.id))
       }
@@ -192,6 +202,16 @@ export function createFakeD1(
 
               // COUNT query
               if (sql.includes('COUNT(*)')) {
+                if (sql.includes('LOWER(name) = LOWER(?)')) {
+                  let filtered = applyExactSearch([...records])
+                  if (sql.includes("status = 'active'") && sql.includes('reserved_reason')) {
+                    filtered = applyRecoveredFilter(filtered)
+                  } else {
+                    filtered = applyStatusFilter(filtered)
+                  }
+                  filtered = applyTagFilter(filtered)
+                  return { count: filtered.length }
+                }
                 // Search COUNT by exact pubkey (WHERE LOWER(pubkey) = LOWER(?)).
                 // Checked before LIKE because a recovered-status filter injects
                 // `reserved_reason LIKE '%Vine%'`, which must not shadow the
@@ -318,8 +338,10 @@ export function createFakeD1(
               // and must not be mistaken for an exact-pubkey search.
               let filtered = [...records]
               const wherePart = sql.split('ORDER BY')[0]
+              const isExactSearch = wherePart.includes('LOWER(name) = LOWER(?)')
               const isExactPubkeySearch = wherePart.includes('pubkey) = LOWER(?)') || wherePart.includes('pubkey = ?')
-              if (isExactPubkeySearch) filtered = applyExactPubkey(filtered)
+              if (isExactSearch) filtered = applyExactSearch(filtered)
+              else if (isExactPubkeySearch) filtered = applyExactPubkey(filtered)
               else if (sql.includes('LIKE')) filtered = applySearch(filtered)
               if (sql.includes("status = 'active'") && sql.includes('reserved_reason')) {
                 filtered = applyRecoveredFilter(filtered)

@@ -796,8 +796,8 @@ export async function assignUsername(
 }
 
 function escapeLikePattern(str: string): string {
-  // Escape special LIKE characters (% and _) to prevent injection
-  return str.replace(/[%_]/g, '\\$&')
+  // Escape the escape character and LIKE wildcards so searches treat them literally.
+  return str.replace(/[\\%_]/g, '\\$&')
 }
 
 export async function searchUsernames(
@@ -807,6 +807,8 @@ export async function searchUsernames(
   const { query, status, sort = 'relevance', page = 1, limit = 50 } = params
   const offset = (page - 1) * limit
   const trimmedQuery = query ? query.trim() : ''
+  const escapedQuery = trimmedQuery ? escapeLikePattern(trimmedQuery) : ''
+  const searchPattern = escapedQuery ? `%${escapedQuery}%` : ''
 
   // A full public key (hex or npub) is an exact identity, and wrapped as
   // `%<key>%` its LIKE pattern overflows SQLite's limit. Match pubkey exactly
@@ -820,31 +822,27 @@ export async function searchUsernames(
     }
   }
 
-  // A non-pubkey query (full pubkeys are handled above) can only be served as a
-  // `%term%` substring match, which SQLite refuses once the pattern exceeds the
-  // cap ("LIKE or GLOB pattern too complex"). Return empty rather than error.
-  // Known casualty: a >48-char email/admin_notes fragment can't be searched.
-  if (!pubkeyExact && trimmedQuery && escapeLikePattern(trimmedQuery).length + 2 > MAX_LIKE_PATTERN_LENGTH) {
-    return {
-      results: [],
-      pagination: { page, limit, total: 0, total_pages: 0 },
-    }
-  }
+  // SQLite applies its LIKE pattern limit to UTF-8 bytes, not JavaScript string
+  // length. Oversized terms still support exact lookup across every searchable
+  // field, which keeps full email and note searches useful without risking a 500.
+  const useExactFallback = !pubkeyExact && searchPattern.length > 0 &&
+    new TextEncoder().encode(searchPattern).byteLength > MAX_LIKE_PATTERN_LENGTH
 
   // Build WHERE clause
   let whereClause = ''
   const queryParams: any[] = []
-  const escapedQuery = !pubkeyExact && trimmedQuery ? escapeLikePattern(trimmedQuery) : ''
 
   if (pubkeyExact) {
     // Exact pubkey match (hex or decoded npub). LOWER() mirrors every other
     // pubkey lookup in this file so legacy mixed-case hex rows still match.
     whereClause = 'LOWER(pubkey) = LOWER(?)'
     queryParams.push(pubkeyExact)
-  } else if (escapedQuery) {
+  } else if (useExactFallback) {
+    whereClause = `(LOWER(name) = LOWER(?) OR LOWER(username_display) = LOWER(?) OR LOWER(username_canonical) = LOWER(?) OR LOWER(pubkey) = LOWER(?) OR LOWER(email) = LOWER(?) OR LOWER(admin_notes) = LOWER(?) OR EXISTS (SELECT 1 FROM username_tags ut WHERE ut.username_id = usernames.id AND LOWER(ut.tag) = LOWER(?)))`
+    queryParams.push(trimmedQuery, trimmedQuery, trimmedQuery, trimmedQuery, trimmedQuery, trimmedQuery, trimmedQuery)
+  } else if (searchPattern) {
     // Search across name, pubkey, email, admin_notes, and tags
-    const searchPattern = `%${escapedQuery}%`
-    whereClause = `(name LIKE ? OR username_display LIKE ? OR username_canonical LIKE ? OR pubkey LIKE ? OR email LIKE ? OR admin_notes LIKE ? OR EXISTS (SELECT 1 FROM username_tags ut WHERE ut.username_id = usernames.id AND ut.tag LIKE ?))`
+    whereClause = `(name LIKE ? ESCAPE '\\' OR username_display LIKE ? ESCAPE '\\' OR username_canonical LIKE ? ESCAPE '\\' OR pubkey LIKE ? ESCAPE '\\' OR email LIKE ? ESCAPE '\\' OR admin_notes LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM username_tags ut WHERE ut.username_id = usernames.id AND ut.tag LIKE ? ESCAPE '\\'))`
     queryParams.push(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern)
   }
 
@@ -901,20 +899,20 @@ export async function searchUsernames(
     orderClause = 'updated_at DESC, created_at DESC'
   } else if (sort === 'newest') {
     orderClause = 'created_at DESC'
-  } else if (escapedQuery) {
+  } else if (!pubkeyExact && searchPattern && !useExactFallback) {
     // sort === 'relevance' with a search query: rank by match quality
     const canonical = trimmedQuery.toLowerCase()
     const prefixPattern = `${escapedQuery}%`
     const containsPattern = `%${escapedQuery}%`
     orderClause = `CASE
       WHEN username_canonical = ? THEN 0
-      WHEN username_canonical LIKE ? THEN 1
-      WHEN name LIKE ? OR username_display LIKE ? THEN 2
+      WHEN username_canonical LIKE ? ESCAPE '\\' THEN 1
+      WHEN name LIKE ? ESCAPE '\\' OR username_display LIKE ? ESCAPE '\\' THEN 2
       WHEN EXISTS (SELECT 1 FROM username_tags ut WHERE ut.username_id = usernames.id AND ut.tag = ?) THEN 3
-      WHEN EXISTS (SELECT 1 FROM username_tags ut WHERE ut.username_id = usernames.id AND ut.tag LIKE ?) THEN 4
+      WHEN EXISTS (SELECT 1 FROM username_tags ut WHERE ut.username_id = usernames.id AND ut.tag LIKE ? ESCAPE '\\') THEN 4
       WHEN pubkey = ? OR email = ? THEN 5
-      WHEN pubkey LIKE ? OR email LIKE ? THEN 6
-      WHEN admin_notes LIKE ? THEN 7
+      WHEN pubkey LIKE ? ESCAPE '\\' OR email LIKE ? ESCAPE '\\' THEN 6
+      WHEN admin_notes LIKE ? ESCAPE '\\' THEN 7
       ELSE 8
     END, updated_at DESC, created_at DESC`
     orderParams.push(

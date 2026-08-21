@@ -89,7 +89,7 @@ describe('searchUsernames', () => {
     expect(result.results[0].pubkey).toBe(FULL_HEX)
   })
 
-  it('should return empty results (not error) for an over-long non-pubkey query', async () => {
+  it('should return empty results for an unmatched over-long non-pubkey query', async () => {
     const db = createFakeD1(hexRecords)
     const result = await searchUsernames(db, { query: 'z'.repeat(60) })
 
@@ -121,9 +121,8 @@ describe('searchUsernames', () => {
     expect(result.results[0].pubkey).toBe(stored)
   })
 
-  // The bug is an off-by-one at pattern length 50 (query > 48 chars). These pin
-  // both sides of that edge so drift in MAX_LIKE_PATTERN_LENGTH or the `+ 2`
-  // formula turns one of them red.
+  // ASCII terms can use substring matching through 48 characters. Longer terms
+  // fall back to exact equality instead of returning an error or false negative.
   it('should run a substring search at the 48-character LIKE limit', async () => {
     const note = 'n'.repeat(48)
     const db = createFakeD1([
@@ -139,7 +138,7 @@ describe('searchUsernames', () => {
     expect(result.results).toHaveLength(1)
   })
 
-  it('should return empty just past the LIKE limit (49 characters) without erroring', async () => {
+  it('should exact-match admin notes just past the LIKE limit', async () => {
     const note = 'n'.repeat(49)
     const db = createFakeD1([
       {
@@ -151,8 +150,43 @@ describe('searchUsernames', () => {
     ])
     const result = await searchUsernames(db, { query: note })
 
-    expect(result.results).toHaveLength(0)
-    expect(result.pagination.total).toBe(0)
+    expect(result.results).toHaveLength(1)
+    expect(result.pagination.total).toBe(1)
+  })
+
+  it('should exact-match a long email instead of silently dropping the search', async () => {
+    const email = `${'account'.repeat(7)}@example.com`
+    const db = createFakeD1([{
+      id: 20, name: 'longemail', username_display: 'longemail', username_canonical: 'longemail',
+      pubkey: 'long-email-pk', email, status: 'active',
+      created_at: 1700004400, updated_at: 1700004400,
+      reserved_reason: null, claim_source: 'unknown',
+    }])
+
+    const result = await searchUsernames(db, { query: email })
+
+    expect(result.results).toHaveLength(1)
+    expect(result.results[0].email).toBe(email)
+  })
+
+  it('should measure the LIKE limit in UTF-8 bytes', async () => {
+    const substringTerm = '界'.repeat(16) // 48 bytes; 50 with surrounding wildcards
+    const exactTerm = '語'.repeat(17) // 51 bytes; must avoid LIKE
+    const db = createFakeD1([
+      {
+        id: 21, name: 'multibyte-substring', username_display: 'multibyte-substring', username_canonical: 'multibyte-substring',
+        pubkey: 'multibyte-substring-pk', email: null, admin_notes: `before${substringTerm}after`, status: 'active',
+        created_at: 1700004500, updated_at: 1700004500, reserved_reason: null, claim_source: 'unknown',
+      },
+      {
+        id: 22, name: 'multibyte-exact', username_display: 'multibyte-exact', username_canonical: 'multibyte-exact',
+        pubkey: 'multibyte-exact-pk', email: null, admin_notes: exactTerm, status: 'active',
+        created_at: 1700004600, updated_at: 1700004600, reserved_reason: null, claim_source: 'unknown',
+      },
+    ])
+
+    expect((await searchUsernames(db, { query: substringTerm })).results[0].id).toBe(21)
+    expect((await searchUsernames(db, { query: exactTerm })).results[0].id).toBe(22)
   })
 
   it('should scope a recovered-status filter to the exact pubkey', async () => {
@@ -223,6 +257,20 @@ describe('searchUsernames', () => {
 
     expect(result.results).toHaveLength(1)
     expect(result.results[0].pubkey).toBe(FULL_HEX)
+    expect(result.pagination.total).toBe(1)
+  })
+
+  it('should combine pending-release status with a tag filter', async () => {
+    const db = createFakeD1([{
+      id: 23, name: 'pendingtagged', username_display: 'pendingtagged', username_canonical: 'pendingtagged',
+      pubkey: 'pending-tagged-pk', email: null, status: 'pending-release',
+      created_at: 1700004700, updated_at: 1700004700, reserved_reason: null, claim_source: 'unknown',
+    }])
+    await addTag(db, 23, 'vip', 'admin')
+
+    const result = await searchUsernames(db, { query: '', status: 'pending-release', tag: 'vip' })
+
+    expect(result.results).toHaveLength(1)
     expect(result.pagination.total).toBe(1)
   })
 
