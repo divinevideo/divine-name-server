@@ -9,6 +9,7 @@
   "scripts": {
     "test": "vitest",
     "test:once": "vitest run",
+    "typecheck": "tsc --noEmit",
     "build:admin": "cd admin-ui && npm run build",
     "dev": "wrangler dev",
     "deploy": "npm run build:admin && wrangler deploy",

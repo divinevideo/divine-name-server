@@ -226,7 +226,9 @@ export async function rollbackReleaseAttempt(
     return { outcome: 'conflict' }
   }
   const currentUsername = await getUsernameByName(db, usernameCanonical)
-  if (existing.state === terminalState && currentUsername?.status === 'active') {
+  if ((existing.state === 'cancelled' || existing.state === 'expired-restored') &&
+      currentUsername?.status === 'active' &&
+      currentUsername.pubkey?.toLowerCase() === existing.pubkey.toLowerCase()) {
     return { outcome: 'replayed', attempt: existing, username: currentUsername }
   }
   if (existing.state !== 'pending') return { outcome: 'conflict', attempt: existing }
@@ -240,13 +242,18 @@ export async function rollbackReleaseAttempt(
     `UPDATE username_release_attempts
      SET state = ?, updated_at = ?, cancelled_at = ?
      WHERE attempt_id = ? AND state = 'pending'
-       AND EXISTS (SELECT 1 FROM usernames WHERE username_canonical = ? AND status = 'active')`
-  ).bind(terminalState, now, now, attemptId, usernameCanonical)
+       AND EXISTS (
+         SELECT 1 FROM usernames
+         WHERE username_canonical = ? AND LOWER(pubkey) = LOWER(?) AND status = 'active'
+       )`
+  ).bind(terminalState, now, now, attemptId, usernameCanonical, pubkey)
   const [restoreResult, attemptResult] = await db.batch([restore, finishAttempt])
   const attempt = await getReleaseAttemptById(db, attemptId)
   const username = await getUsernameByName(db, usernameCanonical)
   if (!restoreResult.meta?.changes || !attemptResult.meta?.changes) {
-    if (attempt?.state === terminalState && username?.status === 'active') {
+    if ((attempt?.state === 'cancelled' || attempt?.state === 'expired-restored') &&
+        username?.status === 'active' &&
+        username.pubkey?.toLowerCase() === attempt.pubkey.toLowerCase()) {
       return { outcome: 'replayed', attempt, username }
     }
     return { outcome: 'conflict', attempt: attempt || undefined }
