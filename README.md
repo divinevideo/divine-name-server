@@ -153,7 +153,7 @@ All endpoints send permissive CORS headers so the Divine web and Flutter clients
 | `POST` | `/api/username/claim` | Claim a name with NIP-98 auth. |
 | `POST` | `/api/username/release/prepare` | Hide and hold an owned name for an opaque deletion attempt. NIP-98 auth. |
 | `GET` | `/api/username/release/attempt` | Read the caller's latest durable release-attempt state. NIP-98 auth. |
-| `POST` | `/api/username/release/rollback` | Restore a recoverable pending release. NIP-98 auth. |
+| `POST` | `/api/username/release/rollback` | Restore a recoverable release and return its stored terminal state. NIP-98 auth. |
 | `POST` | `/api/username/release` | Legacy immediate permanent burn; retained while callers migrate, with removal tracked in #78. |
 
 #### POST /api/username/claim
@@ -161,24 +161,6 @@ All endpoints send permissive CORS headers so the Divine web and Flutter clients
 Claim a username by proving key ownership.
 
 **Authentication:** a NIP-98 event (kind `27235`) sent as `Authorization: Nostr <base64-event>`, with a `u` tag matching the request URL, a `method` tag matching `POST`, and a timestamp within 300 seconds.
-
-#### Recoverable release lifecycle
-
-The deletion coordinator supplies one opaque 16–128 character attempt ID across services. Preparing changes the owned row from `active` to `pending-release`; the name stops resolving but remains owned and unavailable to claims. The authenticated owner may roll it back to `active`, or the trusted deletion coordinator may finalize it to non-recyclable `burned`. Replays of the same transition are safe. A finalized attempt cannot be rolled back.
-
-```text
-active --prepare--> pending-release --rollback--------> active / cancelled
-                              |--72h expiry restore---> active / expired-restored
-                              `--service finalize-----> burned / finalized
-```
-
-The deletion coordinator uses `Authorization: Bearer <DELETION_COORDINATOR_TOKEN>` for three internal operations. All three resolve the owning pubkey and name from the stored attempt, so a caller cannot substitute its own ownership data:
-
-- `GET /api/internal/username/release/attempt/:attemptId` returns the attempt's `state`, `username`, `pubkey`, and `expires_at`, so the coordinator can check the account binding and the recovery deadline itself. `404` when the attempt is unknown.
-- `POST /api/internal/username/release/rollback` accepts `{ "attempt_id": "..." }`, restores the held name to `active`, and cancels the attempt. It also succeeds idempotently when the same owner and name were already restored by cancellation or the 72h expiry sweeper. `409` with `attempt_finalized` once the name is burned, or `attempt_conflict` for another incompatible state.
-- `POST /api/internal/username/release/finalize` accepts `{ "attempt_id": "..." }` and permanently burns the held name. `409` with `attempt_expired` past the recovery deadline, `attempt_cancelled` once it was rolled back, or `attempt_conflict` when the held name is no longer `pending-release` — an owner rollback that lands between the coordinator's read and its write reaches this case with the attempt still `pending` and unexpired.
-
-Set the credential with `wrangler secret put DELETION_COORDINATOR_TOKEN`; it is intentionally separate from `ATPROTO_SYNC_TOKEN`.
 
 **Request body:**
 
@@ -209,6 +191,24 @@ Set the credential with `wrangler secret put DELETION_COORDINATOR_TOKEN`; it is 
 ```
 
 **Errors:** `400` invalid username/relays · `401` bad NIP-98 signature · `403` reserved or burned · `409` claimed by another pubkey · `500` internal error.
+
+#### Recoverable release lifecycle
+
+The deletion coordinator supplies one opaque 16–128 character attempt ID across services. Preparing changes the owned row from `active` to `pending-release`; the name stops resolving but remains owned and unavailable to claims. The authenticated owner may roll it back to `active`, or the trusted deletion coordinator may finalize it to non-recyclable `burned`. Replays of the same transition are safe. A finalized attempt cannot be rolled back.
+
+```text
+active --prepare--> pending-release --rollback--------> active / cancelled
+                              |--72h expiry restore---> active / expired-restored
+                              `--service finalize-----> burned / finalized
+```
+
+The deletion coordinator uses `Authorization: Bearer <DELETION_COORDINATOR_TOKEN>` for three internal operations. All three resolve the owning pubkey and name from the stored attempt, so a caller cannot substitute its own ownership data:
+
+- `GET /api/internal/username/release/attempt/:attemptId` returns the attempt's `state`, `username`, `pubkey`, and `expires_at`, so the coordinator can check the account binding and the recovery deadline itself. `404` when the attempt is unknown.
+- `POST /api/internal/username/release/rollback` accepts `{ "attempt_id": "..." }`, restores the held name to `active`, and cancels the attempt. It also succeeds idempotently when the same owner and name were already restored by cancellation or the 72h expiry sweeper. `409` with `attempt_finalized` once the name is burned, or `attempt_conflict` for another incompatible state.
+- `POST /api/internal/username/release/finalize` accepts `{ "attempt_id": "..." }` and permanently burns the held name. `409` with `attempt_expired` past the recovery deadline, `attempt_cancelled` once it was rolled back, or `attempt_conflict` when the held name is no longer `pending-release` — an owner rollback that lands between the coordinator's read and its write reaches this case with the attempt still `pending` and unexpired.
+
+Set the credential with `wrangler secret put DELETION_COORDINATOR_TOKEN`; it is intentionally separate from `ATPROTO_SYNC_TOKEN`.
 
 #### POST /api/username/reserve
 
