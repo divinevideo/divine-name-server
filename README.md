@@ -172,7 +172,13 @@ active --prepare--> pending-release --rollback--------> active / cancelled
                               `--service finalize-----> burned / finalized
 ```
 
-`POST /api/internal/username/release/finalize` accepts `{ "attempt_id": "..." }` with `Authorization: Bearer <DELETION_COORDINATOR_TOKEN>`. Set that credential with `wrangler secret put DELETION_COORDINATOR_TOKEN`; it is intentionally separate from `ATPROTO_SYNC_TOKEN`.
+The deletion coordinator uses `Authorization: Bearer <DELETION_COORDINATOR_TOKEN>` for three internal operations:
+
+- `GET /api/internal/username/release/attempt/:attemptId` verifies the account binding, pending state, and expiry.
+- `POST /api/internal/username/release/rollback` accepts `{ "attempt_id": "..." }` and confirms the name is restored before cancellation.
+- `POST /api/internal/username/release/finalize` accepts `{ "attempt_id": "..." }` and permanently burns the held name.
+
+Set the credential with `wrangler secret put DELETION_COORDINATOR_TOKEN`; it is intentionally separate from `ATPROTO_SYNC_TOKEN`.
 
 **Request body:**
 
