@@ -1,4 +1,4 @@
-// ABOUTME: Covers service-authenticated terminal username-release finalization.
+// ABOUTME: Covers service-authenticated username-release status, rollback, and finalization.
 // ABOUTME: Verifies least-privilege auth and idempotent terminal behavior.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -32,6 +32,20 @@ function request(token = 'secret') {
   return new Request('http://localhost/api/internal/username/release/finalize', {
     method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ attempt_id: attempt.attempt_id }),
+  })
+}
+
+function attemptRequest(token?: string) {
+  return new Request(`http://localhost/api/internal/username/release/attempt/${attempt.attempt_id}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+}
+
+function rollbackRequest(token?: string, body: unknown = { attempt_id: attempt.attempt_id }) {
+  return new Request('http://localhost/api/internal/username/release/rollback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify(body),
   })
 }
 
@@ -145,5 +159,65 @@ describe('internal deletion reconciliation', () => {
     ), { DB: {} as D1Database, DELETION_COORDINATOR_TOKEN: 'secret' }, createExecutionContext())
     expect(response.status).toBe(409)
     expect(await response.json()).toMatchObject({ code: 'attempt_finalized' })
+  })
+
+  it('rejects unauthenticated status and rollback calls', async () => {
+    const app = new Hono(); app.route('/api/internal', internalDeletion)
+    const env = { DB: {} as D1Database, DELETION_COORDINATOR_TOKEN: 'secret' }
+    expect((await app.fetch(attemptRequest(), env, createExecutionContext())).status).toBe(401)
+    expect((await app.fetch(rollbackRequest(), env, createExecutionContext())).status).toBe(401)
+    expect(mocks.getReleaseAttemptById).not.toHaveBeenCalled()
+    expect(mocks.rollbackReleaseAttempt).not.toHaveBeenCalled()
+  })
+
+  it('rejects another service credential on status and rollback', async () => {
+    const app = new Hono(); app.route('/api/internal', internalDeletion)
+    const env = { DB: {} as D1Database, DELETION_COORDINATOR_TOKEN: 'secret', ATPROTO_SYNC_TOKEN: 'atproto-token' }
+    expect((await app.fetch(attemptRequest('atproto-token'), env, createExecutionContext())).status).toBe(401)
+    expect((await app.fetch(rollbackRequest('atproto-token'), env, createExecutionContext())).status).toBe(401)
+  })
+
+  it('fails closed on status and rollback when the coordinator token is missing', async () => {
+    const app = new Hono(); app.route('/api/internal', internalDeletion)
+    const env = { DB: {} as D1Database }
+    expect((await app.fetch(attemptRequest('secret'), env, createExecutionContext())).status).toBe(503)
+    expect((await app.fetch(rollbackRequest('secret'), env, createExecutionContext())).status).toBe(503)
+  })
+
+  it('serves the nested status path when mounted in the worker', async () => {
+    mocks.getReleaseAttemptById.mockResolvedValue({ ...attempt, state: 'pending' })
+    const response = await worker.fetch(attemptRequest('secret'), {
+      DB: {} as D1Database,
+      DELETION_COORDINATOR_TOKEN: 'secret',
+      ATPROTO_SYNC_TOKEN: 'different-secret',
+      ASSETS: { fetch: async () => new Response('', { status: 404 }) },
+    }, createExecutionContext())
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ attempt_id: attempt.attempt_id, state: 'pending' })
+  })
+
+  it('ignores caller-supplied ownership fields and binds to the stored attempt', async () => {
+    mocks.getReleaseAttemptById.mockResolvedValue({ ...attempt, state: 'pending' })
+    mocks.rollbackReleaseAttempt.mockResolvedValue({ outcome: 'transitioned', attempt: { ...attempt, state: 'cancelled' }, username: { ...username, status: 'active' } })
+    const app = new Hono(); app.route('/api/internal', internalDeletion)
+    const response = await app.fetch(rollbackRequest('secret', {
+      attempt_id: attempt.attempt_id, pubkey: 'b'.repeat(64), name: 'mallory', username: 'mallory',
+    }), { DB: {} as D1Database, DELETION_COORDINATOR_TOKEN: 'secret' }, createExecutionContext())
+    expect(response.status).toBe(200)
+    expect(mocks.rollbackReleaseAttempt).toHaveBeenCalledWith(
+      expect.anything(), attempt.pubkey, 'alice', attempt.attempt_id,
+    )
+  })
+
+  it('rejects an attempt id outside the opaque length bounds', async () => {
+    const app = new Hono(); app.route('/api/internal', internalDeletion)
+    const env = { DB: {} as D1Database, DELETION_COORDINATOR_TOKEN: 'secret' }
+    const status = await app.fetch(new Request(
+      'http://localhost/api/internal/username/release/attempt/tooshort',
+      { headers: { Authorization: 'Bearer secret' } },
+    ), env, createExecutionContext())
+    expect(status.status).toBe(400)
+    expect((await app.fetch(rollbackRequest('secret', { attempt_id: 'tooshort' }), env, createExecutionContext())).status).toBe(400)
+    expect(mocks.getReleaseAttemptById).not.toHaveBeenCalled()
   })
 })
