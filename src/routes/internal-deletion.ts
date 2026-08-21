@@ -2,7 +2,7 @@
 // ABOUTME: Keeps status, rollback, and permanent burns behind one least-privilege credential.
 
 import { Hono } from 'hono'
-import { finalizeReleaseAttempt, getReleaseAttemptById, rollbackReleaseAttempt } from '../db/queries'
+import { type UsernameReleaseAttempt, finalizeReleaseAttempt, getReleaseAttemptById, rollbackReleaseAttempt } from '../db/queries'
 import { requireServiceToken } from '../middleware/service-auth'
 import { reconcileUsernameFastly } from '../utils/username-fastly-reconcile'
 
@@ -20,8 +20,7 @@ function parseAttemptId(value: unknown): string | null {
   return typeof value === 'string' && value.length >= 16 && value.length <= 128 ? value : null
 }
 
-function attemptResponse(attempt: Awaited<ReturnType<typeof getReleaseAttemptById>>) {
-  if (!attempt) return null
+function attemptResponse(attempt: UsernameReleaseAttempt) {
   return {
     ok: true,
     attempt_id: attempt.attempt_id,
@@ -38,7 +37,7 @@ internalDeletion.get('/username/release/attempt/:attemptId', async (c) => {
   try {
     const attempt = await getReleaseAttemptById(c.env.DB, attemptId)
     if (!attempt) return c.json({ ok: false, error: 'Release attempt not found', code: 'attempt_not_found' }, 404)
-    return c.json(attemptResponse(attempt)!)
+    return c.json(attemptResponse(attempt))
   } catch (error) {
     console.error('Read release attempt error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
@@ -66,7 +65,7 @@ internalDeletion.post('/username/release/rollback', async (c) => {
       return c.json({ ok: false, error: 'Release attempt not found', code: 'attempt_not_found' }, 404)
     }
     await reconcileUsernameFastly(c.env, result.attempt.username_canonical)
-    return c.json(attemptResponse(result.attempt)!)
+    return c.json(attemptResponse(result.attempt))
   } catch (error) {
     console.error('Rollback release error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
@@ -76,10 +75,11 @@ internalDeletion.post('/username/release/rollback', async (c) => {
 internalDeletion.post('/username/release/finalize', async (c) => {
   try {
     const body = await c.req.json<{ attempt_id?: unknown }>()
-    if (!parseAttemptId(body.attempt_id)) {
+    const attemptId = parseAttemptId(body.attempt_id)
+    if (!attemptId) {
       return c.json({ ok: false, error: 'A valid attempt_id is required' }, 400)
     }
-    const result = await finalizeReleaseAttempt(c.env.DB, body.attempt_id, 'deletion-coordinator')
+    const result = await finalizeReleaseAttempt(c.env.DB, attemptId, 'deletion-coordinator')
     if (result.outcome === 'not_found') return c.json({ ok: false, error: 'Release attempt not found' }, 404)
     if (result.outcome === 'conflict') {
       const code = result.attempt?.state === 'pending' && result.attempt.expires_at <= Math.floor(Date.now() / 1000)
