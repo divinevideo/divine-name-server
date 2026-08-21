@@ -290,6 +290,8 @@ Admin sessions are established via the Keycast OAuth flow under `/api/admin/auth
 
 `POST /api/internal/username/set-atproto` — service-to-service variant of the ATProto linking endpoint, authenticated with the `ATPROTO_SYNC_TOKEN` bearer token.
 
+The deletion coordinator endpoints under `/api/internal/username/release/` are authenticated with `DELETION_COORDINATOR_TOKEN`; their status, rollback, and finalize contracts are documented in [Recoverable release lifecycle](#recoverable-release-lifecycle).
+
 ## Database schema
 
 Migrations under `migrations/` define and evolve the schema (`0001_initial_schema.sql` onward). The core tables:
