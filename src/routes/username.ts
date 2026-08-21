@@ -707,7 +707,7 @@ username.post('/release/rollback', async (c) => {
       return c.json({ ok: false, error: 'Release attempt cannot be rolled back', code }, 409)
     }
     await reconcileUsernameFastly(c.env, canonical)
-    return c.json({ ok: true, attempt_id: result.attempt.attempt_id, name: canonical, state: 'cancelled' })
+    return c.json({ ok: true, attempt_id: result.attempt.attempt_id, name: canonical, state: result.attempt.state })
   } catch (error) {
     if (error instanceof Error && error.name === 'Nip98Error') return c.json({ ok: false, error: error.message }, 401)
     console.error('Rollback release error:', error)

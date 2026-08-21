@@ -91,13 +91,13 @@ describe('recoverable username release routes', () => {
     expect(await response.json()).toMatchObject({ found: true, attempt_id: attemptId, state: 'pending' })
   })
 
-  it('returns cancelled for a rollback replay', async () => {
+  it.each(['cancelled', 'expired-restored'] as const)('returns the stored %s state for a rollback replay', async (state) => {
     mocks.rollbackReleaseAttempt.mockResolvedValue({
-      outcome: 'replayed', attempt: { ...pendingAttempt, state: 'cancelled' }, username: { ...usernameRow, status: 'active' },
+      outcome: 'replayed', attempt: { ...pendingAttempt, state }, username: { ...usernameRow, status: 'active' },
     })
     const response = await app().fetch(post('/release/rollback', { name: 'alice', attempt_id: attemptId }), { DB: {} as D1Database }, createExecutionContext())
     expect(response.status).toBe(200)
-    expect(await response.json()).toMatchObject({ state: 'cancelled' })
+    expect(await response.json()).toMatchObject({ state })
   })
 
   it('never permits rollback after finalization', async () => {
