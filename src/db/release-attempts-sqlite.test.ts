@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   finalizeReleaseAttempt,
+  getReleaseAttemptById,
   getLatestReleaseAttemptByPubkey,
   prepareReleaseAttempt,
   rollbackReleaseAttempt,
@@ -34,6 +35,43 @@ describe.skipIf(!sqliteAvailable())('release attempts against real SQLite', () =
     const rolledBack = await rollbackReleaseAttempt(db, OWNER, 'alice', ATTEMPT, 'cancelled', 200)
     expect(rolledBack.outcome).toBe('transitioned')
     expect((await getUsernameByName(db, 'alice'))?.status).toBe('active')
+
+    expect((await rollbackReleaseAttempt(db, OWNER, 'alice', ATTEMPT)).outcome).toBe('replayed')
+  })
+
+  it('treats an expiry restoration as an idempotent rollback success', async () => {
+    const { db } = withOwnedName()
+    await prepareReleaseAttempt(db, OWNER, 'alice', ATTEMPT, 200, 100)
+    await rollbackReleaseAttempt(db, OWNER, 'alice', ATTEMPT, 'expired-restored', 200)
+
+    const replay = await rollbackReleaseAttempt(db, OWNER, 'alice', ATTEMPT, 'cancelled', 201)
+
+    expect(replay.outcome).toBe('replayed')
+    if (replay.outcome !== 'replayed') throw new Error('Expected an idempotent expiry restoration replay')
+    expect(replay.attempt?.state).toBe('expired-restored')
+    expect(replay.username).toMatchObject({ status: 'active', pubkey: OWNER })
+  })
+
+  it('does not replay a restored attempt when the username belongs to another pubkey', async () => {
+    const { db, sqlite } = withOwnedName()
+    await prepareReleaseAttempt(db, OWNER, 'alice', ATTEMPT, 200, 100)
+    await rollbackReleaseAttempt(db, OWNER, 'alice', ATTEMPT, 'expired-restored', 200)
+    sqlite.prepare('UPDATE usernames SET pubkey = ? WHERE username_canonical = ?').run(OTHER, 'alice')
+
+    const replay = await rollbackReleaseAttempt(db, OWNER, 'alice', ATTEMPT, 'cancelled', 201)
+
+    expect(replay.outcome).toBe('conflict')
+  })
+
+  it('does not finish a pending attempt against another pubkey active row', async () => {
+    const { db, sqlite } = withOwnedName()
+    await prepareReleaseAttempt(db, OWNER, 'alice', ATTEMPT, 999, 100)
+    sqlite.prepare("UPDATE usernames SET status = 'active', pubkey = ? WHERE username_canonical = ?").run(OTHER, 'alice')
+
+    const result = await rollbackReleaseAttempt(db, OWNER, 'alice', ATTEMPT, 'cancelled', 201)
+
+    expect(result.outcome).toBe('conflict')
+    expect((await getReleaseAttemptById(db, ATTEMPT))?.state).toBe('pending')
   })
 
   it('finalizes to a non-recyclable burn that cannot be rolled back', async () => {

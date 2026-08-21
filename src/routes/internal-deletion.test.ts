@@ -145,6 +145,54 @@ describe('internal deletion reconciliation', () => {
     expect(await response.json()).toMatchObject({ state: 'cancelled', pubkey: attempt.pubkey })
   })
 
+  it.each(['cancelled', 'expired-restored'] as const)(
+    'returns 200 when rollback replays an already-%s restoration',
+    async (state) => {
+      const restored = { ...attempt, state }
+      mocks.getReleaseAttemptById.mockResolvedValue(restored)
+      mocks.rollbackReleaseAttempt.mockResolvedValue({
+        outcome: 'replayed',
+        attempt: restored,
+        username: { ...username, status: 'active' },
+      })
+      const app = new Hono(); app.route('/api/internal', internalDeletion)
+
+      const response = await app.fetch(
+        rollbackRequest('secret'),
+        { DB: {} as D1Database, DELETION_COORDINATOR_TOKEN: 'secret' },
+        createExecutionContext(),
+      )
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({ state, pubkey: attempt.pubkey })
+    },
+  )
+
+  it('returns 404 for an unknown status attempt', async () => {
+    mocks.getReleaseAttemptById.mockResolvedValue(null)
+    const app = new Hono(); app.route('/api/internal', internalDeletion)
+    const response = await app.fetch(
+      attemptRequest('secret'),
+      { DB: {} as D1Database, DELETION_COORDINATOR_TOKEN: 'secret' },
+      createExecutionContext(),
+    )
+    expect(response.status).toBe(404)
+    expect(await response.json()).toMatchObject({ code: 'attempt_not_found' })
+  })
+
+  it('returns 404 for an unknown rollback attempt', async () => {
+    mocks.getReleaseAttemptById.mockResolvedValue(null)
+    const app = new Hono(); app.route('/api/internal', internalDeletion)
+    const response = await app.fetch(
+      rollbackRequest('secret'),
+      { DB: {} as D1Database, DELETION_COORDINATOR_TOKEN: 'secret' },
+      createExecutionContext(),
+    )
+    expect(response.status).toBe(404)
+    expect(await response.json()).toMatchObject({ code: 'attempt_not_found' })
+    expect(mocks.rollbackReleaseAttempt).not.toHaveBeenCalled()
+  })
+
   it('does not roll back a finalized attempt', async () => {
     mocks.getReleaseAttemptById.mockResolvedValue(attempt)
     mocks.rollbackReleaseAttempt.mockResolvedValue({ outcome: 'conflict', attempt })

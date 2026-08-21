@@ -175,7 +175,7 @@ active --prepare--> pending-release --rollback--------> active / cancelled
 The deletion coordinator uses `Authorization: Bearer <DELETION_COORDINATOR_TOKEN>` for three internal operations. All three resolve the owning pubkey and name from the stored attempt, so a caller cannot substitute its own ownership data:
 
 - `GET /api/internal/username/release/attempt/:attemptId` returns the attempt's `state`, `username`, `pubkey`, and `expires_at`, so the coordinator can check the account binding and the recovery deadline itself. `404` when the attempt is unknown.
-- `POST /api/internal/username/release/rollback` accepts `{ "attempt_id": "..." }`, restores the held name to `active`, and cancels the attempt. `409` with `attempt_finalized` once the name is burned, or `attempt_conflict` when the attempt is no longer pending — including an attempt the 72h expiry sweeper already restored.
+- `POST /api/internal/username/release/rollback` accepts `{ "attempt_id": "..." }`, restores the held name to `active`, and cancels the attempt. It also succeeds idempotently when the same owner and name were already restored by cancellation or the 72h expiry sweeper. `409` with `attempt_finalized` once the name is burned, or `attempt_conflict` for another incompatible state.
 - `POST /api/internal/username/release/finalize` accepts `{ "attempt_id": "..." }` and permanently burns the held name. `409` with `attempt_expired` past the recovery deadline, or `attempt_cancelled` once it was rolled back.
 
 Set the credential with `wrangler secret put DELETION_COORDINATOR_TOKEN`; it is intentionally separate from `ATPROTO_SYNC_TOKEN`.
