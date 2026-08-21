@@ -5,8 +5,8 @@ import type { SyncItem, UsernameKVData } from '../utils/fastly-sync'
 import { validateAndNormalizePubkey } from '../utils/validation'
 
 // SQLite raises "LIKE or GLOB pattern too complex" once a LIKE pattern exceeds
-// SQLITE_MAX_LIKE_PATTERN_LENGTH (50). Our search wraps the term as `%term%`,
-// so any term longer than 48 chars would overflow it.
+// SQLITE_MAX_LIKE_PATTERN_LENGTH (50 UTF-8 bytes). The surrounding wildcards
+// consume two bytes; multibyte text and escaped literals consume more per term.
 const MAX_LIKE_PATTERN_LENGTH = 50
 
 export type ClaimSource = 'self-service' | 'admin' | 'bulk-upload' | 'vine-import' | 'public-reservation' | 'unknown'
