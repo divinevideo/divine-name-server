@@ -142,6 +142,7 @@ describe('internal deletion reconciliation', () => {
     expect(mocks.rollbackReleaseAttempt).toHaveBeenCalledWith(
       expect.anything(), attempt.pubkey, 'alice', attempt.attempt_id,
     )
+    expect(mocks.reconcileUsernameFastly).toHaveBeenCalledWith(expect.anything(), 'alice')
     expect(await response.json()).toMatchObject({ state: 'cancelled', pubkey: attempt.pubkey })
   })
 
@@ -207,6 +208,20 @@ describe('internal deletion reconciliation', () => {
     ), { DB: {} as D1Database, DELETION_COORDINATOR_TOKEN: 'secret' }, createExecutionContext())
     expect(response.status).toBe(409)
     expect(await response.json()).toMatchObject({ code: 'attempt_finalized' })
+  })
+
+  it('returns attempt_conflict for another incompatible rollback state', async () => {
+    const pending = { ...attempt, state: 'pending' }
+    mocks.getReleaseAttemptById.mockResolvedValue(pending)
+    mocks.rollbackReleaseAttempt.mockResolvedValue({ outcome: 'conflict', attempt: pending })
+    const app = new Hono(); app.route('/api/internal', internalDeletion)
+    const response = await app.fetch(
+      rollbackRequest('secret'),
+      { DB: {} as D1Database, DELETION_COORDINATOR_TOKEN: 'secret' },
+      createExecutionContext(),
+    )
+    expect(response.status).toBe(409)
+    expect(await response.json()).toMatchObject({ code: 'attempt_conflict' })
   })
 
   it('rejects unauthenticated status and rollback calls', async () => {
