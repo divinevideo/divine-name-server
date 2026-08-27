@@ -1225,6 +1225,36 @@ export async function expireHolds(
   return result.meta?.changes ?? 0
 }
 
+/**
+ * End a name's hold immediately (admin action), returning it to a claimable
+ * `revoked` row. Returns the rows changed (0 when the name is not held).
+ */
+export async function releaseHeldNameEarly(
+  db: D1Database,
+  usernameCanonical: string,
+  now = Math.floor(Date.now() / 1000)
+): Promise<number> {
+  const result = await db.prepare(
+    `UPDATE usernames
+     SET status = 'revoked', recyclable = 1, updated_at = ?
+     WHERE username_canonical = ? AND status = 'held'`
+  ).bind(now, usernameCanonical).run()
+  return result.meta?.changes ?? 0
+}
+
+export async function getUsernameReleaseHistory(
+  db: D1Database,
+  usernameCanonical: string
+): Promise<UsernameReleaseHistoryRow[]> {
+  const result = await db.prepare(
+    `SELECT id, username_canonical, released_at, reason
+     FROM username_release_history
+     WHERE username_canonical = ?
+     ORDER BY released_at DESC`
+  ).bind(usernameCanonical).all<UsernameReleaseHistoryRow>()
+  return result.results
+}
+
 // --- Tag functions ---
 
 export async function addTag(
