@@ -467,7 +467,9 @@ export async function getUsernamesUpdatedSince(
   sinceEpoch: number
 ): Promise<Username[]> {
   const result = await db.prepare(
-    `SELECT * FROM usernames WHERE updated_at >= ? AND status IN ('active', 'revoked', 'burned', 'pending-release')`
+    // 'held' included so the 6-hour cron backstop re-affirms a held name's
+    // Fastly KV delete if finalize's immediate reconcile failed.
+    `SELECT * FROM usernames WHERE updated_at >= ? AND status IN ('active', 'revoked', 'burned', 'pending-release', 'held')`
   ).bind(sinceEpoch).all<Username>()
 
   return result.results
