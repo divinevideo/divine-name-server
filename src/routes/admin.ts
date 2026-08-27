@@ -15,7 +15,7 @@ const MAX_ADMIN_NOTES_LENGTH = 5000
 const PENDING_RELEASE_OWNER_ERROR =
   'That pubkey has a pending release attempt; roll it back or finalize it first'
 
-const VALID_ADMIN_STATUSES = ['active', 'reserved', 'revoked', 'burned', 'pending-confirmation', 'pending-release', 'recovered'] as const
+const VALID_ADMIN_STATUSES = ['active', 'reserved', 'revoked', 'burned', 'pending-confirmation', 'pending-release', 'held', 'recovered'] as const
 type AdminStatusFilter = (typeof VALID_ADMIN_STATUSES)[number]
 
 /**

@@ -20,7 +20,7 @@ export interface Username {
   pubkey: string | null
   email: string | null
   relays: string | null
-  status: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'pending-release'
+  status: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'pending-release' | 'held'
   recyclable: number
   created_at: number
   updated_at: number
@@ -40,6 +40,13 @@ export interface Username {
   atproto_state: 'pending' | 'ready' | 'failed' | 'disabled' | null
 }
 
+export interface UsernameReleaseHistoryRow {
+  id: number
+  username_canonical: string
+  released_at: number
+  reason: string
+}
+
 export interface ReservationToken {
   id: number
   token: string
@@ -52,7 +59,7 @@ export interface ReservationToken {
 
 export interface SearchParams {
   query: string
-  status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'pending-release' | 'recovered'
+  status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'pending-release' | 'held' | 'recovered'
   tag?: string
   sort?: SearchSort
   page?: number
@@ -995,7 +1002,7 @@ export async function deleteReservedWord(
 
 export async function exportUsernamesByStatus(
   db: D1Database,
-  status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'pending-release' | 'recovered'
+  status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'pending-release' | 'held' | 'recovered'
 ): Promise<Username[]> {
   if (status === 'recovered') {
     const result = await db.prepare(

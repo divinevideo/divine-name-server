@@ -7,7 +7,7 @@ import type { Username } from './queries'
 export type MockRecord = Partial<Username> & { name: string; username_canonical: string }
 
 const USERNAME_STATUSES = [
-  'active', 'reserved', 'revoked', 'burned', 'pending-confirmation', 'pending-release',
+  'active', 'reserved', 'revoked', 'burned', 'pending-confirmation', 'pending-release', 'held',
 ]
 
 export function createExecutionContext(
