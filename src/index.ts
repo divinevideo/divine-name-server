@@ -163,7 +163,7 @@ export default {
             atproto_state: user.atproto_state,
           },
         })
-      } else if (user.status === 'revoked' || user.status === 'burned' || user.status === 'pending-release' || user.status === 'held') {
+      } else if (user.status === 'revoked' || user.status === 'burned' || user.status === 'pending-release' || user.status === 'held' || user.status === 'reserved') {
         itemsByUsername.set(user.username_canonical || user.name, {
           username: user.username_canonical || user.name,
           action: 'delete',

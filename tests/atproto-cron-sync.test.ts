@@ -279,6 +279,53 @@ describe('ATProto cron sync payloads', () => {
     )
   })
 
+  it('marks a reserved-via-deletion name for Fastly deletion in the cron backstop', async () => {
+    getUsernamesUpdatedSince.mockResolvedValue([
+      {
+        id: 5,
+        name: 'reserved-release',
+        username_display: 'reserved-release',
+        username_canonical: 'reserved-release',
+        pubkey: null,
+        email: null,
+        relays: null,
+        status: 'reserved',
+        recyclable: 0,
+        created_at: 0,
+        updated_at: 0,
+        claimed_at: null,
+        revoked_at: 100,
+        reserved_reason: null,
+        admin_notes: null,
+        reservation_email: null,
+        confirmation_token: null,
+        reservation_expires_at: null,
+        subscription_expires_at: null,
+        claim_source: 'admin',
+        created_by: null,
+        atproto_did: null,
+        atproto_state: null,
+      },
+    ])
+
+    await worker.scheduled(
+      {} as ScheduledEvent,
+      {
+        DB: {} as D1Database,
+        ASSETS: { fetch: async () => new Response('not found', { status: 404 }) },
+        FASTLY_API_TOKEN: 'fastly-token',
+        FASTLY_STORE_ID: 'store-id',
+      },
+      { waitUntil: () => {}, passThroughOnException: () => {} } as ExecutionContext
+    )
+
+    expect(syncBatch).toHaveBeenCalledWith(
+      expect.anything(),
+      [{ username: 'reserved-release', action: 'delete' }],
+      { concurrency: 10 }
+    )
+  })
+
   it('completes without error when no changes exist', async () => {
     getUsernamesUpdatedSince.mockResolvedValue([])
 
