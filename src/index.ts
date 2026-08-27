@@ -11,7 +11,7 @@ import admin from './routes/admin'
 import publicRoutes from './routes/public'
 import internalAtproto from './routes/internal-atproto'
 import internalDeletion from './routes/internal-deletion'
-import { getUsernamesUpdatedSince, expireStaleReservations, getQueuedFastlySyncTasks, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, getStaleReleaseAttempts, rollbackReleaseAttempt } from './db/queries'
+import { getUsernamesUpdatedSince, expireStaleReservations, expireHolds, getQueuedFastlySyncTasks, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, getStaleReleaseAttempts, rollbackReleaseAttempt } from './db/queries'
 import { syncBatch, parseRelayHints, type UsernameKVData } from './utils/fastly-sync'
 
 type Bindings = {
@@ -111,6 +111,11 @@ export default {
     const expired = await expireStaleReservations(env.DB)
     if (expired > 0) {
       console.log(`Cron: expired ${expired} stale pending-confirmation reservations`)
+    }
+
+    const clearedHolds = await expireHolds(env.DB)
+    if (clearedHolds > 0) {
+      console.log(`Cron: returned ${clearedHolds} expired name holds to circulation`)
     }
 
     const staleReleaseAttempts = await getStaleReleaseAttempts(env.DB)

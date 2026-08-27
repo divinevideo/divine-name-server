@@ -1202,6 +1202,27 @@ export async function expireStaleReservations(
   return result.meta?.changes ?? 0
 }
 
+/** The one-year hold window before a released name returns to circulation. */
+export const RELEASE_HOLD_SECONDS = 365 * 24 * 60 * 60
+
+/**
+ * Return holds whose one-year window has elapsed to a claimable `revoked` row
+ * (the only status the claim path accepts). The `username_release_history`
+ * breadcrumb is retained. Returns the number of names cleared.
+ */
+export async function expireHolds(
+  db: D1Database,
+  now = Math.floor(Date.now() / 1000),
+  holdSeconds = RELEASE_HOLD_SECONDS
+): Promise<number> {
+  const result = await db.prepare(
+    `UPDATE usernames
+     SET status = 'revoked', recyclable = 1, updated_at = ?
+     WHERE status = 'held' AND revoked_at <= ?`
+  ).bind(now, now - holdSeconds).run()
+  return result.meta?.changes ?? 0
+}
+
 // --- Tag functions ---
 
 export async function addTag(
