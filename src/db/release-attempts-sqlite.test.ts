@@ -74,17 +74,52 @@ describe.skipIf(!sqliteAvailable())('release attempts against real SQLite', () =
     expect((await getReleaseAttemptById(db, ATTEMPT))?.state).toBe('pending')
   })
 
-  it('finalizes to a non-recyclable burn that cannot be rolled back', async () => {
-    const { db } = withOwnedName()
+  it('finalizes to a one-year hold, clears pubkey, and writes one breadcrumb', async () => {
+    const { db, sqlite } = withOwnedName()
     await prepareReleaseAttempt(db, OWNER, 'alice', ATTEMPT, 999, 100)
 
     expect((await finalizeReleaseAttempt(db, ATTEMPT, 'coordinator', 200)).outcome).toBe('transitioned')
-    const burned = await getUsernameByName(db, 'alice')
-    expect(burned?.status).toBe('burned')
-    expect(burned?.recyclable).toBe(0)
+    const held = await getUsernameByName(db, 'alice')
+    expect(held?.status).toBe('held')
+    expect(held?.recyclable).toBe(0)
+    expect(held?.pubkey).toBeNull()
+    expect(held?.revoked_at).toBe(200)
+
+    const history = sqlite
+      .prepare('SELECT username_canonical, released_at, reason FROM username_release_history WHERE username_canonical = ?')
+      .all('alice')
+    expect(history).toEqual([{ username_canonical: 'alice', released_at: 200, reason: 'deletion' }])
+
+    // A finalized attempt is terminal and cannot be rolled back.
+    expect((await rollbackReleaseAttempt(db, OWNER, 'alice', ATTEMPT)).outcome).toBe('conflict')
+  })
+
+  it('replays finalize idempotently without a second breadcrumb', async () => {
+    const { db, sqlite } = withOwnedName()
+    await prepareReleaseAttempt(db, OWNER, 'alice', ATTEMPT, 999, 100)
+    await finalizeReleaseAttempt(db, ATTEMPT, 'coordinator', 200)
 
     expect((await finalizeReleaseAttempt(db, ATTEMPT, 'coordinator', 201)).outcome).toBe('replayed')
-    expect((await rollbackReleaseAttempt(db, OWNER, 'alice', ATTEMPT)).outcome).toBe('conflict')
+    const count = sqlite
+      .prepare('SELECT COUNT(*) AS n FROM username_release_history WHERE username_canonical = ?')
+      .get('alice') as { n: number }
+    expect(count.n).toBe(1)
+  })
+
+  it('returns a reserved-origin name to the reserve with no hold or breadcrumb', async () => {
+    const { db, sqlite } = withOwnedName()
+    sqlite.prepare(`INSERT INTO reserved_words (word, category, reason, created_at) VALUES ('alice', 'brand', 'test', 100)`).run()
+    await prepareReleaseAttempt(db, OWNER, 'alice', ATTEMPT, 999, 100)
+
+    expect((await finalizeReleaseAttempt(db, ATTEMPT, 'coordinator', 200)).outcome).toBe('transitioned')
+    const reserved = await getUsernameByName(db, 'alice')
+    expect(reserved?.status).toBe('reserved')
+    expect(reserved?.pubkey).toBeNull()
+
+    const count = sqlite
+      .prepare('SELECT COUNT(*) AS n FROM username_release_history WHERE username_canonical = ?')
+      .get('alice') as { n: number }
+    expect(count.n).toBe(0)
   })
 
   it('does not finalize after the recovery deadline', async () => {

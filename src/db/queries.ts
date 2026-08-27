@@ -275,6 +275,9 @@ export async function rollbackReleaseAttempt(
   return { outcome: 'transitioned', attempt, username }
 }
 
+/** Terminal status for a released (non-reserved) name: a one-year hold. */
+const RELEASE_HOLD_STATUS = 'held'
+
 export async function finalizeReleaseAttempt(
   db: D1Database,
   attemptId: string,
@@ -284,32 +287,60 @@ export async function finalizeReleaseAttempt(
   const existing = await getReleaseAttemptById(db, attemptId)
   if (!existing) return { outcome: 'not_found' }
   const currentUsername = await getUsernameByName(db, existing.username_canonical)
-  if (existing.state === 'finalized' && currentUsername?.status === 'burned') {
+  // A finalized attempt is terminal. Its downstream name status may since have
+  // moved (held -> revoked after a year, or reissued to a new owner), so replay
+  // keys on the attempt ledger, not the current name status.
+  if (existing.state === 'finalized' && currentUsername) {
     return { outcome: 'replayed', attempt: existing, username: currentUsername }
   }
   if (existing.state !== 'pending') return { outcome: 'conflict', attempt: existing }
   if (existing.expires_at <= now) return { outcome: 'conflict', attempt: existing }
 
-  const burn = db.prepare(
+  // Reserved-origin names return to the reserve; everyone else enters the hold.
+  const reserved = await isReservedWord(db, existing.username_canonical)
+  const targetStatus = reserved ? 'reserved' : RELEASE_HOLD_STATUS
+
+  // pubkey cleared on finalize so a held/reissued name carries no trace of the
+  // deleted account (deletion policy 2026-08-27).
+  const release = db.prepare(
     `UPDATE usernames
-     SET status = 'burned', recyclable = 0, revoked_at = ?, updated_at = ?
+     SET status = ?, recyclable = 0, pubkey = NULL, revoked_at = ?, updated_at = ?
      WHERE username_canonical = ? AND LOWER(pubkey) = LOWER(?) AND status = 'pending-release'
        AND EXISTS (
          SELECT 1 FROM username_release_attempts
          WHERE attempt_id = ? AND state = 'pending' AND expires_at > ?
        )`
-  ).bind(now, now, existing.username_canonical, existing.pubkey, attemptId, now)
+  ).bind(targetStatus, now, now, existing.username_canonical, existing.pubkey, attemptId, now)
+
+  // Breadcrumb only for the hold path. Guarded on (name now at target) AND
+  // (attempt still pending) so a racing second finalize cannot double-insert:
+  // finishAttempt below flips the attempt to 'finalized' in this same batch,
+  // and any concurrent transaction sees that committed state.
+  const recordHistory = db.prepare(
+    `INSERT INTO username_release_history (username_canonical, released_at, reason)
+     SELECT ?, ?, 'deletion'
+     WHERE EXISTS (SELECT 1 FROM usernames WHERE username_canonical = ? AND status = ?)
+       AND EXISTS (SELECT 1 FROM username_release_attempts WHERE attempt_id = ? AND state = 'pending')`
+  ).bind(existing.username_canonical, now, existing.username_canonical, targetStatus, attemptId)
+
   const finishAttempt = db.prepare(
     `UPDATE username_release_attempts
      SET state = 'finalized', updated_at = ?, finalized_at = ?, finalized_by = ?
      WHERE attempt_id = ? AND state = 'pending'
-       AND EXISTS (SELECT 1 FROM usernames WHERE username_canonical = ? AND status = 'burned')`
-  ).bind(now, now, finalizedBy, attemptId, existing.username_canonical)
-  const [burnResult, attemptResult] = await db.batch([burn, finishAttempt])
+       AND EXISTS (SELECT 1 FROM usernames WHERE username_canonical = ? AND status = ?)`
+  ).bind(now, now, finalizedBy, attemptId, existing.username_canonical, targetStatus)
+
+  const statements = reserved
+    ? [release, finishAttempt]
+    : [release, recordHistory, finishAttempt]
+  const results = await db.batch(statements)
+  const releaseResult = results[0]
+  const attemptResult = results[results.length - 1]
+
   const attempt = await getReleaseAttemptById(db, attemptId)
   const username = await getUsernameByName(db, existing.username_canonical)
-  if (!burnResult.meta?.changes || !attemptResult.meta?.changes) {
-    if (attempt?.state === 'finalized' && username?.status === 'burned') {
+  if (!releaseResult.meta?.changes || !attemptResult.meta?.changes) {
+    if (attempt?.state === 'finalized' && username) {
       return { outcome: 'replayed', attempt, username }
     }
     return { outcome: 'conflict', attempt: attempt || undefined }
