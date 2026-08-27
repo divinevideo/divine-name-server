@@ -1350,6 +1350,7 @@ export interface UsernameStats {
     burned: number
     pending_confirmation: number
     pending_release: number
+    held: number
   }
   metadata: {
     with_notes: number
@@ -1381,6 +1382,7 @@ export async function getUsernameStats(db: D1Database): Promise<UsernameStats> {
          SUM(CASE WHEN u.status = 'burned' THEN 1 ELSE 0 END) AS burned_count,
          SUM(CASE WHEN u.status = 'pending-confirmation' THEN 1 ELSE 0 END) AS pending_confirmation_count,
          SUM(CASE WHEN u.status = 'pending-release' THEN 1 ELSE 0 END) AS pending_release_count,
+         SUM(CASE WHEN u.status = 'held' THEN 1 ELSE 0 END) AS held_count,
          SUM(CASE WHEN u.admin_notes IS NOT NULL AND TRIM(u.admin_notes) != '' THEN 1 ELSE 0 END) AS with_notes_count,
          SUM(CASE WHEN tagged.username_id IS NOT NULL THEN 1 ELSE 0 END) AS with_tags_count,
          SUM(CASE WHEN tagged.username_id IS NULL THEN 1 ELSE 0 END) AS untagged_count,
@@ -1404,6 +1406,7 @@ export async function getUsernameStats(db: D1Database): Promise<UsernameStats> {
       burned_count: number
       pending_confirmation_count: number
       pending_release_count: number
+      held_count: number
       with_notes_count: number
       with_tags_count: number
       untagged_count: number
@@ -1426,6 +1429,7 @@ export async function getUsernameStats(db: D1Database): Promise<UsernameStats> {
     burned_count: 0,
     pending_confirmation_count: 0,
     pending_release_count: 0,
+    held_count: 0,
     with_notes_count: 0,
     with_tags_count: 0,
     untagged_count: 0,
@@ -1445,6 +1449,7 @@ export async function getUsernameStats(db: D1Database): Promise<UsernameStats> {
       burned: stats.burned_count,
       pending_confirmation: stats.pending_confirmation_count,
       pending_release: stats.pending_release_count,
+      held: stats.held_count,
     },
     metadata: {
       with_notes: stats.with_notes_count,
