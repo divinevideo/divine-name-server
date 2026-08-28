@@ -688,7 +688,7 @@ describe('Public Username Endpoints', () => {
       const response = await app.fetch(new Request('http://localhost/api/username/check/alice'), { DB: db }, createExecutionContext())
       const json = await response.json()
 
-      expect(json).toEqual(expect.objectContaining({ available: false, code: 'unavailable', reason: 'Username is unavailable' }))
+      expect(json).toEqual(expect.objectContaining({ available: false, code: 'taken', reason: 'Username is already taken' }))
       expect(JSON.stringify(json)).not.toContain('held')
     })
 

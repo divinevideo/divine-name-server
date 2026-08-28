@@ -112,7 +112,7 @@ username.get('/check/:name', async (c) => {
         }, 200, { 'Access-Control-Allow-Origin': '*' })
       }
 
-      if (existing.status === 'pending-release') {
+      if (existing.status === 'pending-release' || existing.status === 'held') {
         return c.json({
           ok: true,
           available: false,
@@ -120,17 +120,6 @@ username.get('/check/:name', async (c) => {
           canonical: usernameData.canonical,
           code: 'taken',
           reason: 'Username is already taken'
-        }, 200, { 'Access-Control-Allow-Origin': '*' })
-      }
-
-      if (existing.status === 'held') {
-        return c.json({
-          ok: true,
-          available: false,
-          name: usernameData.display,
-          canonical: usernameData.canonical,
-          code: 'unavailable',
-          reason: 'Username is unavailable'
         }, 200, { 'Access-Control-Allow-Origin': '*' })
       }
 
