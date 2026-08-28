@@ -40,7 +40,7 @@ older runtimes.
 ## Task 1: Schema foundation — breadcrumb table + `held` status
 
 **Files:**
-- Create: `migrations/0012_add_username_release_history.sql`
+- Create: `migrations/0013_add_username_release_history.sql`
 - Modify: `src/db/queries.ts` (add `held` to the three `status` unions; add the
   `UsernameReleaseHistoryRow` type)
 - Modify: `src/routes/admin.ts:18` (`VALID_ADMIN_STATUSES`)
@@ -83,7 +83,7 @@ Expected: FAIL — `no such table: username_release_history`.
 - [ ] **Step 3: Add the migration**
 
 ```sql
--- migrations/0012_add_username_release_history.sql
+-- migrations/0013_add_username_release_history.sql
 -- ABOUTME: Append-only breadcrumb of deletion-driven name releases.
 -- No pubkey: a completed deletion removes the identity. This records only that a
 -- handle was released by deletion, so support can see that a reissued handle
@@ -126,7 +126,7 @@ Expected: PASS; no type errors.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add migrations/0012_add_username_release_history.sql src/db/queries.ts \
+git add migrations/0013_add_username_release_history.sql src/db/queries.ts \
   src/routes/admin.ts src/db/test-helpers.ts \
   src/db/username-release-history-migration.test.ts
 git commit -m "feat(deletion): add release-history table and held status"

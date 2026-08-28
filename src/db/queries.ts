@@ -300,12 +300,16 @@ export async function finalizeReleaseAttempt(
   const reserved = await isReservedWord(db, existing.username_canonical)
   const targetStatus = reserved ? 'reserved' : RELEASE_HOLD_STATUS
 
-  // Clear identity-bearing resolution data so a later claim or admin assignment
-  // cannot inherit the deleted owner's relays or ATProto DID.
+  // Clear the deleted owner's identity and reservation lifecycle data so a later
+  // claim or admin assignment cannot inherit personal data. Admin notes and
+  // their audit fields are deliberately retained as operator history.
   const release = db.prepare(
     `UPDATE usernames
      SET status = ?, recyclable = 0, pubkey = NULL, relays = NULL,
-         atproto_did = NULL, atproto_state = NULL, revoked_at = ?, updated_at = ?
+         email = NULL, reservation_email = NULL, confirmation_token = NULL,
+         reservation_expires_at = NULL, subscription_expires_at = NULL,
+         claimed_at = NULL, atproto_did = NULL, atproto_state = NULL,
+         revoked_at = ?, updated_at = ?
      WHERE username_canonical = ? AND LOWER(pubkey) = LOWER(?) AND status = 'pending-release'
        AND EXISTS (
          SELECT 1 FROM username_release_attempts
@@ -468,9 +472,12 @@ export async function getUsernamesUpdatedSince(
   sinceEpoch: number
 ): Promise<Username[]> {
   const result = await db.prepare(
-    // 'held' lets the 6-hour cron backstop reaffirm a released name's Fastly KV
-    // delete. Reserved releases use the durable queue from immediate reconciliation.
-    `SELECT * FROM usernames WHERE updated_at >= ? AND status IN ('active', 'revoked', 'burned', 'pending-release', 'held')`
+    // 'held' and reserved rows marked by deletion let the 6-hour cron backstop
+    // reaffirm Fastly KV deletes. Ordinary reserved rows have revoked_at = NULL.
+    `SELECT * FROM usernames
+     WHERE updated_at >= ?
+       AND (status IN ('active', 'revoked', 'burned', 'pending-release', 'held')
+         OR (status = 'reserved' AND revoked_at IS NOT NULL))`
   ).bind(sinceEpoch).all<Username>()
 
   return result.results

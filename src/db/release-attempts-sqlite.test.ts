@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   finalizeReleaseAttempt,
+  getUsernamesUpdatedSince,
   getReleaseAttemptById,
   getLatestReleaseAttemptByPubkey,
   prepareReleaseAttempt,
@@ -78,7 +79,11 @@ describe.skipIf(!sqliteAvailable())('release attempts against real SQLite', () =
     const { db, sqlite } = withOwnedName()
     sqlite.prepare(
       `UPDATE usernames
-       SET relays = '["wss://old-owner.example"]', atproto_did = 'did:plc:old-owner', atproto_state = 'ready'
+       SET relays = '["wss://old-owner.example"]', atproto_did = 'did:plc:old-owner', atproto_state = 'ready',
+           email = 'owner@example.test', reservation_email = 'reservation@example.test',
+           confirmation_token = 'old-token', reservation_expires_at = 500,
+           subscription_expires_at = 600, claimed_at = 100,
+           admin_notes = 'retain for operators'
        WHERE username_canonical = 'alice'`
     ).run()
     await prepareReleaseAttempt(db, OWNER, 'alice', ATTEMPT, 999, 100)
@@ -91,6 +96,13 @@ describe.skipIf(!sqliteAvailable())('release attempts against real SQLite', () =
     expect(held?.relays).toBeNull()
     expect(held?.atproto_did).toBeNull()
     expect(held?.atproto_state).toBeNull()
+    expect(held?.email).toBeNull()
+    expect(held?.reservation_email).toBeNull()
+    expect(held?.confirmation_token).toBeNull()
+    expect(held?.reservation_expires_at).toBeNull()
+    expect(held?.subscription_expires_at).toBeNull()
+    expect(held?.claimed_at).toBeNull()
+    expect(held?.admin_notes).toBe('retain for operators')
     expect(held?.revoked_at).toBe(200)
 
     const history = sqlite
@@ -128,6 +140,18 @@ describe.skipIf(!sqliteAvailable())('release attempts against real SQLite', () =
       .prepare('SELECT COUNT(*) AS n FROM username_release_history WHERE username_canonical = ?')
       .get('alice') as { n: number }
     expect(count.n).toBe(0)
+  })
+
+  it('includes only deletion-origin reserved rows in the cron reconciliation window', async () => {
+    const { db, sqlite } = createSqliteD1()
+    seedUsername(sqlite, { name: 'DeletedReserve', canonical: 'deleted-reserve', pubkey: null, status: 'reserved' })
+    seedUsername(sqlite, { name: 'OrdinaryReserve', canonical: 'ordinary-reserve', pubkey: null, status: 'reserved' })
+    sqlite.prepare('UPDATE usernames SET updated_at = 200, revoked_at = 200 WHERE username_canonical = ?').run('deleted-reserve')
+    sqlite.prepare('UPDATE usernames SET updated_at = 200, revoked_at = NULL WHERE username_canonical = ?').run('ordinary-reserve')
+
+    const changed = await getUsernamesUpdatedSince(db, 100)
+
+    expect(changed.map((row) => row.username_canonical)).toEqual(['deleted-reserve'])
   })
 
   it('does not finalize after the recovery deadline', async () => {

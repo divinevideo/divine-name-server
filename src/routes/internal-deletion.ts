@@ -1,5 +1,5 @@
 // ABOUTME: Reconciles recoverable username releases for the trusted deletion coordinator.
-// ABOUTME: Keeps status, rollback, and permanent burns behind one least-privilege credential.
+// ABOUTME: Keeps status, rollback, and deletion-driven holds behind one least-privilege credential.
 
 import { Hono } from 'hono'
 import { type UsernameReleaseAttempt, finalizeReleaseAttempt, getReleaseAttemptById, rollbackReleaseAttempt } from '../db/queries'
