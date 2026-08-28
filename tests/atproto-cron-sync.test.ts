@@ -279,7 +279,7 @@ describe('ATProto cron sync payloads', () => {
     )
   })
 
-  it('marks a reserved-via-deletion name for Fastly deletion in the cron backstop', async () => {
+  it('does not fan out cron deletes for reserved names', async () => {
     getUsernamesUpdatedSince.mockResolvedValue([
       {
         id: 5,
@@ -321,7 +321,7 @@ describe('ATProto cron sync payloads', () => {
 
     expect(syncBatch).toHaveBeenCalledWith(
       expect.anything(),
-      [{ username: 'reserved-release', action: 'delete' }],
+      [],
       { concurrency: 10 }
     )
   })

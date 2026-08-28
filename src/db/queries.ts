@@ -468,10 +468,9 @@ export async function getUsernamesUpdatedSince(
   sinceEpoch: number
 ): Promise<Username[]> {
   const result = await db.prepare(
-    // 'held' and 'reserved' included so the 6-hour cron backstop re-affirms a
-    // released name's Fastly KV delete if finalize's immediate reconcile failed
-    // — both are terminal states finalize can leave with a cleared pubkey.
-    `SELECT * FROM usernames WHERE updated_at >= ? AND status IN ('active', 'revoked', 'burned', 'pending-release', 'held', 'reserved')`
+    // 'held' lets the 6-hour cron backstop reaffirm a released name's Fastly KV
+    // delete. Reserved releases use the durable queue from immediate reconciliation.
+    `SELECT * FROM usernames WHERE updated_at >= ? AND status IN ('active', 'revoked', 'burned', 'pending-release', 'held')`
   ).bind(sinceEpoch).all<Username>()
 
   return result.results
