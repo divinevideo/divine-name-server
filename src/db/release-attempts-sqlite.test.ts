@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   finalizeReleaseAttempt,
+  getUsernamesUpdatedSince,
   getReleaseAttemptById,
   getLatestReleaseAttemptByPubkey,
   prepareReleaseAttempt,
@@ -74,17 +75,83 @@ describe.skipIf(!sqliteAvailable())('release attempts against real SQLite', () =
     expect((await getReleaseAttemptById(db, ATTEMPT))?.state).toBe('pending')
   })
 
-  it('finalizes to a non-recyclable burn that cannot be rolled back', async () => {
-    const { db } = withOwnedName()
+  it('finalizes to a one-year hold, clears pubkey, and writes one breadcrumb', async () => {
+    const { db, sqlite } = withOwnedName()
+    sqlite.prepare(
+      `UPDATE usernames
+       SET relays = '["wss://old-owner.example"]', atproto_did = 'did:plc:old-owner', atproto_state = 'ready',
+           email = 'owner@example.test', reservation_email = 'reservation@example.test',
+           confirmation_token = 'old-token', reservation_expires_at = 500,
+           subscription_expires_at = 600, claimed_at = 100,
+           admin_notes = 'retain for operators'
+       WHERE username_canonical = 'alice'`
+    ).run()
     await prepareReleaseAttempt(db, OWNER, 'alice', ATTEMPT, 999, 100)
 
     expect((await finalizeReleaseAttempt(db, ATTEMPT, 'coordinator', 200)).outcome).toBe('transitioned')
-    const burned = await getUsernameByName(db, 'alice')
-    expect(burned?.status).toBe('burned')
-    expect(burned?.recyclable).toBe(0)
+    const held = await getUsernameByName(db, 'alice')
+    expect(held?.status).toBe('held')
+    expect(held?.recyclable).toBe(0)
+    expect(held?.pubkey).toBeNull()
+    expect(held?.relays).toBeNull()
+    expect(held?.atproto_did).toBeNull()
+    expect(held?.atproto_state).toBeNull()
+    expect(held?.email).toBeNull()
+    expect(held?.reservation_email).toBeNull()
+    expect(held?.confirmation_token).toBeNull()
+    expect(held?.reservation_expires_at).toBeNull()
+    expect(held?.subscription_expires_at).toBeNull()
+    expect(held?.claimed_at).toBeNull()
+    expect(held?.admin_notes).toBe('retain for operators')
+    expect(held?.revoked_at).toBe(200)
+
+    const history = sqlite
+      .prepare('SELECT username_canonical, released_at, reason FROM username_release_history WHERE username_canonical = ?')
+      .all('alice')
+    expect(history).toEqual([{ username_canonical: 'alice', released_at: 200, reason: 'deletion' }])
+
+    // A finalized attempt is terminal and cannot be rolled back.
+    expect((await rollbackReleaseAttempt(db, OWNER, 'alice', ATTEMPT)).outcome).toBe('conflict')
+  })
+
+  it('replays finalize idempotently without a second breadcrumb', async () => {
+    const { db, sqlite } = withOwnedName()
+    await prepareReleaseAttempt(db, OWNER, 'alice', ATTEMPT, 999, 100)
+    await finalizeReleaseAttempt(db, ATTEMPT, 'coordinator', 200)
 
     expect((await finalizeReleaseAttempt(db, ATTEMPT, 'coordinator', 201)).outcome).toBe('replayed')
-    expect((await rollbackReleaseAttempt(db, OWNER, 'alice', ATTEMPT)).outcome).toBe('conflict')
+    const count = sqlite
+      .prepare('SELECT COUNT(*) AS n FROM username_release_history WHERE username_canonical = ?')
+      .get('alice') as { n: number }
+    expect(count.n).toBe(1)
+  })
+
+  it('returns a reserved-origin name to the reserve with no hold or breadcrumb', async () => {
+    const { db, sqlite } = withOwnedName()
+    sqlite.prepare(`INSERT INTO reserved_words (word, category, reason, created_at) VALUES ('alice', 'brand', 'test', 100)`).run()
+    await prepareReleaseAttempt(db, OWNER, 'alice', ATTEMPT, 999, 100)
+
+    expect((await finalizeReleaseAttempt(db, ATTEMPT, 'coordinator', 200)).outcome).toBe('transitioned')
+    const reserved = await getUsernameByName(db, 'alice')
+    expect(reserved?.status).toBe('reserved')
+    expect(reserved?.pubkey).toBeNull()
+
+    const count = sqlite
+      .prepare('SELECT COUNT(*) AS n FROM username_release_history WHERE username_canonical = ?')
+      .get('alice') as { n: number }
+    expect(count.n).toBe(0)
+  })
+
+  it('includes only deletion-origin reserved rows in the cron reconciliation window', async () => {
+    const { db, sqlite } = createSqliteD1()
+    seedUsername(sqlite, { name: 'DeletedReserve', canonical: 'deleted-reserve', pubkey: null, status: 'reserved' })
+    seedUsername(sqlite, { name: 'OrdinaryReserve', canonical: 'ordinary-reserve', pubkey: null, status: 'reserved' })
+    sqlite.prepare('UPDATE usernames SET updated_at = 200, revoked_at = 200 WHERE username_canonical = ?').run('deleted-reserve')
+    sqlite.prepare('UPDATE usernames SET updated_at = 200, revoked_at = NULL WHERE username_canonical = ?').run('ordinary-reserve')
+
+    const changed = await getUsernamesUpdatedSince(db, 100)
+
+    expect(changed.map((row) => row.username_canonical)).toEqual(['deleted-reserve'])
   })
 
   it('does not finalize after the recovery deadline', async () => {

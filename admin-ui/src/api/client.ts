@@ -12,7 +12,8 @@ import type {
   FastlySyncPageResponse,
   Nip05StatusResponse,
   ResyncResponse,
-  UsernameStatsResponse
+  UsernameStatsResponse,
+  UsernameReleaseHistoryResponse
 } from '../types'
 
 const API_BASE = '/api/admin'
@@ -100,6 +101,22 @@ export async function getUsername(name: string): Promise<UsernameLookupResponse>
     throw new Error(`Lookup failed: ${response.statusText}`)
   }
 
+  return response.json()
+}
+
+export async function getUsernameReleaseHistory(name: string): Promise<UsernameReleaseHistoryResponse> {
+  const response = await fetch(`${API_BASE}/username/${encodeURIComponent(name)}/release-history`)
+  if (!response.ok) {
+    return parseErrorResponse<UsernameReleaseHistoryResponse>(response, 'Release history lookup failed')
+  }
+  return response.json()
+}
+
+export async function releaseHeldUsername(name: string): Promise<ApiResponse> {
+  const response = await fetch(`${API_BASE}/username/${encodeURIComponent(name)}/release-hold`, { method: 'POST' })
+  if (!response.ok) {
+    return parseErrorResponse<ApiResponse>(response, 'Release hold failed')
+  }
   return response.json()
 }
 

@@ -62,17 +62,17 @@ function createReleaseDB() {
                 attempt.state = state; attempt.updated_at = updatedAt; attempt.cancelled_at = cancelledAt
                 return { success: true, meta: { changes: 1 } }
               }
-              if (sql.includes("SET status = 'burned'")) {
-                const [revokedAt, updatedAt, canonical, pubkey, attemptId] = params
+              if (sql.includes('SET status = ?')) {
+                const [targetStatus, revokedAt, updatedAt, canonical, pubkey, attemptId] = params
                 const attempt = attempts.get(attemptId)
                 if (username.status !== 'pending-release' || canonical !== username.username_canonical || pubkey.toLowerCase() !== username.pubkey.toLowerCase() || attempt?.state !== 'pending') return { success: true, meta: { changes: 0 } }
-                username.status = 'burned'; username.recyclable = 0; username.revoked_at = revokedAt; username.updated_at = updatedAt
+                username.status = targetStatus; username.recyclable = 0; username.pubkey = null; username.revoked_at = revokedAt; username.updated_at = updatedAt
                 return { success: true, meta: { changes: 1 } }
               }
               if (sql.includes("SET state = 'finalized'")) {
                 const [updatedAt, finalizedAt, finalizedBy, attemptId] = params
                 const attempt = attempts.get(attemptId)
-                if (attempt?.state !== 'pending' || username.status !== 'burned') return { success: true, meta: { changes: 0 } }
+                if (attempt?.state !== 'pending' || username.status !== 'held') return { success: true, meta: { changes: 0 } }
                 attempt.state = 'finalized'; attempt.updated_at = updatedAt; attempt.finalized_at = finalizedAt; attempt.finalized_by = finalizedBy
                 return { success: true, meta: { changes: 1 } }
               }
@@ -103,11 +103,12 @@ describe('release-attempt database state machine', () => {
 
   it('allows exactly one terminal transition and makes finalization permanent', async () => {
     const { db, username } = createReleaseDB()
-    await prepareReleaseAttempt(db, username.pubkey, 'alice', 'delete-attempt-00000002', 500, 100)
+    const owner = username.pubkey // finalize clears the row's pubkey; the caller identity is the original owner
+    await prepareReleaseAttempt(db, owner, 'alice', 'delete-attempt-00000002', 500, 100)
     expect((await finalizeReleaseAttempt(db, 'delete-attempt-00000002', 'coordinator', 200)).outcome).toBe('transitioned')
-    expect(username).toMatchObject({ status: 'burned', recyclable: 0 })
+    expect(username).toMatchObject({ status: 'held', recyclable: 0, pubkey: null })
     expect((await finalizeReleaseAttempt(db, 'delete-attempt-00000002', 'coordinator', 201)).outcome).toBe('replayed')
-    expect((await rollbackReleaseAttempt(db, username.pubkey, 'alice', 'delete-attempt-00000002')).outcome).toBe('conflict')
+    expect((await rollbackReleaseAttempt(db, owner, 'alice', 'delete-attempt-00000002')).outcome).toBe('conflict')
   })
 
   it('rejects non-owners and a second pending attempt', async () => {

@@ -2,8 +2,8 @@
 // ABOUTME: Shows all metadata and provides actions like assign, revoke, burn
 import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { getUsername, assignUsername, revokeUsername, addTagToUsername, removeTagFromUsername, getAllTags, updateAdminNotes, getNip05Status, resyncToFastly } from '../api/client'
-import type { Username, TagDetail, Nip05StatusResponse } from '../types'
+import { getUsername, getUsernameReleaseHistory, releaseHeldUsername, assignUsername, revokeUsername, addTagToUsername, removeTagFromUsername, getAllTags, updateAdminNotes, getNip05Status, resyncToFastly } from '../api/client'
+import type { Username, UsernameReleaseHistoryRow, TagDetail, Nip05StatusResponse } from '../types'
 import StatusBadge from '../components/StatusBadge'
 
 const MAX_ADMIN_NOTES_LENGTH = 5000
@@ -14,6 +14,9 @@ export default function UsernameDetail() {
   const [username, setUsername] = useState<Username | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [releaseHistory, setReleaseHistory] = useState<UsernameReleaseHistoryRow[]>([])
+  const [releaseLoading, setReleaseLoading] = useState(false)
+  const [releaseError, setReleaseError] = useState<string | null>(null)
 
   // Action states
   const [showAssign, setShowAssign] = useState(false)
@@ -83,6 +86,7 @@ export default function UsernameDetail() {
 
   useEffect(() => {
     loadUsername()
+    loadReleaseHistory()
     loadNip05Status()
     getAllTags().then(data => setAllKnownTags(data.tags || [])).catch(() => {})
   }, [name])
@@ -116,6 +120,34 @@ export default function UsernameDetail() {
       setError(err instanceof Error ? err.message : 'Failed to load username')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadReleaseHistory = async () => {
+    if (!name) return
+    try {
+      const result = await getUsernameReleaseHistory(name)
+      setReleaseHistory(result.ok ? result.history || [] : [])
+    } catch {
+      setReleaseHistory([])
+    }
+  }
+
+  const handleReleaseHold = async () => {
+    if (!name || !window.confirm(`Return "${name}" to public circulation now?`)) return
+    setReleaseLoading(true)
+    setReleaseError(null)
+    try {
+      const result = await releaseHeldUsername(name)
+      if (!result.ok) {
+        setReleaseError(result.error || 'Release failed')
+        return
+      }
+      await Promise.all([loadUsername(), loadReleaseHistory()])
+    } catch (err) {
+      setReleaseError(err instanceof Error ? err.message : 'Release failed')
+    } finally {
+      setReleaseLoading(false)
     }
   }
 
@@ -285,6 +317,22 @@ export default function UsernameDetail() {
           {username.name}@divine.video
         </p>
       </div>
+
+      {username.status === 'held' && (
+        <div className="rounded-lg bg-amber-50 border border-amber-200 p-4 mb-6">
+          <p className="text-sm font-medium text-amber-900">Deletion hold</p>
+          <p className="mt-1 text-sm text-amber-800">This name remains unavailable until the one-year hold expires.</p>
+          <button
+            type="button"
+            onClick={handleReleaseHold}
+            disabled={releaseLoading}
+            className="mt-3 inline-flex items-center px-3 py-2 border border-amber-300 text-sm font-medium rounded-md shadow-sm text-amber-900 bg-white hover:bg-amber-100 disabled:opacity-50"
+          >
+            {releaseLoading ? 'Releasing...' : 'Release Hold Early'}
+          </button>
+          {releaseError && <p className="mt-2 text-sm text-red-700">{releaseError}</p>}
+        </div>
+      )}
 
       {/* Reserved banner with inline assign */}
       {(username.status === 'reserved' || username.status === 'pending-confirmation') && !username.pubkey && (
@@ -470,6 +518,22 @@ export default function UsernameDetail() {
           </div>
         </div>
       </div>
+
+      {releaseHistory.length > 0 && (
+        <div className="bg-white shadow rounded-lg overflow-hidden mb-6">
+          <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
+            <h3 className="text-lg font-medium text-gray-900">Release History</h3>
+          </div>
+          <div className="divide-y divide-gray-200">
+            {releaseHistory.map((entry) => (
+              <div key={entry.id} className="px-6 py-3 text-sm text-gray-700">
+                <span className="font-medium capitalize">{entry.reason}</span>
+                <span className="ml-2 text-gray-500">{formatDate(entry.released_at)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Internal Notes Card */}
       <div className="bg-white shadow rounded-lg overflow-hidden mb-6">

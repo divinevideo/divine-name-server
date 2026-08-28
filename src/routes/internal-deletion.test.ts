@@ -26,7 +26,7 @@ const attempt = {
   attempt_id: 'delete-attempt-00000001', username_canonical: 'alice', pubkey: 'a'.repeat(64), state: 'finalized',
   created_at: 1, updated_at: 2, expires_at: 3, cancelled_at: null, finalized_at: 2, finalized_by: 'deletion-coordinator',
 }
-const username = { username_canonical: 'alice', name: 'alice', status: 'burned' }
+const username = { username_canonical: 'alice', name: 'alice', status: 'held' }
 
 function request(token = 'secret') {
   return new Request('http://localhost/api/internal/username/release/finalize', {

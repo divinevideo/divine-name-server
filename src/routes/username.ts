@@ -112,7 +112,7 @@ username.get('/check/:name', async (c) => {
         }, 200, { 'Access-Control-Allow-Origin': '*' })
       }
 
-      if (existing.status === 'pending-release') {
+      if (existing.status === 'pending-release' || existing.status === 'held') {
         return c.json({
           ok: true,
           available: false,

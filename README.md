@@ -55,8 +55,9 @@ Admin API routes are guarded on two axes:
 A scheduled handler runs hourly (`0 * * * *`):
 
 1. Expires unconfirmed reservations older than 48 hours.
-2. Restores abandoned pending username releases after their recorded 72-hour recovery deadline; expiry never burns a name.
-3. Reconciles usernames changed in the last six hours, plus anything left in the durable Fastly sync queue, into Fastly KV — syncing active names and deleting revoked, burned, or pending-release names. Versioned queue entries prevent an older edge operation from clearing newer desired state.
+2. Returns deletion-held names to circulation after one year.
+3. Restores abandoned pending username releases after their recorded 72-hour recovery deadline; expiry never burns a name.
+4. Reconciles usernames changed in the last six hours, plus anything left in the durable Fastly sync queue, into Fastly KV — syncing active names and deleting revoked, burned, pending-release, or held names. Versioned queue entries prevent an older edge operation from clearing newer desired state.
 
 ## Getting started
 
@@ -194,19 +195,23 @@ Claim a username by proving key ownership.
 
 #### Recoverable release lifecycle
 
-The deletion coordinator supplies one opaque 16–128 character attempt ID across services. Preparing changes the owned row from `active` to `pending-release`; the name stops resolving but remains owned and unavailable to claims. The authenticated owner may roll it back to `active`, or the trusted deletion coordinator may finalize it to non-recyclable `burned`. Replays of the same transition are safe. A finalized attempt cannot be rolled back.
+The deletion coordinator supplies one opaque 16–128 character attempt ID across services. Preparing changes the owned row from `active` to `pending-release`; the name stops resolving but remains owned and unavailable to claims. The authenticated owner may roll it back to `active`. Finalizing returns protected words to `reserved`; every other name becomes non-recyclable `held` for one year, then moves to recyclable `revoked`. Finalization clears the deleted owner's public resolution identity and records a pubkey-free release-history breadcrumb. Replays of the same transition are safe. A finalized attempt cannot be rolled back.
 
 ```text
 active --prepare--> pending-release --rollback--------> active / cancelled
                               |--72h expiry restore---> active / expired-restored
-                              `--service finalize-----> burned / finalized
+                              `--service finalize-----> held or reserved / finalized
+                                                        |
+                                                        `--1 year--> revoked / claimable
 ```
 
 The deletion coordinator uses `Authorization: Bearer <DELETION_COORDINATOR_TOKEN>` for three internal operations. All three resolve the owning pubkey and name from the stored attempt, so a caller cannot substitute its own ownership data:
 
 - `GET /api/internal/username/release/attempt/:attemptId` returns the attempt's `state`, `username`, `pubkey`, and `expires_at`, so the coordinator can check the account binding and the recovery deadline itself. `404` when the attempt is unknown.
-- `POST /api/internal/username/release/rollback` accepts `{ "attempt_id": "..." }`, restores the held name to `active`, and cancels the attempt. It also succeeds idempotently when the same owner and name were already restored by cancellation or the 72h expiry sweeper. `409` with `attempt_finalized` once the name is burned, or `attempt_conflict` for another incompatible state.
-- `POST /api/internal/username/release/finalize` accepts `{ "attempt_id": "..." }` and permanently burns the held name. `409` with `attempt_expired` past the recovery deadline, `attempt_cancelled` once it was rolled back, or `attempt_conflict` when the held name is no longer `pending-release` — an owner rollback that lands between the coordinator's read and its write reaches this case with the attempt still `pending` and unexpired.
+- `POST /api/internal/username/release/rollback` accepts `{ "attempt_id": "..." }`, restores the pending-release name to `active`, and cancels the attempt. It also succeeds idempotently when the same owner and name were already restored by cancellation or the 72h expiry sweeper. `409` with `attempt_finalized` once finalization has completed, or `attempt_conflict` for another incompatible state.
+- `POST /api/internal/username/release/finalize` accepts `{ "attempt_id": "..." }`, returns protected words to the reserve, and places other names on a one-year hold. `409` with `attempt_expired` past the recovery deadline, `attempt_cancelled` once it was rolled back, or `attempt_conflict` when the name is no longer `pending-release`.
+
+The legacy `POST /api/username/release` compatibility endpoint still performs an immediate permanent burn for clients that have not migrated to the recoverable lifecycle. Its removal is tracked by `TODO(#78)` in the route.
 
 Set the credential with `wrangler secret put DELETION_COORDINATOR_TOKEN`; it is intentionally separate from `ATPROTO_SYNC_TOKEN`.
 
@@ -264,6 +269,8 @@ Guarded by the hostname + auth rules above. Highlights:
 | `GET` | `/api/admin/usernames/search` | Search by name, pubkey, or status |
 | `GET` | `/api/admin/usernames/stats` | Registry counts |
 | `GET` | `/api/admin/username/:name` | Name detail, including tags |
+| `GET` | `/api/admin/username/:name/release-history` | Read pubkey-free deletion release history |
+| `POST` | `/api/admin/username/:name/release-hold` | Return a held name to circulation early |
 | `POST` | `/api/admin/username/reserve` · `/reserve-bulk` | Reserve one or many names |
 | `POST` | `/api/admin/username/revoke` | Revoke (recyclable) or burn (permanent) a name |
 | `POST` | `/api/admin/username/restore` | Re-bind a revoked/burned name to a pubkey |
@@ -305,7 +312,7 @@ Migrations under `migrations/` define and evolve the schema (`0001_initial_schem
 | `username_canonical` | TEXT | Canonical (lowercased, punycode) form used for lookups |
 | `pubkey` | TEXT | Hex Nostr public key |
 | `relays` | TEXT | JSON array of relay hints (max 50) |
-| `status` | TEXT | `active`, `reserved`, `revoked`, `burned`, `pending-confirmation`, `pending-release` |
+| `status` | TEXT | `active`, `reserved`, `revoked`, `burned`, `pending-confirmation`, `pending-release`, `held` |
 | `recyclable` | INTEGER | Whether a freed name can be reclaimed |
 | `atproto_did` / `atproto_state` | TEXT | ATProto handle linkage |
 | `created_at` / `updated_at` / `claimed_at` / `revoked_at` | INTEGER | Unix timestamps |
@@ -316,6 +323,10 @@ A partial unique index enforces one owned (`active` or `pending-release`) name p
 ### username_release_attempts
 
 Durable audit records keyed by opaque deletion-attempt ID. Each record stores the canonical name, owner pubkey, state (`pending`, `cancelled`, `finalized`, or `expired-restored`), timestamps, explicit expiry, and service finalizer identity. Admins can inspect recent attempts through `GET /api/admin/username-release-attempts`.
+
+### username_release_history
+
+Append-only, pubkey-free breadcrumbs recording when a name was released by account deletion. Entries remain after the name is reissued and are visible only through the authenticated admin API.
 
 ### reserved_words
 
@@ -342,7 +353,7 @@ The service exposes the same pubkey in three forms:
 - **Cryptographic claims** — Every claim requires a valid, time-bound NIP-98 signature; there is no session state to hijack.
 - **Gated reservations** — Public reservations require payment or an invite code, are rate-limited per email, and are confirmed by email before activation.
 - **Admin defense in depth** — A hostname guard plus Cloudflare Access or an allowlisted Keycast session protect every admin route.
-- **Namespace protection** — Reserved words and service subdomains keep system routes and brand names unclaimable; burned names are permanently unavailable.
+- **Namespace protection** — Reserved words and service subdomains keep system routes and brand names unclaimable; burned names are permanently unavailable, while deletion-held names remain unavailable for one year.
 - **No hijacking** — A partial unique index prevents taking over a name owned by another pubkey.
 
 ## Documentation

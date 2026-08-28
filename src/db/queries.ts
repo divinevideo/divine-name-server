@@ -20,7 +20,7 @@ export interface Username {
   pubkey: string | null
   email: string | null
   relays: string | null
-  status: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'pending-release'
+  status: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'pending-release' | 'held'
   recyclable: number
   created_at: number
   updated_at: number
@@ -40,6 +40,13 @@ export interface Username {
   atproto_state: 'pending' | 'ready' | 'failed' | 'disabled' | null
 }
 
+export interface UsernameReleaseHistoryRow {
+  id: number
+  username_canonical: string
+  released_at: number
+  reason: string
+}
+
 export interface ReservationToken {
   id: number
   token: string
@@ -52,7 +59,7 @@ export interface ReservationToken {
 
 export interface SearchParams {
   query: string
-  status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'pending-release' | 'recovered'
+  status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'pending-release' | 'held' | 'recovered'
   tag?: string
   sort?: SearchSort
   page?: number
@@ -268,6 +275,9 @@ export async function rollbackReleaseAttempt(
   return { outcome: 'transitioned', attempt, username }
 }
 
+/** Terminal status for a released (non-reserved) name: a one-year hold. */
+const RELEASE_HOLD_STATUS = 'held'
+
 export async function finalizeReleaseAttempt(
   db: D1Database,
   attemptId: string,
@@ -277,32 +287,65 @@ export async function finalizeReleaseAttempt(
   const existing = await getReleaseAttemptById(db, attemptId)
   if (!existing) return { outcome: 'not_found' }
   const currentUsername = await getUsernameByName(db, existing.username_canonical)
-  if (existing.state === 'finalized' && currentUsername?.status === 'burned') {
+  // A finalized attempt is terminal. Its downstream name status may since have
+  // moved (held -> revoked after a year, or reissued to a new owner), so replay
+  // keys on the attempt ledger, not the current name status.
+  if (existing.state === 'finalized' && currentUsername) {
     return { outcome: 'replayed', attempt: existing, username: currentUsername }
   }
   if (existing.state !== 'pending') return { outcome: 'conflict', attempt: existing }
   if (existing.expires_at <= now) return { outcome: 'conflict', attempt: existing }
 
-  const burn = db.prepare(
+  // Reserved-origin names return to the reserve; everyone else enters the hold.
+  const reserved = await isReservedWord(db, existing.username_canonical)
+  const targetStatus = reserved ? 'reserved' : RELEASE_HOLD_STATUS
+
+  // Clear the deleted owner's identity and reservation lifecycle data so a later
+  // claim or admin assignment cannot inherit personal data. Admin notes and
+  // their audit fields are deliberately retained as operator history.
+  const release = db.prepare(
     `UPDATE usernames
-     SET status = 'burned', recyclable = 0, revoked_at = ?, updated_at = ?
+     SET status = ?, recyclable = 0, pubkey = NULL, relays = NULL,
+         email = NULL, reservation_email = NULL, confirmation_token = NULL,
+         reservation_expires_at = NULL, subscription_expires_at = NULL,
+         claimed_at = NULL, atproto_did = NULL, atproto_state = NULL,
+         revoked_at = ?, updated_at = ?
      WHERE username_canonical = ? AND LOWER(pubkey) = LOWER(?) AND status = 'pending-release'
        AND EXISTS (
          SELECT 1 FROM username_release_attempts
          WHERE attempt_id = ? AND state = 'pending' AND expires_at > ?
        )`
-  ).bind(now, now, existing.username_canonical, existing.pubkey, attemptId, now)
+  ).bind(targetStatus, now, now, existing.username_canonical, existing.pubkey, attemptId, now)
+
+  // Breadcrumb only for the hold path. Guarded on (name now at target) AND
+  // (attempt still pending) so a racing second finalize cannot double-insert:
+  // finishAttempt below flips the attempt to 'finalized' in this same batch,
+  // and any concurrent transaction sees that committed state.
+  const recordHistory = db.prepare(
+    `INSERT INTO username_release_history (username_canonical, released_at, reason)
+     SELECT ?, ?, 'deletion'
+     WHERE EXISTS (SELECT 1 FROM usernames WHERE username_canonical = ? AND status = ?)
+       AND EXISTS (SELECT 1 FROM username_release_attempts WHERE attempt_id = ? AND state = 'pending')`
+  ).bind(existing.username_canonical, now, existing.username_canonical, targetStatus, attemptId)
+
   const finishAttempt = db.prepare(
     `UPDATE username_release_attempts
      SET state = 'finalized', updated_at = ?, finalized_at = ?, finalized_by = ?
      WHERE attempt_id = ? AND state = 'pending'
-       AND EXISTS (SELECT 1 FROM usernames WHERE username_canonical = ? AND status = 'burned')`
-  ).bind(now, now, finalizedBy, attemptId, existing.username_canonical)
-  const [burnResult, attemptResult] = await db.batch([burn, finishAttempt])
+       AND EXISTS (SELECT 1 FROM usernames WHERE username_canonical = ? AND status = ?)`
+  ).bind(now, now, finalizedBy, attemptId, existing.username_canonical, targetStatus)
+
+  const statements = reserved
+    ? [release, finishAttempt]
+    : [release, recordHistory, finishAttempt]
+  const results = await db.batch(statements)
+  const releaseResult = results[0]
+  const attemptResult = results[results.length - 1]
+
   const attempt = await getReleaseAttemptById(db, attemptId)
   const username = await getUsernameByName(db, existing.username_canonical)
-  if (!burnResult.meta?.changes || !attemptResult.meta?.changes) {
-    if (attempt?.state === 'finalized' && username?.status === 'burned') {
+  if (!releaseResult.meta?.changes || !attemptResult.meta?.changes) {
+    if (attempt?.state === 'finalized' && username) {
       return { outcome: 'replayed', attempt, username }
     }
     return { outcome: 'conflict', attempt: attempt || undefined }
@@ -429,7 +472,12 @@ export async function getUsernamesUpdatedSince(
   sinceEpoch: number
 ): Promise<Username[]> {
   const result = await db.prepare(
-    `SELECT * FROM usernames WHERE updated_at >= ? AND status IN ('active', 'revoked', 'burned', 'pending-release')`
+    // 'held' and reserved rows marked by deletion let the 6-hour cron backstop
+    // reaffirm Fastly KV deletes. Ordinary reserved rows have revoked_at = NULL.
+    `SELECT * FROM usernames
+     WHERE updated_at >= ?
+       AND (status IN ('active', 'revoked', 'burned', 'pending-release', 'held')
+         OR (status = 'reserved' AND revoked_at IS NOT NULL))`
   ).bind(sinceEpoch).all<Username>()
 
   return result.results
@@ -995,7 +1043,7 @@ export async function deleteReservedWord(
 
 export async function exportUsernamesByStatus(
   db: D1Database,
-  status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'pending-release' | 'recovered'
+  status?: 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'pending-release' | 'held' | 'recovered'
 ): Promise<Username[]> {
   if (status === 'recovered') {
     const result = await db.prepare(
@@ -1164,6 +1212,57 @@ export async function expireStaleReservations(
   return result.meta?.changes ?? 0
 }
 
+/** The one-year hold window before a released name returns to circulation. */
+export const RELEASE_HOLD_SECONDS = 365 * 24 * 60 * 60
+
+/**
+ * Return holds whose one-year window has elapsed to a claimable `revoked` row
+ * (the only status the claim path accepts). The `username_release_history`
+ * breadcrumb is retained. Returns the number of names cleared.
+ */
+export async function expireHolds(
+  db: D1Database,
+  now = Math.floor(Date.now() / 1000),
+  holdSeconds = RELEASE_HOLD_SECONDS
+): Promise<number> {
+  const result = await db.prepare(
+    `UPDATE usernames
+     SET status = 'revoked', recyclable = 1, updated_at = ?
+     WHERE status = 'held' AND revoked_at <= ?`
+  ).bind(now, now - holdSeconds).run()
+  return result.meta?.changes ?? 0
+}
+
+/**
+ * End a name's hold immediately (admin action), returning it to a claimable
+ * `revoked` row. Returns the rows changed (0 when the name is not held).
+ */
+export async function releaseHeldNameEarly(
+  db: D1Database,
+  usernameCanonical: string,
+  now = Math.floor(Date.now() / 1000)
+): Promise<number> {
+  const result = await db.prepare(
+    `UPDATE usernames
+     SET status = 'revoked', recyclable = 1, updated_at = ?
+     WHERE username_canonical = ? AND status = 'held'`
+  ).bind(now, usernameCanonical).run()
+  return result.meta?.changes ?? 0
+}
+
+export async function getUsernameReleaseHistory(
+  db: D1Database,
+  usernameCanonical: string
+): Promise<UsernameReleaseHistoryRow[]> {
+  const result = await db.prepare(
+    `SELECT id, username_canonical, released_at, reason
+     FROM username_release_history
+     WHERE username_canonical = ?
+     ORDER BY released_at DESC`
+  ).bind(usernameCanonical).all<UsernameReleaseHistoryRow>()
+  return result.results
+}
+
 // --- Tag functions ---
 
 export async function addTag(
@@ -1259,6 +1358,7 @@ export interface UsernameStats {
     burned: number
     pending_confirmation: number
     pending_release: number
+    held: number
   }
   metadata: {
     with_notes: number
@@ -1290,6 +1390,7 @@ export async function getUsernameStats(db: D1Database): Promise<UsernameStats> {
          SUM(CASE WHEN u.status = 'burned' THEN 1 ELSE 0 END) AS burned_count,
          SUM(CASE WHEN u.status = 'pending-confirmation' THEN 1 ELSE 0 END) AS pending_confirmation_count,
          SUM(CASE WHEN u.status = 'pending-release' THEN 1 ELSE 0 END) AS pending_release_count,
+         SUM(CASE WHEN u.status = 'held' THEN 1 ELSE 0 END) AS held_count,
          SUM(CASE WHEN u.admin_notes IS NOT NULL AND TRIM(u.admin_notes) != '' THEN 1 ELSE 0 END) AS with_notes_count,
          SUM(CASE WHEN tagged.username_id IS NOT NULL THEN 1 ELSE 0 END) AS with_tags_count,
          SUM(CASE WHEN tagged.username_id IS NULL THEN 1 ELSE 0 END) AS untagged_count,
@@ -1313,6 +1414,7 @@ export async function getUsernameStats(db: D1Database): Promise<UsernameStats> {
       burned_count: number
       pending_confirmation_count: number
       pending_release_count: number
+      held_count: number
       with_notes_count: number
       with_tags_count: number
       untagged_count: number
@@ -1335,6 +1437,7 @@ export async function getUsernameStats(db: D1Database): Promise<UsernameStats> {
     burned_count: 0,
     pending_confirmation_count: 0,
     pending_release_count: 0,
+    held_count: 0,
     with_notes_count: 0,
     with_tags_count: 0,
     untagged_count: 0,
@@ -1354,6 +1457,7 @@ export async function getUsernameStats(db: D1Database): Promise<UsernameStats> {
       burned: stats.burned_count,
       pending_confirmation: stats.pending_confirmation_count,
       pending_release: stats.pending_release_count,
+      held: stats.held_count,
     },
     metadata: {
       with_notes: stats.with_notes_count,

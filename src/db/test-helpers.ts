@@ -7,7 +7,7 @@ import type { Username } from './queries'
 export type MockRecord = Partial<Username> & { name: string; username_canonical: string }
 
 const USERNAME_STATUSES = [
-  'active', 'reserved', 'revoked', 'burned', 'pending-confirmation', 'pending-release',
+  'active', 'reserved', 'revoked', 'burned', 'pending-confirmation', 'pending-release', 'held',
 ]
 
 export function createExecutionContext(
@@ -189,6 +189,7 @@ export function createFakeD1(
                   revoked_count: records.filter(u => u.status === 'revoked').length,
                   burned_count: records.filter(u => u.status === 'burned').length,
                   pending_confirmation_count: records.filter(u => u.status === 'pending-confirmation').length,
+                  held_count: records.filter(u => u.status === 'held').length,
                   with_notes_count: records.filter(u => typeof u.admin_notes === 'string' && u.admin_notes.trim().length > 0).length,
                   with_tags_count: records.filter(u => u.id != null && taggedIds.has(u.id)).length,
                   untagged_count: records.filter(u => u.id == null || !taggedIds.has(u.id)).length,

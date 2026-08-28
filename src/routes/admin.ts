@@ -5,7 +5,7 @@ import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
 import { bech32 } from '@scure/base'
 import { getSession } from '../auth/keycast-oauth'
-import { reserveUsername, revokeUsername, restoreUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getActiveUsernamesPaginated, countActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags, getUsernameStats, updateAdminNotes, enqueueFastlySyncTask, getQueuedFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, getLatestReleaseAttemptByPubkey, listReleaseAttempts, type ReleaseAttemptState, type SearchSort } from '../db/queries'
+import { reserveUsername, revokeUsername, restoreUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getActiveUsernamesPaginated, countActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags, getUsernameStats, updateAdminNotes, releaseHeldNameEarly, getUsernameReleaseHistory, enqueueFastlySyncTask, getQueuedFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, getLatestReleaseAttemptByPubkey, listReleaseAttempts, type ReleaseAttemptState, type SearchSort } from '../db/queries'
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
 import { syncUsernameToFastly, deleteUsernameFromFastly, syncBatch, parseRelayHints, readUsernameFromFastly, syncAndVerifyUsername, usernameKVDataMatches } from '../utils/fastly-sync'
 import { sendAssignmentNotificationEmail } from '../utils/email'
@@ -15,7 +15,7 @@ const MAX_ADMIN_NOTES_LENGTH = 5000
 const PENDING_RELEASE_OWNER_ERROR =
   'That pubkey has a pending release attempt; roll it back or finalize it first'
 
-const VALID_ADMIN_STATUSES = ['active', 'reserved', 'revoked', 'burned', 'pending-confirmation', 'pending-release', 'recovered'] as const
+const VALID_ADMIN_STATUSES = ['active', 'reserved', 'revoked', 'burned', 'pending-confirmation', 'pending-release', 'held', 'recovered'] as const
 type AdminStatusFilter = (typeof VALID_ADMIN_STATUSES)[number]
 
 /**
@@ -238,6 +238,37 @@ admin.get('/username/:name', async (c) => {
     return c.json({ ok: true, username: { ...username, tags, tag_details: tagDetails } })
   } catch (error) {
     console.error('Username lookup error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.get('/username/:name/release-history', async (c) => {
+  try {
+    const { canonical } = validateUsername(c.req.param('name'))
+    const history = await getUsernameReleaseHistory(c.env.DB, canonical)
+    return c.json({ ok: true, history })
+  } catch (error) {
+    if (error instanceof UsernameValidationError) {
+      return c.json({ ok: false, error: error.message }, 400)
+    }
+    console.error('Release-history lookup error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.post('/username/:name/release-hold', async (c) => {
+  try {
+    const { canonical } = validateUsername(c.req.param('name'))
+    const changed = await releaseHeldNameEarly(c.env.DB, canonical)
+    if (changed === 0) {
+      return c.json({ ok: false, error: 'Name is not currently held' }, 409)
+    }
+    return c.json({ ok: true, status: 'revoked' })
+  } catch (error) {
+    if (error instanceof UsernameValidationError) {
+      return c.json({ ok: false, error: error.message }, 400)
+    }
+    console.error('Force-release hold error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
   }
 })
