@@ -1,4 +1,4 @@
-// ABOUTME: Displays color-coded status badges for username states (active, reserved, revoked, burned, pending-confirmation, recovered)
+// ABOUTME: Displays color-coded status badges for username lifecycle states
 // ABOUTME: Provides visual distinction between different username lifecycle states using Tailwind classes
 import type { UsernameStatus } from '../types'
 
@@ -15,6 +15,7 @@ export default function StatusBadge({ status, isRecovered }: StatusBadgeProps) {
     burned: 'bg-red-100 text-red-800',
     'pending-confirmation': 'bg-cyan-100 text-cyan-800',
     'pending-release': 'bg-orange-100 text-orange-800',
+    held: 'bg-amber-100 text-amber-900',
     recovered: 'bg-purple-100 text-purple-800'
   }
   const labels: Record<string, string> = {

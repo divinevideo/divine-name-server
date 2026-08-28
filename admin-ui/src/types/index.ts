@@ -1,6 +1,6 @@
 export type ClaimSource = 'self-service' | 'admin' | 'bulk-upload' | 'vine-import' | 'public-reservation' | 'unknown'
 export type SearchSort = 'relevance' | 'newest' | 'oldest' | 'updated'
-export type UsernameStatus = 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'pending-release'
+export type UsernameStatus = 'active' | 'reserved' | 'revoked' | 'burned' | 'pending-confirmation' | 'pending-release' | 'held'
 
 export interface TagDetail {
   tag: string
@@ -61,6 +61,17 @@ export interface AssignResponse extends ApiResponse {
 
 export interface UsernameLookupResponse extends ApiResponse {
   username?: Username
+}
+
+export interface UsernameReleaseHistoryRow {
+  id: number
+  username_canonical: string
+  released_at: number
+  reason: string
+}
+
+export interface UsernameReleaseHistoryResponse extends ApiResponse {
+  history?: UsernameReleaseHistoryRow[]
 }
 
 export interface RevokeResponse extends ApiResponse {
@@ -140,6 +151,7 @@ export interface UsernameStats {
     burned: number
     pending_confirmation: number
     pending_release: number
+    held: number
   }
   metadata: {
     with_notes: number
