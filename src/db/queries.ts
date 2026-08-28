@@ -300,11 +300,12 @@ export async function finalizeReleaseAttempt(
   const reserved = await isReservedWord(db, existing.username_canonical)
   const targetStatus = reserved ? 'reserved' : RELEASE_HOLD_STATUS
 
-  // pubkey cleared on finalize so a held/reissued name carries no trace of the
-  // deleted account (deletion policy 2026-08-27).
+  // Clear identity-bearing resolution data so a later claim or admin assignment
+  // cannot inherit the deleted owner's relays or ATProto DID.
   const release = db.prepare(
     `UPDATE usernames
-     SET status = ?, recyclable = 0, pubkey = NULL, revoked_at = ?, updated_at = ?
+     SET status = ?, recyclable = 0, pubkey = NULL, relays = NULL,
+         atproto_did = NULL, atproto_state = NULL, revoked_at = ?, updated_at = ?
      WHERE username_canonical = ? AND LOWER(pubkey) = LOWER(?) AND status = 'pending-release'
        AND EXISTS (
          SELECT 1 FROM username_release_attempts

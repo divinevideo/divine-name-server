@@ -76,6 +76,11 @@ describe.skipIf(!sqliteAvailable())('release attempts against real SQLite', () =
 
   it('finalizes to a one-year hold, clears pubkey, and writes one breadcrumb', async () => {
     const { db, sqlite } = withOwnedName()
+    sqlite.prepare(
+      `UPDATE usernames
+       SET relays = '["wss://old-owner.example"]', atproto_did = 'did:plc:old-owner', atproto_state = 'ready'
+       WHERE username_canonical = 'alice'`
+    ).run()
     await prepareReleaseAttempt(db, OWNER, 'alice', ATTEMPT, 999, 100)
 
     expect((await finalizeReleaseAttempt(db, ATTEMPT, 'coordinator', 200)).outcome).toBe('transitioned')
@@ -83,6 +88,9 @@ describe.skipIf(!sqliteAvailable())('release attempts against real SQLite', () =
     expect(held?.status).toBe('held')
     expect(held?.recyclable).toBe(0)
     expect(held?.pubkey).toBeNull()
+    expect(held?.relays).toBeNull()
+    expect(held?.atproto_did).toBeNull()
+    expect(held?.atproto_state).toBeNull()
     expect(held?.revoked_at).toBe(200)
 
     const history = sqlite
