@@ -123,6 +123,17 @@ username.get('/check/:name', async (c) => {
         }, 200, { 'Access-Control-Allow-Origin': '*' })
       }
 
+      if (existing.status === 'held') {
+        return c.json({
+          ok: true,
+          available: false,
+          name: usernameData.display,
+          canonical: usernameData.canonical,
+          code: 'unavailable',
+          reason: 'Username is unavailable'
+        }, 200, { 'Access-Control-Allow-Origin': '*' })
+      }
+
       const codeMap: Record<string, string> = {
         active: 'taken',
         reserved: 'reserved',

@@ -678,6 +678,20 @@ describe('Public Username Endpoints', () => {
       expect(JSON.stringify(await secondResponse.json())).not.toContain('pending-release')
     })
 
+    it('does not disclose that an unavailable name is held after deletion', async () => {
+      const app = createTestApp()
+      const db = createMockDB([{
+        id: 1, name: 'alice', username_display: 'alice', username_canonical: 'alice',
+        pubkey: null, status: 'held', reservation_expires_at: null
+      }])
+
+      const response = await app.fetch(new Request('http://localhost/api/username/check/alice'), { DB: db }, createExecutionContext())
+      const json = await response.json()
+
+      expect(json).toEqual(expect.objectContaining({ available: false, code: 'unavailable', reason: 'Username is unavailable' }))
+      expect(JSON.stringify(json)).not.toContain('held')
+    })
+
     it('should normalize active username pubkey to lowercase', async () => {
       const app = createTestApp()
       const ownerPubkeyUpper = 'A'.repeat(64)
