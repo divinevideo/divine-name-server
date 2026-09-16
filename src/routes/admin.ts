@@ -390,15 +390,21 @@ admin.delete('/reserved-words/:word', async (c) => {
     // form, so deleting by what the admin typed has to reach that row too:
     // removing `café` means removing the stored `xn--caf-dma`.
     const forms = [word]
+    let canonical: string | null = null
     try {
-      forms.push(validateUsername(word).canonical)
+      canonical = validateUsername(word).canonical
+      forms.push(canonical)
     } catch {
       // Unvalidatable, so it can only be a legacy row stored as typed.
     }
 
     await deleteReservedWord(c.env.DB, forms)
 
-    return c.json({ ok: true, deleted: word.toLowerCase() })
+    // Echo the stored form, as POST above does. Reporting the raw input would
+    // name a row the table never held: removing `café` removes `xn--caf-dma`,
+    // and a moderator reconciling this response against a follow-up GET would
+    // be looking for a word that was never on the blocklist.
+    return c.json({ ok: true, deleted: canonical ?? word.toLowerCase() })
   } catch (error) {
     console.error('Delete reserved word error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)

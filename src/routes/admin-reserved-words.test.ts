@@ -232,4 +232,28 @@ describe('DELETE /admin/reserved-words/:word', () => {
     expect(res.status).toBe(200)
     expect(deletedForms(calls)).toContain('xn--caf-dma')
   })
+
+  // The response has to name the row that left the table, not the text the
+  // admin typed, or a script reconciling it against a follow-up GET sees a word
+  // the blocklist never held. POST already reports the stored form.
+  it.each([
+    ['café', 'xn--caf-dma'],  // stored canonicalized, so report the punycode
+    ['Mixed-Case', 'mixed-case'],
+  ])('reports the stored form after deleting %j', async (word, expected) => {
+    const { db } = createCapturingDB()
+    const res = await deleteWord(db, word)
+    const body = await res.json() as { ok: boolean; deleted: string }
+
+    expect(body).toEqual({ ok: true, deleted: expected })
+  })
+
+  it('reports a legacy row under the form it is stored as', async () => {
+    // Nothing canonicalizes here, so the only form that can be in the table is
+    // the one typed. Falling back to the raw input keeps the answer truthful.
+    const { db } = createCapturingDB()
+    const res = await deleteWord(db, '-Leading')
+    const body = await res.json() as { ok: boolean; deleted: string }
+
+    expect(body).toEqual({ ok: true, deleted: '-leading' })
+  })
 })
