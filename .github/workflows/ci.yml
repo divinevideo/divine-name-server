@@ -1,0 +1,19 @@
+# ABOUTME: Runs the repo's checks on every pull request
+# ABOUTME: Delegates to test.yml so CI and deploy cannot drift apart
+
+name: CI
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+# A new push supersedes an in-flight run for the same pull request.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
