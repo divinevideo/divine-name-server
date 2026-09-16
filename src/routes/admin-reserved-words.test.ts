@@ -149,6 +149,32 @@ describe('POST /admin/reserved-words', () => {
     expect(storedWord(calls)).toBeUndefined()
   })
 
+  it('reports a falsy non-string as a type problem, not a missing field', async () => {
+    // The truthiness check ran first, so `category: 0` was reported as a missing
+    // field even though one was supplied. The status was right and the message
+    // sent the admin looking in the wrong place.
+    const { db } = createCapturingDB()
+
+    const res = await addWord(db, { word: 'plainword', category: 0 })
+    expect(res.status).toBe(400)
+    expect((await res.json() as { error: string }).error).toBe('Category must be a string')
+
+    const missing = await addWord(db, { word: 'plainword' })
+    expect((await missing.json() as { error: string }).error).toBe('Word and category are required')
+  })
+
+  it('echoes the reason it actually stored', async () => {
+    // An empty reason is stored as null, so echoing the input told the admin
+    // something a follow-up GET would contradict.
+    const { db, calls } = createCapturingDB()
+    const res = await addWord(db, { word: 'plainword', category: 'profanity', reason: '' })
+
+    expect(res.status).toBe(200)
+    const insert = calls.find(c => c.sql.includes('INSERT INTO reserved_words'))
+    expect(insert?.params[2]).toBeNull()
+    expect((await res.json() as { reason: unknown }).reason).toBeNull()
+  })
+
   it('rejects a non-string reason but still allows it to be omitted', async () => {
     const { db, calls } = createCapturingDB()
 
@@ -176,17 +202,25 @@ describe('DELETE /admin/reserved-words/:word', () => {
     expect(deletedForms(calls)).toContain('-leading')
   })
 
-  it('binds one placeholder per form, so the IN clause cannot go out of sync', async () => {
-    // The placeholder list is built from the array length. Asserting only the
-    // bound values cannot catch a mismatch between them and the SQL text, and
-    // real D1 rejects that with "Wrong number of parameter bindings".
+  // The placeholder list and the bound values are built from two different
+  // expressions, and real D1 rejects any disagreement with "Wrong number of
+  // parameter bindings". Both the collapsing and non-collapsing cases have to be
+  // covered: an ASCII word canonicalizes to itself and dedupes to one form,
+  // while a Unicode word keeps two. Testing only one leaves the other's
+  // divergence invisible, and the ASCII case is the common path.
+  it.each([
+    ['plainword', 1],   // raw === canonical, dedupes to a single form
+    ['Mixed-Case', 1],  // canonical differs only by case, still dedupes
+    ['café', 2],        // canonical is punycode, so two distinct forms survive
+  ])('binds one placeholder per bound form when deleting %j', async (word, expectedForms) => {
     const { db, calls } = createCapturingDB()
-    await deleteWord(db, 'café')
+    await deleteWord(db, word)
 
     const del = calls.find(c => c.sql.includes('DELETE FROM reserved_words'))
     const placeholderCount = (del?.sql.match(/\?/g) ?? []).length
+
+    expect(del?.params.length).toBe(expectedForms)
     expect(placeholderCount).toBe(del?.params.length)
-    expect(placeholderCount).toBeGreaterThan(1)
   })
 
   it('removes a Unicode row stored in its canonical form', async () => {

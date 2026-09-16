@@ -322,14 +322,15 @@ admin.post('/reserved-words', async (c) => {
     const body = await c.req.json<{ word: string; category: string; reason?: string }>()
     const { word, category, reason } = body
 
-    if (!word || !category) {
+    if (word === undefined || category === undefined) {
       return c.json({ ok: false, error: 'Word and category are required' }, 400)
     }
 
-    // Reject non-strings here rather than letting them reach the validator or
-    // .bind(). D1 throws D1_TYPE_ERROR on a non-primitive, which the outer catch
-    // would turn into a 500, and it silently coerces an array, so a category of
-    // ["x","y"] would store as "x,y".
+    // Type-check before the truthiness check below, so a supplied-but-wrong-typed
+    // field reports the type rather than reading as a missing one. These also stop
+    // a non-string reaching the validator or .bind(): D1 throws D1_TYPE_ERROR on a
+    // non-primitive, which the outer catch would turn into a 500, and it silently
+    // coerces an array, so a category of ["x","y"] would store as "x,y".
     if (typeof word !== 'string') {
       return c.json({ ok: false, error: 'Word must be a string' }, 400)
     }
@@ -340,6 +341,10 @@ admin.post('/reserved-words', async (c) => {
 
     if (reason !== undefined && reason !== null && typeof reason !== 'string') {
       return c.json({ ok: false, error: 'Reason must be a string' }, 400)
+    }
+
+    if (!word || !category) {
+      return c.json({ ok: false, error: 'Word and category are required' }, 400)
     }
 
     // The blocklist must be able to hold any name the namespace can produce, so
@@ -359,9 +364,13 @@ admin.post('/reserved-words', async (c) => {
     // Store canonical, not merely lowercased: isReservedWord compares against a
     // claim's canonical form, which is punycode for Unicode names. A Unicode
     // term stored in its display form would never match the name it blocks.
-    await addReservedWord(c.env.DB, wordData.canonical, category, reason || null)
+    const storedReason = reason || null
+    await addReservedWord(c.env.DB, wordData.canonical, category, storedReason)
 
-    return c.json({ ok: true, word: wordData.canonical, category, reason })
+    // Echo what was stored, not what was sent. The word is already reported as
+    // its canonical form, so reporting the reason raw would be the one field a
+    // follow-up GET could contradict.
+    return c.json({ ok: true, word: wordData.canonical, category, reason: storedReason })
   } catch (error) {
     console.error('Add reserved word error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
