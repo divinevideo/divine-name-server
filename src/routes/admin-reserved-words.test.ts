@@ -137,6 +137,27 @@ describe('POST /admin/reserved-words', () => {
     expect(res.status).toBe(400)
     expect(storedWord(calls)).toBeUndefined()
   })
+
+  it('rejects a non-string category rather than letting D1 reject the bind', async () => {
+    // D1 throws D1_TYPE_ERROR on a non-primitive bind, which the outer catch
+    // turns into a 500. An array is worse than an object: D1 coerces it, so
+    // ["x","y"] would silently store the category as "x,y".
+    const { db, calls } = createCapturingDB()
+
+    expect((await addWord(db, { word: 'plainword', category: {} })).status).toBe(400)
+    expect((await addWord(db, { word: 'plainword', category: ['x', 'y'] })).status).toBe(400)
+    expect(storedWord(calls)).toBeUndefined()
+  })
+
+  it('rejects a non-string reason but still allows it to be omitted', async () => {
+    const { db, calls } = createCapturingDB()
+
+    expect((await addWord(db, { word: 'plainword', category: 'profanity', reason: {} })).status).toBe(400)
+    expect(storedWord(calls)).toBeUndefined()
+
+    const ok = await addWord(db, { word: 'plainword', category: 'profanity' })
+    expect(ok.status).toBe(200)
+  })
 })
 
 describe('DELETE /admin/reserved-words/:word', () => {
@@ -153,6 +174,19 @@ describe('DELETE /admin/reserved-words/:word', () => {
 
     expect(res.status).toBe(200)
     expect(deletedForms(calls)).toContain('-leading')
+  })
+
+  it('binds one placeholder per form, so the IN clause cannot go out of sync', async () => {
+    // The placeholder list is built from the array length. Asserting only the
+    // bound values cannot catch a mismatch between them and the SQL text, and
+    // real D1 rejects that with "Wrong number of parameter bindings".
+    const { db, calls } = createCapturingDB()
+    await deleteWord(db, 'café')
+
+    const del = calls.find(c => c.sql.includes('DELETE FROM reserved_words'))
+    const placeholderCount = (del?.sql.match(/\?/g) ?? []).length
+    expect(placeholderCount).toBe(del?.params.length)
+    expect(placeholderCount).toBeGreaterThan(1)
   })
 
   it('removes a Unicode row stored in its canonical form', async () => {

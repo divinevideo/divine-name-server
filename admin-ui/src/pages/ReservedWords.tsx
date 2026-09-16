@@ -113,11 +113,16 @@ export default function ReservedWords() {
                   Word *
                 </label>
                 {/*
-                  LDH with no edge hyphens, matching validateUsername. The dash is
-                  escaped so the pattern still compiles under the `v` flag HTML now
-                  uses for `pattern`; an uncompilable pattern is ignored outright,
-                  which would silently disable the check rather than fail loudly.
-                  The server stays authoritative, so this only catches typos early.
+                  LDH with no edge hyphens. This is NARROWER than validateUsername,
+                  which also accepts Unicode and canonicalizes it to punycode, so a
+                  Unicode reserved word cannot be entered here even though the server
+                  would take it (see #93). The server stays authoritative; this only
+                  catches typos early.
+
+                  The dash is escaped so the pattern still compiles under the `v` flag
+                  HTML uses for `pattern`. An uncompilable pattern is ignored outright
+                  rather than failing loudly, which silently disables the check — the
+                  state Reserve.tsx and Assign.tsx are currently in (see #92).
                 */}
                 <input
                   type="text"

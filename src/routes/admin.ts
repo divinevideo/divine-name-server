@@ -326,8 +326,20 @@ admin.post('/reserved-words', async (c) => {
       return c.json({ ok: false, error: 'Word and category are required' }, 400)
     }
 
+    // Reject non-strings here rather than letting them reach the validator or
+    // .bind(). D1 throws D1_TYPE_ERROR on a non-primitive, which the outer catch
+    // would turn into a 500, and it silently coerces an array, so a category of
+    // ["x","y"] would store as "x,y".
     if (typeof word !== 'string') {
       return c.json({ ok: false, error: 'Word must be a string' }, 400)
+    }
+
+    if (typeof category !== 'string') {
+      return c.json({ ok: false, error: 'Category must be a string' }, 400)
+    }
+
+    if (reason !== undefined && reason !== null && typeof reason !== 'string') {
+      return c.json({ ok: false, error: 'Reason must be a string' }, 400)
     }
 
     // The blocklist must be able to hold any name the namespace can produce, so
