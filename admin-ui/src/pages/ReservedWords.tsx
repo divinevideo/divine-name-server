@@ -20,6 +20,7 @@ export default function ReservedWords() {
   // Delete state
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [deleteLoading, setDeleteLoading] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   useEffect(() => {
     loadWords()
@@ -61,14 +62,19 @@ export default function ReservedWords() {
 
   const handleDelete = async (word: string) => {
     setDeleteLoading(true)
+    setDeleteError(null)
     try {
       const result = await deleteReservedWord(word)
       if (result.ok) {
         setDeleteConfirm(null)
         await loadWords()
+      } else {
+        // Leave the confirmation open: the word is still reserved, so the row
+        // has to keep offering the retry rather than looking like it worked.
+        setDeleteError(result.error || 'Failed to delete reserved word')
       }
     } catch (err) {
-      console.error('Delete failed:', err)
+      setDeleteError(err instanceof Error ? err.message : 'Request failed')
     } finally {
       setDeleteLoading(false)
     }
@@ -192,6 +198,12 @@ export default function ReservedWords() {
       {error && (
         <div className="rounded-md bg-red-50 p-4">
           <p className="text-sm text-red-800">{error}</p>
+        </div>
+      )}
+
+      {deleteError && (
+        <div className="rounded-md bg-red-50 p-4">
+          <p className="text-sm text-red-800">{deleteError}</p>
         </div>
       )}
 
