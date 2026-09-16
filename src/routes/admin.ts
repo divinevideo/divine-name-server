@@ -326,19 +326,26 @@ admin.post('/reserved-words', async (c) => {
       return c.json({ ok: false, error: 'Word and category are required' }, 400)
     }
 
-    // Validate word format (same as username: lowercase alphanumeric)
-    const validPattern = /^[a-z0-9]+$/
-    if (!validPattern.test(word.toLowerCase())) {
-      return c.json({ ok: false, error: 'Word must be lowercase alphanumeric' }, 400)
+    // The blocklist must be able to hold any name the namespace can produce, so
+    // defer to the username validator instead of restating the charset here. An
+    // independent copy of the rule is what let hyphens become registerable but
+    // not blockable.
+    let wordData: { display: string; canonical: string }
+    try {
+      wordData = validateUsername(word)
+    } catch (error) {
+      if (error instanceof UsernameValidationError) {
+        return c.json({ ok: false, error: error.message }, 400)
+      }
+      throw error
     }
 
-    if (word.length > 50) {
-      return c.json({ ok: false, error: 'Word must be 50 characters or less' }, 400)
-    }
+    // Store canonical, not merely lowercased: isReservedWord compares against a
+    // claim's canonical form, which is punycode for Unicode names. A Unicode
+    // term stored in its display form would never match the name it blocks.
+    await addReservedWord(c.env.DB, wordData.canonical, category, reason || null)
 
-    await addReservedWord(c.env.DB, word, category, reason || null)
-
-    return c.json({ ok: true, word: word.toLowerCase(), category, reason })
+    return c.json({ ok: true, word: wordData.canonical, category, reason })
   } catch (error) {
     console.error('Add reserved word error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
