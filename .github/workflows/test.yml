@@ -29,8 +29,11 @@ jobs:
       - name: Run tests
         run: npm run test:once
 
+      # Call the script rather than spelling out `tsc --noEmit`. A second
+      # spelling of a check that package.json already defines is the same
+      # duplication this workflow exists to catch.
       - name: Typecheck worker
-        run: npx tsc --noEmit
+        run: npm run typecheck
 
       - name: Install admin-ui dependencies
         run: npm ci
