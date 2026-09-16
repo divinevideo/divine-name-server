@@ -112,13 +112,20 @@ export default function ReservedWords() {
                 <label htmlFor="newWord" className="block text-sm font-medium text-gray-700">
                   Word *
                 </label>
+                {/*
+                  LDH with no edge hyphens, matching validateUsername. The dash is
+                  escaped so the pattern still compiles under the `v` flag HTML now
+                  uses for `pattern`; an uncompilable pattern is ignored outright,
+                  which would silently disable the check rather than fail loudly.
+                  The server stays authoritative, so this only catches typos early.
+                */}
                 <input
                   type="text"
                   id="newWord"
                   value={newWord}
                   onChange={(e) => setNewWord(e.target.value.toLowerCase())}
                   required
-                  pattern="[a-z0-9]+"
+                  pattern="[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?"
                   placeholder="example"
                   className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2 border"
                 />

@@ -115,6 +115,10 @@ describe('POST /admin/reserved-words', () => {
     const res = await addWord(db, { word: 'ab--cd', category: 'profanity' })
 
     expect(res.status).toBe(400)
+    // Assert the message, not just the status: the old charset rule also
+    // rejected this input, so status alone cannot tell the two rules apart.
+    const json = await res.json() as { error: string }
+    expect(json.error).toBe('Usernames cannot have hyphens at positions 3 and 4')
     expect(storedWord(calls)).toBeUndefined()
   })
 
@@ -125,18 +129,39 @@ describe('POST /admin/reserved-words', () => {
     expect((await addWord(db, { word: 'plainword' })).status).toBe(400)
     expect(storedWord(calls)).toBeUndefined()
   })
+
+  it('rejects a non-string word with 400 rather than failing inside the validator', async () => {
+    const { db, calls } = createCapturingDB()
+    const res = await addWord(db, { word: 123, category: 'profanity' })
+
+    expect(res.status).toBe(400)
+    expect(storedWord(calls)).toBeUndefined()
+  })
 })
 
 describe('DELETE /admin/reserved-words/:word', () => {
+  function deletedForms(calls: { sql: string; params: unknown[] }[]) {
+    return calls.find(c => c.sql.includes('DELETE FROM reserved_words'))?.params ?? []
+  }
+
   it('removes a row that would not pass validation today', async () => {
-    // Rows added under the old rule must stay removable, so DELETE deliberately
-    // does not validate. Validating it would strand exactly the bad entries an
-    // admin most needs to clear.
+    // Rows added under the old rule must stay removable, so DELETE must not
+    // require the word to validate. Requiring it would strand exactly the bad
+    // entries an admin most needs to clear.
     const { db, calls } = createCapturingDB()
     const res = await deleteWord(db, '-leading')
 
     expect(res.status).toBe(200)
-    const del = calls.find(c => c.sql.includes('DELETE FROM reserved_words'))
-    expect(del?.params[0]).toBe('-leading')
+    expect(deletedForms(calls)).toContain('-leading')
+  })
+
+  it('removes a Unicode row stored in its canonical form', async () => {
+    // POST stores café as xn--caf-dma, so deleting by what the admin typed has
+    // to reach the canonical row too, or the delete silently no-ops.
+    const { db, calls } = createCapturingDB()
+    const res = await deleteWord(db, 'café')
+
+    expect(res.status).toBe(200)
+    expect(deletedForms(calls)).toContain('xn--caf-dma')
   })
 })

@@ -213,7 +213,7 @@ export async function addReservedWord(
   })
 
   if (!response.ok) {
-    throw new Error(`Failed to add reserved word: ${response.statusText}`)
+    return parseErrorResponse<ApiResponse & { word?: string }>(response, 'Failed to add reserved word')
   }
 
   return response.json()

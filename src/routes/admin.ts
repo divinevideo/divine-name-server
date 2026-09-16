@@ -326,6 +326,10 @@ admin.post('/reserved-words', async (c) => {
       return c.json({ ok: false, error: 'Word and category are required' }, 400)
     }
 
+    if (typeof word !== 'string') {
+      return c.json({ ok: false, error: 'Word must be a string' }, 400)
+    }
+
     // The blocklist must be able to hold any name the namespace can produce, so
     // defer to the username validator instead of restating the charset here. An
     // independent copy of the rule is what let hyphens become registerable but
@@ -360,7 +364,18 @@ admin.delete('/reserved-words/:word', async (c) => {
       return c.json({ ok: false, error: 'Word is required' }, 400)
     }
 
-    await deleteReservedWord(c.env.DB, word)
+    // Delete deliberately does not require the word to validate, so rows added
+    // under the old charset rule stay removable. But POST stores the canonical
+    // form, so deleting by what the admin typed has to reach that row too:
+    // removing `café` means removing the stored `xn--caf-dma`.
+    const forms = [word]
+    try {
+      forms.push(validateUsername(word).canonical)
+    } catch {
+      // Unvalidatable, so it can only be a legacy row stored as typed.
+    }
+
+    await deleteReservedWord(c.env.DB, forms)
 
     return c.json({ ok: true, deleted: word.toLowerCase() })
   } catch (error) {

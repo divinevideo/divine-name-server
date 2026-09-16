@@ -1032,13 +1032,22 @@ export async function addReservedWord(
   ).bind(word.toLowerCase(), category, reason, now).run()
 }
 
+/**
+ * Removes a reserved word, given every stored form it might be under. Words are
+ * stored canonicalized, but rows predating that are stored as typed, so callers
+ * pass both and the matching row is removed whichever form it took.
+ */
 export async function deleteReservedWord(
   db: D1Database,
-  word: string
+  words: string[]
 ): Promise<void> {
+  const forms = [...new Set(words.map(w => w.toLowerCase()))]
+  if (forms.length === 0) return
+
+  const placeholders = forms.map(() => '?').join(', ')
   await db.prepare(
-    'DELETE FROM reserved_words WHERE word = ?'
-  ).bind(word.toLowerCase()).run()
+    `DELETE FROM reserved_words WHERE word IN (${placeholders})`
+  ).bind(...forms).run()
 }
 
 export async function exportUsernamesByStatus(
