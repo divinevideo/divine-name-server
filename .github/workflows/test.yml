@@ -1,0 +1,47 @@
+# ABOUTME: The repo's checks, defined once and called by both CI and deploy
+# ABOUTME: Runs the worker test suite, typecheck, and the admin-ui build
+
+name: Test
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    name: Test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm run test:once
+
+      # Call the script rather than spelling out `tsc --noEmit`. A second
+      # spelling of a check that package.json already defines is the same
+      # duplication this workflow exists to catch.
+      - name: Typecheck worker
+        run: npm run typecheck
+
+      - name: Install admin-ui dependencies
+        run: npm ci
+        working-directory: admin-ui
+
+      # `npm run build` in admin-ui is `tsc && vite build`, so this typechecks
+      # the admin UI as well as confirming it compiles. It is the only automated
+      # signal that half of the repo has until it gets a test suite (#94).
+      - name: Build admin-ui
+        run: npm run build
+        working-directory: admin-ui

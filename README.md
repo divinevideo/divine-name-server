@@ -48,7 +48,7 @@ Service subdomains (`names`, `www`, `login`, `pds`, `feed`, `labeler`, `relay`, 
 Admin API routes are guarded on two axes:
 
 1. **Hostname guard** — Admin routes only activate on `names.admin.divine.video` (or `localhost`/`admin.localhost` in development), so the same Worker on `names.divine.video` cannot reach them.
-2. **Authentication** — A request must carry either a Cloudflare Access JWT (`Cf-Access-Jwt-Assertion`, injected at the edge) or a Keycast OAuth session cookie whose pubkey is in the `ADMIN_PUBKEYS` allowlist.
+2. **Authentication** — A request must carry either a cryptographically verified Cloudflare Access JWT (`Cf-Access-Jwt-Assertion`, injected at the edge) or a Keycast OAuth session cookie whose pubkey is in the `ADMIN_PUBKEYS` allowlist.
 
 ### Cron reconciliation
 
@@ -114,6 +114,8 @@ Bindings and variables live in `wrangler.toml`.
 
 | Name | Kind | Purpose |
 |------|------|---------|
+| `ACCESS_TEAM_DOMAIN` | var | Cloudflare Access team domain used to fetch the JWT signing keys |
+| `ACCESS_AUD` | var | Audience tag for the Cloudflare Access application protecting the admin host |
 | `KEYCAST_URL`, `KEYCAST_CLIENT_ID` | var | Keycast OAuth admin login (`login.divine.video`) |
 | `ADMIN_PUBKEYS` | var | Comma-separated hex pubkeys allowed to use Keycast admin sessions |
 | `FASTLY_STORE_ID` | var | Fastly KV store the edge mirror writes to |
