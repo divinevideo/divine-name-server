@@ -3,6 +3,12 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { assignUsername, notifyAssignment } from '../api/client'
+import {
+  USERNAME_INPUT_PATTERN,
+  USERNAME_INPUT_TITLE,
+  USERNAME_MIN_LENGTH,
+  USERNAME_MAX_LENGTH,
+} from '../constants/username'
 
 export default function Assign() {
   const navigate = useNavigate()
@@ -104,14 +110,17 @@ export default function Assign() {
               id="name"
               value={name}
               onChange={(e) => {
-                setName(e.target.value.toLowerCase())
+                // Trim as the server does. No username contains whitespace, and
+                // names arrive pasted from tickets and spreadsheets with it.
+                setName(e.target.value.trim().toLowerCase())
                 setShowOverrideConfirm(false)
                 setOverrideReason('')
               }}
               required
-              minLength={1}
-              maxLength={63}
-              pattern="^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"
+              minLength={USERNAME_MIN_LENGTH}
+              maxLength={USERNAME_MAX_LENGTH}
+              pattern={USERNAME_INPUT_PATTERN}
+              title={USERNAME_INPUT_TITLE}
               placeholder="alice or MrBeast"
               className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2 border"
             />

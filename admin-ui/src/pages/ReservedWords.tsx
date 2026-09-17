@@ -3,6 +3,11 @@
 import { useState, useEffect } from 'react'
 import { getReservedWords, addReservedWord, deleteReservedWord } from '../api/client'
 import type { ReservedWord } from '../types'
+import {
+  USERNAME_INPUT_PATTERN,
+  USERNAME_INPUT_TITLE,
+  USERNAME_MAX_LENGTH,
+} from '../constants/username'
 
 export default function ReservedWords() {
   const [words, setWords] = useState<ReservedWord[]>([])
@@ -119,24 +124,20 @@ export default function ReservedWords() {
                   Word *
                 </label>
                 {/*
-                  LDH with no edge hyphens. This is NARROWER than validateUsername,
-                  which also accepts Unicode and canonicalizes it to punycode, so a
-                  Unicode reserved word cannot be entered here even though the server
-                  would take it (see #93). The server stays authoritative; this only
-                  catches typos early.
-
-                  The dash is escaped so the pattern still compiles under the `v` flag
-                  HTML uses for `pattern`. An uncompilable pattern is ignored outright
-                  rather than failing loudly, which silently disables the check — the
-                  state Reserve.tsx and Assign.tsx are currently in (see #92).
+                  A reserved word is a username, so it uses the same rule every
+                  other form here uses. The rule and the reasons behind it live in
+                  constants/username.ts; it is narrower than the server, which also
+                  accepts Unicode (see #93).
                 */}
                 <input
                   type="text"
                   id="newWord"
                   value={newWord}
-                  onChange={(e) => setNewWord(e.target.value.toLowerCase())}
+                  onChange={(e) => setNewWord(e.target.value.trim().toLowerCase())}
                   required
-                  pattern="[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?"
+                  pattern={USERNAME_INPUT_PATTERN}
+                  title={USERNAME_INPUT_TITLE}
+                  maxLength={USERNAME_MAX_LENGTH}
                   placeholder="example"
                   className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2 border"
                 />
