@@ -1,7 +1,7 @@
 // ABOUTME: Tests for Cloudflare Access JWT verification
 // ABOUTME: A token is trusted only when its signature, audience, issuer and expiry all check out
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 import { generateKeyPair, exportJWK, SignJWT } from 'jose'
 import { verifyAccessJwt, AccessValidationError } from './cf-access'
 
@@ -22,14 +22,16 @@ let jwks: { keys: unknown[] }
 // Serve the real public key as the team's JWKS, so a token this suite signs
 // verifies exactly as a Cloudflare-issued one would. Any other URL 404s, so a
 // stray real network call fails loudly rather than silently passing.
-beforeEach(async () => {
+beforeAll(async () => {
   const pair = await generateKeyPair('RS256')
   signingKey = pair.privateKey
   const pub = await exportJWK(pair.publicKey)
   jwks = { keys: [{ ...pub, kid: KID, alg: 'RS256', use: 'sig' }] }
 
   otherKey = (await generateKeyPair('RS256')).privateKey
+})
 
+beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
     if (url === CERTS_URL) {
@@ -93,6 +95,24 @@ describe('verifyAccessJwt', () => {
     const jwt = await token({ expSecondsFromNow: -60 })
 
     await expect(verifyAccessJwt(jwt, env)).rejects.toBeInstanceOf(AccessValidationError)
+  })
+
+  it('rejects a token signed with a non-RS256 algorithm', async () => {
+    const alternateAud = 'alternate-algorithm-audience'
+    const pair = await generateKeyPair('PS256')
+    const pub = await exportJWK(pair.publicKey)
+    jwks = { keys: [{ ...pub, kid: KID, alg: 'PS256', use: 'sig' }] }
+    const jwt = await new SignJWT({ email: 'admin@divine.video' })
+      .setProtectedHeader({ alg: 'PS256', kid: KID })
+      .setIssuedAt()
+      .setIssuer(ISSUER)
+      .setAudience(alternateAud)
+      .setExpirationTime('1h')
+      .sign(pair.privateKey)
+
+    await expect(
+      verifyAccessJwt(jwt, { ...env, ACCESS_AUD: alternateAud }),
+    ).rejects.toBeInstanceOf(AccessValidationError)
   })
 
   it('rejects a structurally malformed assertion rather than throwing', async () => {

@@ -3,6 +3,23 @@
 
 import { createRemoteJWKSet, jwtVerify } from 'jose'
 
+type RemoteJwks = ReturnType<typeof createRemoteJWKSet>
+
+// createRemoteJWKSet keeps fetched keys and its refetch cooldown on the
+// returned resolver. Reuse that resolver across requests so authentication
+// does not make a live JWKS request every time.
+const jwksResolvers = new Map<string, RemoteJwks>()
+
+function getJwksResolver(issuer: string, audience: string): RemoteJwks {
+  const cacheKey = `${issuer}\0${audience}`
+  let resolver = jwksResolvers.get(cacheKey)
+  if (!resolver) {
+    resolver = createRemoteJWKSet(new URL(`${issuer}/cdn-cgi/access/certs`))
+    jwksResolvers.set(cacheKey, resolver)
+  }
+  return resolver
+}
+
 export class AccessValidationError extends Error {
   constructor(message: string) {
     super(message)
@@ -53,7 +70,7 @@ export async function verifyAccessJwt(
     // an auth failure and falls through, rather than a raw TypeError the callers
     // rethrow as a 500 — which would lock out the Keycast path this promises not
     // to.
-    const jwks = createRemoteJWKSet(new URL(`${issuer}/cdn-cgi/access/certs`))
+    const jwks = getJwksResolver(issuer, env.ACCESS_AUD)
     verified = await jwtVerify<AccessClaims>(assertion, jwks, {
       issuer,
       audience: env.ACCESS_AUD,
