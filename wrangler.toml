@@ -29,6 +29,11 @@ KEYCAST_CLIENT_ID = "divine-name-server"
 # CF Access users are authorized by the Access policy; this only applies to Keycast sessions.
 ADMIN_PUBKEYS = "81549bc0b5153b4b970fe4a3892ad185698b8b8b26ec69321a527d0644cd2898"
 FASTLY_STORE_ID = "gclbp6suv4bjnqpctp2b7n"
+# Cloudflare Access team domain and application audience tag, used to verify the
+# Access JWT on the admin host. Not secret: the aud tag appears publicly in the
+# Access login redirect. Same Access application as divine-engagement.
+ACCESS_TEAM_DOMAIN = "divinevideo.cloudflareaccess.com"
+ACCESS_AUD = "2d9f10ee33db581d94ddeb903bb588c4484414f90632c7c7469e4ac30e8c09ce"
 # ALLOWED_MINTS = "https://8333.space:3338,https://mint.minibits.cash/Bitcoin"
 # NAME_PRICE_SATS = "1000"
 # INVITE_FAUCET_URL = "https://faucet.divine.video"

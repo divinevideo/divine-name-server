@@ -659,17 +659,19 @@ describe('Admin Hostname Auth Guard', () => {
     expect(res.status).toBe(403)
   })
 
-  it('should allow admin API requests from names.admin.divine.video with CF Access JWT', async () => {
+  it('refuses an unverifiable CF Access JWT on the admin host with 401, not 403', async () => {
+    // The admin host is past the hostname guard (a 403 would mean the host
+    // itself was rejected), so the 401 proves the request reached the auth layer
+    // and was refused there because the assertion did not verify. A bare header
+    // is no longer trusted; verification lives in admin-access-auth.test.ts.
     const app = createTestApp()
 
     const req = new Request('https://names.admin.divine.video/api/admin/usernames/search?q=test', {
       headers: { 'Cf-Access-Jwt-Assertion': 'fake-jwt-for-test' }
     })
-    const res = await app.fetch(req, { DB: createMockDB(), BYPASS_LOCAL_AUTH: 'true' }, createExecutionContext())
+    const res = await app.fetch(req, { DB: createMockDB() }, createExecutionContext())
 
-    expect(res.status).toBe(200)
-    const json = await res.json() as any
-    expect(json.ok).toBe(true)
+    expect(res.status).toBe(401)
   })
 
   describe('GET /api/admin/username/:name (direct lookup)', () => {

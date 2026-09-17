@@ -9,12 +9,15 @@ import {
   getSession,
   deleteSession,
 } from '../auth/keycast-oauth'
+import { verifyAccessJwt, AccessValidationError } from '../auth/cf-access'
 
 type Bindings = {
   SESSION_KV: KVNamespace
   KEYCAST_URL?: string
   KEYCAST_CLIENT_ID?: string
   OAUTH_CALLBACK_BASE_URL?: string
+  ACCESS_TEAM_DOMAIN?: string
+  ACCESS_AUD?: string
 }
 
 const auth = new Hono<{ Bindings: Bindings }>()
@@ -173,11 +176,20 @@ auth.get('/callback', async (c) => {
  * Check current session status.
  */
 auth.get('/status', async (c) => {
-  // Path 1: CF Access (edge-injected headers)
+  // Path 1: CF Access. Verify the assertion rather than trusting the header's
+  // presence; the email comes from the verified claim, not the spoofable
+  // Cf-Access-Authenticated-User-Email header. A status of authenticated:true
+  // here makes the SPA render the admin shell, so a forged header must not reach
+  // it — every real action is separately gated by the admin middleware.
   const cfJwt = c.req.header('Cf-Access-Jwt-Assertion')
   if (cfJwt) {
-    const email = c.req.header('Cf-Access-Authenticated-User-Email') || 'unknown'
-    return c.json({ authenticated: true, email, pubkey: null, method: 'cf-access' })
+    try {
+      const { email } = await verifyAccessJwt(cfJwt, c.env)
+      return c.json({ authenticated: true, email, pubkey: null, method: 'cf-access' })
+    } catch (error) {
+      if (!(error instanceof AccessValidationError)) throw error
+      // Fall through to the session path; an invalid assertion is not authenticated.
+    }
   }
 
   // Path 2: Keycast session cookie

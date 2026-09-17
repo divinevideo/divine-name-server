@@ -7,6 +7,7 @@ import { bech32 } from '@scure/base'
 import { getSession } from '../auth/keycast-oauth'
 import { reserveUsername, revokeUsername, restoreUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getActiveUsernamesPaginated, countActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags, getUsernameStats, updateAdminNotes, releaseHeldNameEarly, getUsernameReleaseHistory, enqueueFastlySyncTask, getQueuedFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, getLatestReleaseAttemptByPubkey, listReleaseAttempts, type ReleaseAttemptState, type SearchSort } from '../db/queries'
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
+import { verifyAccessJwt, AccessValidationError } from '../auth/cf-access'
 import { syncUsernameToFastly, deleteUsernameFromFastly, syncBatch, parseRelayHints, readUsernameFromFastly, syncAndVerifyUsername, usernameKVDataMatches } from '../utils/fastly-sync'
 import { sendAssignmentNotificationEmail } from '../utils/email'
 import authRoutes from './auth'
@@ -63,6 +64,8 @@ type Bindings = {
   KEYCAST_URL?: string
   KEYCAST_CLIENT_ID?: string
   BYPASS_LOCAL_AUTH?: string
+  ACCESS_TEAM_DOMAIN?: string
+  ACCESS_AUD?: string
 }
 
 /** Check if a pubkey is in the comma-separated ADMIN_PUBKEYS allowlist. */
@@ -106,12 +109,28 @@ admin.use('*', async (c, next) => {
     return next()
   }
 
-  // Path 1: CF Access JWT (existing, edge-injected)
+  // Path 1: CF Access JWT (edge-injected). Access already gated this request,
+  // so verifying the assertion is defense-in-depth: it confirms the token was
+  // signed by this team's Access for this application and is unexpired, rather
+  // than trusting that the header is present. The identity comes from the
+  // verified payload, not the separate Cf-Access-Authenticated-User-Email
+  // header, which is not covered by the signature. A present-but-invalid
+  // assertion falls through to the remaining paths rather than hard-failing, so
+  // a misconfiguration or a stray header cannot lock out a valid Keycast session
+  // — the final return below still refuses anything that authenticates nowhere.
   const cfJwt = c.req.header('Cf-Access-Jwt-Assertion')
   if (cfJwt) {
-    const email = c.req.header('Cf-Access-Authenticated-User-Email') || 'unknown'
-    c.set('adminEmail' as never, email as never)
-    return next()
+    try {
+      const { email } = await verifyAccessJwt(cfJwt, c.env)
+      c.set('adminEmail' as never, email as never)
+      return next()
+    } catch (error) {
+      if (error instanceof AccessValidationError) {
+        console.warn(JSON.stringify({ message: 'access_jwt_rejected', reason: error.message }))
+      } else {
+        throw error
+      }
+    }
   }
 
   // Path 2: Keycast session cookie
