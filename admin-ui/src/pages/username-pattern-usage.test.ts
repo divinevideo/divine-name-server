@@ -52,16 +52,19 @@ describe('hasHardcodedPattern detector', () => {
 })
 
 describe('admin form pattern usage', () => {
-  const pages = readdirSync(pagesDir).filter(f => f.endsWith('.tsx'))
+  const pages = readdirSync(pagesDir)
+    .filter(f => f.endsWith('.tsx'))
+    .map(page => ({ page, src: readFileSync(join(pagesDir, page), 'utf8') }))
 
-  it('finds the form pages to check (guards against an empty sweep)', () => {
-    expect(pages.length).toBeGreaterThan(0)
+  it('finds pages that use the shared constant (guards against an empty sweep)', () => {
+    // Any `.tsx` count would pass trivially; the sweep is only meaningful if
+    // the directory it reads still holds the forms that carry a pattern.
+    const users = pages.filter(({ src }) => src.includes('pattern={USERNAME_INPUT_PATTERN}'))
+    expect(users.length).toBeGreaterThan(0)
   })
 
   it('no page under src/pages hardcodes a username pattern', () => {
-    const offenders = pages.filter(page =>
-      hasHardcodedPattern(readFileSync(join(pagesDir, page), 'utf8')),
-    )
+    const offenders = pages.filter(({ src }) => hasHardcodedPattern(src)).map(({ page }) => page)
     expect(offenders).toEqual([])
   })
 })
