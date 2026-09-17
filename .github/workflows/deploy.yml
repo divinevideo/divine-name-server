@@ -1,5 +1,5 @@
 # ABOUTME: GitHub Actions workflow that auto-deploys to Cloudflare Workers
-# ABOUTME: Triggers on push to main, builds admin-ui, and deploys via wrangler
+# ABOUTME: Triggers on push to main, runs the checks, then deploys via wrangler
 
 name: Deploy to Cloudflare
 
@@ -8,8 +8,31 @@ on:
     branches:
       - main
 
+# Deploys queue rather than race. Without this, two merges close together can
+# finish their checks out of order and publish the older commit last, leaving
+# production quietly running the earlier code with nothing red to show for it.
+# Running checks before the deploy widens that window, so this change is what
+# makes the guard necessary. Never cancel: a half-finished deploy is worse than
+# a queued one.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  # Deploying is what publishes a change, so the checks gate it rather than
+  # merely reporting alongside it. This is the same workflow CI runs on the
+  # pull request, so a change cannot pass review under one set of checks and
+  # ship under another.
+  #
+  # Named `checks` rather than `test` so its status context differs from the
+  # one ci.yml produces. A check context is the caller's job id plus the called
+  # job's name, so two callers both using `test` would be indistinguishable,
+  # and a required check could match the wrong workflow.
+  checks:
+    uses: ./.github/workflows/test.yml
+
   deploy:
+    needs: checks
     runs-on: ubuntu-latest
     name: Deploy
     steps:
@@ -19,7 +42,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install root dependencies
