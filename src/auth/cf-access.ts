@@ -46,10 +46,14 @@ export async function verifyAccessJwt(
 
   const teamDomain = env.ACCESS_TEAM_DOMAIN.replace(/^https?:\/\//, '').replace(/\/$/, '')
   const issuer = `https://${teamDomain}`
-  const jwks = createRemoteJWKSet(new URL(`${issuer}/cdn-cgi/access/certs`))
 
   let verified
   try {
+    // Inside the try so a malformed team domain (new URL throwing) is wrapped as
+    // an auth failure and falls through, rather than a raw TypeError the callers
+    // rethrow as a 500 — which would lock out the Keycast path this promises not
+    // to.
+    const jwks = createRemoteJWKSet(new URL(`${issuer}/cdn-cgi/access/certs`))
     verified = await jwtVerify<AccessClaims>(assertion, jwks, {
       issuer,
       audience: env.ACCESS_AUD,

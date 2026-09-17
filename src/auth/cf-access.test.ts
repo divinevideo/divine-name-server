@@ -114,4 +114,15 @@ describe('verifyAccessJwt', () => {
 
     await expect(verifyAccessJwt(jwt, {} as never)).rejects.toBeInstanceOf(AccessValidationError)
   })
+
+  it('fails as an auth error, not a raw crash, when the team domain is malformed', async () => {
+    // A present-but-invalid ACCESS_TEAM_DOMAIN must not throw a raw TypeError
+    // from new URL(); the callers rethrow anything that is not an
+    // AccessValidationError as a 500, which would lock out the fall-through path.
+    const jwt = await token()
+
+    await expect(
+      verifyAccessJwt(jwt, { ACCESS_TEAM_DOMAIN: 'bad domain with spaces', ACCESS_AUD: AUD }),
+    ).rejects.toBeInstanceOf(AccessValidationError)
+  })
 })
