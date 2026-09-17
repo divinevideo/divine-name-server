@@ -17,9 +17,14 @@ const pagesDir = dirname(fileURLToPath(import.meta.url))
  *
  * Every historical form bug (#89, #92) was a form carrying its own pattern
  * literal that drifted from the real rule; this keeps the rule in one constant.
+ * The lookbehind stops an unrelated attribute like `data-pattern="..."` from
+ * tripping it — a plain `\b` would not, since the hyphen is itself a word
+ * boundary. It does not chase a literal buried in a larger expression
+ * (`pattern={cond ? "x" : "y"}`) — that is not the recurrence vector and no form
+ * would write it.
  */
 export function hasHardcodedPattern(src: string): boolean {
-  return /pattern\s*=\s*\{?\s*[`"']/.test(src)
+  return /(?<![-\w])pattern\s*=\s*\{?\s*[`"']/.test(src)
 }
 
 describe('hasHardcodedPattern detector', () => {
@@ -40,6 +45,7 @@ describe('hasHardcodedPattern detector', () => {
   it.each([
     ['the shared constant', 'pattern={USERNAME_INPUT_PATTERN}'],
     ['no pattern attribute at all', 'value={name} required'],
+    ['an unrelated attribute ending in pattern', 'data-pattern="ignored"'],
   ])('allows %s', (_label, sample) => {
     expect(hasHardcodedPattern(sample)).toBe(false)
   })
