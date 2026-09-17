@@ -213,7 +213,7 @@ export async function addReservedWord(
   })
 
   if (!response.ok) {
-    throw new Error(`Failed to add reserved word: ${response.statusText}`)
+    return parseErrorResponse<ApiResponse & { word?: string }>(response, 'Failed to add reserved word')
   }
 
   return response.json()
@@ -242,7 +242,7 @@ export async function deleteReservedWord(word: string): Promise<ApiResponse> {
   })
 
   if (!response.ok) {
-    throw new Error(`Failed to delete reserved word: ${response.statusText}`)
+    return parseErrorResponse<ApiResponse>(response, 'Failed to delete reserved word')
   }
 
   return response.json()

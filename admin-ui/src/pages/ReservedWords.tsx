@@ -20,6 +20,7 @@ export default function ReservedWords() {
   // Delete state
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [deleteLoading, setDeleteLoading] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   useEffect(() => {
     loadWords()
@@ -61,14 +62,19 @@ export default function ReservedWords() {
 
   const handleDelete = async (word: string) => {
     setDeleteLoading(true)
+    setDeleteError(null)
     try {
       const result = await deleteReservedWord(word)
       if (result.ok) {
         setDeleteConfirm(null)
         await loadWords()
+      } else {
+        // Leave the confirmation open: the word is still reserved, so the row
+        // has to keep offering the retry rather than looking like it worked.
+        setDeleteError(result.error || 'Failed to delete reserved word')
       }
     } catch (err) {
-      console.error('Delete failed:', err)
+      setDeleteError(err instanceof Error ? err.message : 'Request failed')
     } finally {
       setDeleteLoading(false)
     }
@@ -112,13 +118,25 @@ export default function ReservedWords() {
                 <label htmlFor="newWord" className="block text-sm font-medium text-gray-700">
                   Word *
                 </label>
+                {/*
+                  LDH with no edge hyphens. This is NARROWER than validateUsername,
+                  which also accepts Unicode and canonicalizes it to punycode, so a
+                  Unicode reserved word cannot be entered here even though the server
+                  would take it (see #93). The server stays authoritative; this only
+                  catches typos early.
+
+                  The dash is escaped so the pattern still compiles under the `v` flag
+                  HTML uses for `pattern`. An uncompilable pattern is ignored outright
+                  rather than failing loudly, which silently disables the check — the
+                  state Reserve.tsx and Assign.tsx are currently in (see #92).
+                */}
                 <input
                   type="text"
                   id="newWord"
                   value={newWord}
                   onChange={(e) => setNewWord(e.target.value.toLowerCase())}
                   required
-                  pattern="[a-z0-9]+"
+                  pattern="[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?"
                   placeholder="example"
                   className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2 border"
                 />
@@ -180,6 +198,12 @@ export default function ReservedWords() {
       {error && (
         <div className="rounded-md bg-red-50 p-4">
           <p className="text-sm text-red-800">{error}</p>
+        </div>
+      )}
+
+      {deleteError && (
+        <div className="rounded-md bg-red-50 p-4">
+          <p className="text-sm text-red-800">{deleteError}</p>
         </div>
       )}
 
