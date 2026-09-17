@@ -8,10 +8,43 @@ import { dirname, join } from 'node:path'
 
 const pagesDir = dirname(fileURLToPath(import.meta.url))
 
-// Every historical form bug (#89, #92) was a form carrying its own `pattern`
-// literal that drifted from the real rule. The fix put the rule in one constant;
-// this keeps it that way. A form's pattern must come from USERNAME_INPUT_PATTERN,
-// never a string literal, so it cannot silently diverge again.
+/**
+ * True if the source hardcodes a `pattern` attribute as a string literal in any
+ * JSX spelling — `pattern="..."`, `pattern='...'`, `pattern={"..."}`,
+ * `pattern={'...'}`, or `` pattern={`...`} ``. The only allowed form is
+ * `pattern={IDENT}` (i.e. the shared constant), where the char after `{` is an
+ * identifier, not a quote or backtick.
+ *
+ * Every historical form bug (#89, #92) was a form carrying its own pattern
+ * literal that drifted from the real rule; this keeps the rule in one constant.
+ */
+export function hasHardcodedPattern(src: string): boolean {
+  return /pattern\s*=\s*\{?\s*[`"']/.test(src)
+}
+
+describe('hasHardcodedPattern detector', () => {
+  // The detector is the load-bearing part; test it against every spelling
+  // directly, since a hole here silently disarms the sweep below.
+  it.each([
+    ['double quote', 'pattern="[a-z0-9]+"'],
+    ['single quote', "pattern='[a-z0-9]+'"],
+    ['brace + double quote', 'pattern={"[a-z0-9]+"}'],
+    ['brace + single quote', "pattern={'[a-z0-9]+'}"],
+    ['brace + backtick', 'pattern={`[a-z0-9]+`}'],
+    ['spaces around equals', 'pattern = "[a-z0-9]+"'],
+    ['space after brace', 'pattern={ "[a-z0-9]+" }'],
+  ])('flags a hardcoded pattern: %s', (_label, sample) => {
+    expect(hasHardcodedPattern(sample)).toBe(true)
+  })
+
+  it.each([
+    ['the shared constant', 'pattern={USERNAME_INPUT_PATTERN}'],
+    ['no pattern attribute at all', 'value={name} required'],
+  ])('allows %s', (_label, sample) => {
+    expect(hasHardcodedPattern(sample)).toBe(false)
+  })
+})
+
 describe('admin form pattern usage', () => {
   const pages = readdirSync(pagesDir).filter(f => f.endsWith('.tsx'))
 
@@ -19,21 +52,10 @@ describe('admin form pattern usage', () => {
     expect(pages.length).toBeGreaterThan(0)
   })
 
-  it.each(['Reserve.tsx', 'Assign.tsx', 'Revoke.tsx', 'ReservedWords.tsx'])(
-    '%s does not hardcode a pattern attribute',
-    (page) => {
-      const src = readFileSync(join(pagesDir, page), 'utf8')
-      // A literal `pattern="..."` or `pattern={'...'}` is the drift we forbid;
-      // `pattern={USERNAME_INPUT_PATTERN}` is the allowed form.
-      expect(src).not.toMatch(/pattern\s*=\s*["'{]\s*["'[]/)
-    },
-  )
-
-  it('no page under src/pages carries a literal pattern attribute', () => {
-    const offenders = pages.filter(page => {
-      const src = readFileSync(join(pagesDir, page), 'utf8')
-      return /pattern\s*=\s*["']/.test(src)
-    })
+  it('no page under src/pages hardcodes a username pattern', () => {
+    const offenders = pages.filter(page =>
+      hasHardcodedPattern(readFileSync(join(pagesDir, page), 'utf8')),
+    )
     expect(offenders).toEqual([])
   })
 })
