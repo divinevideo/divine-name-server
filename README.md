@@ -96,6 +96,10 @@ Admin auth is enforced against the real Cloudflare Access / Keycast paths even l
 ```bash
 npm test            # Vitest, watch mode
 npm run test:once   # single run
+
+cd admin-ui
+npm test            # admin UI: typecheck the tests, then a single Vitest run
+npm run test:watch  # admin UI: watch mode
 ```
 
 ## Configuration

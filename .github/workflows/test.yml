@@ -39,9 +39,12 @@ jobs:
         run: npm ci
         working-directory: admin-ui
 
+      - name: Run admin-ui tests
+        run: npm test
+        working-directory: admin-ui
+
       # `npm run build` in admin-ui is `tsc && vite build`, so this typechecks
-      # the admin UI as well as confirming it compiles. It is the only automated
-      # signal that half of the repo has until it gets a test suite (#94).
+      # the admin UI as well as confirming it compiles.
       - name: Build admin-ui
         run: npm run build
         working-directory: admin-ui
