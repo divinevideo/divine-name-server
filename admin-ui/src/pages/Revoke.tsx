@@ -59,7 +59,7 @@ export default function Revoke() {
               type="text"
               id="name"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => setName(e.target.value.trim())}
               required
               minLength={USERNAME_MIN_LENGTH}
               maxLength={USERNAME_MAX_LENGTH}

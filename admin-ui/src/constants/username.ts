@@ -20,9 +20,15 @@
  * - There are no anchors. The browser supplies them; adding our own would nest
  *   them pointlessly.
  *
- * This is deliberately NARROWER than the server rule, which also accepts
- * Unicode and canonicalises it to punycode. A form cannot express that, and the
- * server stays authoritative either way. See #93.
+ * This does not match the server rule exactly, in both directions, so do not
+ * read "the form accepted it" as "the server will accept it":
+ *
+ * - Narrower on Unicode. The server also accepts non-ASCII names and
+ *   canonicalises them to punycode; a form `pattern` cannot express that. See #93.
+ * - Broader on the IDNA positions-3-and-4 rule. The server rejects a name with
+ *   hyphens at both positions unless it starts `xn--`, so `ab--cd` passes here
+ *   and is refused with a 400. Encoding that in a form pattern would cost more
+ *   legibility than it buys, and the server is authoritative regardless.
  */
 export const USERNAME_INPUT_PATTERN = '[A-Za-z0-9]([A-Za-z0-9\\-]{0,61}[A-Za-z0-9])?'
 

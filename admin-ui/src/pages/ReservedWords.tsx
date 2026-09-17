@@ -133,7 +133,7 @@ export default function ReservedWords() {
                   type="text"
                   id="newWord"
                   value={newWord}
-                  onChange={(e) => setNewWord(e.target.value.toLowerCase())}
+                  onChange={(e) => setNewWord(e.target.value.trim().toLowerCase())}
                   required
                   pattern={USERNAME_INPUT_PATTERN}
                   title={USERNAME_INPUT_TITLE}

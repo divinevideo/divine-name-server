@@ -110,7 +110,9 @@ export default function Assign() {
               id="name"
               value={name}
               onChange={(e) => {
-                setName(e.target.value.toLowerCase())
+                // Trim as the server does. No username contains whitespace, and
+                // names arrive pasted from tickets and spreadsheets with it.
+                setName(e.target.value.trim().toLowerCase())
                 setShowOverrideConfirm(false)
                 setOverrideReason('')
               }}
