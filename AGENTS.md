@@ -42,6 +42,7 @@ If a Divine Brain search or ask tool is available, you may use it for company me
 ## Build, Test, and Validation Commands
 - `npm test`: Vitest watch mode.
 - `npm run test:once`: one-shot Vitest pass.
+- `npm test` in `admin-ui/`: typecheck and run the admin UI tests (`npm run test:watch` there for watch mode). They live next to the code under `admin-ui/src/**/*.test.ts` and cover form-rule logic in a node environment, not rendering.
 - `npm run build:admin`: build the admin UI.
 - `npm run dev`: local Wrangler development.
 - `npm run deploy`: build admin UI and deploy the Worker. Use only when intentionally shipping changes.
