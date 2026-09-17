@@ -322,23 +322,55 @@ admin.post('/reserved-words', async (c) => {
     const body = await c.req.json<{ word: string; category: string; reason?: string }>()
     const { word, category, reason } = body
 
+    if (word === undefined || category === undefined) {
+      return c.json({ ok: false, error: 'Word and category are required' }, 400)
+    }
+
+    // Type-check before the truthiness check below, so a supplied-but-wrong-typed
+    // field reports the type rather than reading as a missing one. These also stop
+    // a non-string reaching the validator or .bind(): D1 throws D1_TYPE_ERROR on a
+    // non-primitive, which the outer catch would turn into a 500, and it silently
+    // coerces an array, so a category of ["x","y"] would store as "x,y".
+    if (typeof word !== 'string') {
+      return c.json({ ok: false, error: 'Word must be a string' }, 400)
+    }
+
+    if (typeof category !== 'string') {
+      return c.json({ ok: false, error: 'Category must be a string' }, 400)
+    }
+
+    if (reason !== undefined && reason !== null && typeof reason !== 'string') {
+      return c.json({ ok: false, error: 'Reason must be a string' }, 400)
+    }
+
     if (!word || !category) {
       return c.json({ ok: false, error: 'Word and category are required' }, 400)
     }
 
-    // Validate word format (same as username: lowercase alphanumeric)
-    const validPattern = /^[a-z0-9]+$/
-    if (!validPattern.test(word.toLowerCase())) {
-      return c.json({ ok: false, error: 'Word must be lowercase alphanumeric' }, 400)
+    // The blocklist must be able to hold any name the namespace can produce, so
+    // defer to the username validator instead of restating the charset here. An
+    // independent copy of the rule is what let hyphens become registerable but
+    // not blockable.
+    let wordData: { display: string; canonical: string }
+    try {
+      wordData = validateUsername(word)
+    } catch (error) {
+      if (error instanceof UsernameValidationError) {
+        return c.json({ ok: false, error: error.message }, 400)
+      }
+      throw error
     }
 
-    if (word.length > 50) {
-      return c.json({ ok: false, error: 'Word must be 50 characters or less' }, 400)
-    }
+    // Store canonical, not merely lowercased: isReservedWord compares against a
+    // claim's canonical form, which is punycode for Unicode names. A Unicode
+    // term stored in its display form would never match the name it blocks.
+    const storedReason = reason || null
+    await addReservedWord(c.env.DB, wordData.canonical, category, storedReason)
 
-    await addReservedWord(c.env.DB, word, category, reason || null)
-
-    return c.json({ ok: true, word: word.toLowerCase(), category, reason })
+    // Echo what was stored, not what was sent. The word is already reported as
+    // its canonical form, so reporting the reason raw would be the one field a
+    // follow-up GET could contradict.
+    return c.json({ ok: true, word: wordData.canonical, category, reason: storedReason })
   } catch (error) {
     console.error('Add reserved word error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
@@ -353,9 +385,26 @@ admin.delete('/reserved-words/:word', async (c) => {
       return c.json({ ok: false, error: 'Word is required' }, 400)
     }
 
-    await deleteReservedWord(c.env.DB, word)
+    // Delete deliberately does not require the word to validate, so rows added
+    // under the old charset rule stay removable. But POST stores the canonical
+    // form, so deleting by what the admin typed has to reach that row too:
+    // removing `café` means removing the stored `xn--caf-dma`.
+    const forms = [word]
+    let canonical: string | null = null
+    try {
+      canonical = validateUsername(word).canonical
+      forms.push(canonical)
+    } catch {
+      // Unvalidatable, so it can only be a legacy row stored as typed.
+    }
 
-    return c.json({ ok: true, deleted: word.toLowerCase() })
+    await deleteReservedWord(c.env.DB, forms)
+
+    // Echo the stored form, as POST above does. Reporting the raw input would
+    // name a row the table never held: removing `café` removes `xn--caf-dma`,
+    // and a moderator reconciling this response against a follow-up GET would
+    // be looking for a word that was never on the blocklist.
+    return c.json({ ok: true, deleted: canonical ?? word.toLowerCase() })
   } catch (error) {
     console.error('Delete reserved word error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
