@@ -94,8 +94,11 @@ INSERT OR IGNORE INTO reserved_words (word, category, reason, created_at) VALUES
 
 -- Japanese
 ('xn--tckyfi0a', 'child_safety', 'Child sexual abuse material', unixepoch()),  -- ロリコン
+('xn--28jyfi0a', 'child_safety', 'Child sexual abuse material', unixepoch()),  -- ろりこん
 ('xn--tckhy3nmc', 'child_safety', 'Child sexual abuse material', unixepoch()),  -- ショタコン
+('xn--28jhy3nmc', 'child_safety', 'Child sexual abuse material', unixepoch()),  -- しょたこん
 ('xn--ldk3a4b932tzp7b', 'child_safety', 'Child sexual abuse material', unixepoch()),  -- 児童ポルノ
+('xn--p8j9axcvymc1d', 'child_safety', 'Child sexual abuse material', unixepoch()),  -- じどうポルノ
 ('xn--vusz0j', 'child_safety', 'Child sexual abuse material', unixepoch()),  -- 幼女
 ('rorikon', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('jidouporuno', 'child_safety', 'Child sexual abuse material', unixepoch()),
