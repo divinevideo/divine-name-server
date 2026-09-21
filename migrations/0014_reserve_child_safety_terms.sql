@@ -119,5 +119,8 @@ INSERT OR IGNORE INTO reserved_words (word, category, reason, created_at) VALUES
 -- also in the insert above: no migration ever created them, so a database built
 -- from this repo has no row for this UPDATE to find and would otherwise leave
 -- the two most obvious terms in the category unblocked.
-UPDATE reserved_words SET category = 'child_safety', reason = 'Child sexual abuse material'
+-- Only the category moves. reserved_words has no updated_at and no history
+-- table, so a reason a moderator typed by hand is unrecoverable once it is
+-- overwritten, and the reportable-category goal does not need it changed.
+UPDATE reserved_words SET category = 'child_safety'
 WHERE word IN ('childporn', 'kiddieporn');
