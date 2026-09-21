@@ -19,10 +19,14 @@ function reservedWords(): string[] {
 function encodedRows(): { word: string; display: string | null }[] {
   const rows: { word: string; display: string | null }[] = []
   for (const file of migrationFiles()) {
-    const sql = migrationSql(file)
-    for (const match of sql.matchAll(/^\('(xn--[^']+)'(.*)$/gm)) {
-      const comment = match[2].match(/--\s*(\S+)\s*$/)
-      rows.push({ word: match[1], display: comment ? comment[1] : null })
+    // Scan per line rather than anchoring the tuple at column 0: an indented
+    // row is the same row, and a guard that silently stops covering one
+    // because of how a later migration is formatted is not a guard.
+    for (const line of migrationSql(file).split('\n')) {
+      const comment = line.match(/--\s*(\S+)\s*$/)
+      for (const match of line.matchAll(/\('(xn--[^']+)'/g)) {
+        rows.push({ word: match[1], display: comment ? comment[1] : null })
+      }
     }
   }
   return rows
@@ -33,8 +37,15 @@ function recategorizedWords(): string[] {
   const words: string[] = []
   for (const file of migrationFiles()) {
     const sql = migrationSql(file)
-    for (const update of sql.matchAll(/UPDATE\s+reserved_words[^;]*?WHERE\s+word\s+IN\s*\(([^)]*)\)/gi)) {
-      for (const literal of update[1].matchAll(/'([^']+)'/g)) words.push(literal[1])
+    // `WHERE word = 'x'` is the same statement as a one-element IN list and
+    // fails the same way, so both spellings have to be read.
+    const updates = sql.matchAll(
+      /UPDATE\s+reserved_words[^;]*?WHERE\s+word\s*(?:IN\s*\(([^)]*)\)|=\s*('[^']+'))/gi
+    )
+    for (const update of updates) {
+      for (const literal of (update[1] ?? update[2]).matchAll(/'([^']+)'/g)) {
+        words.push(literal[1])
+      }
     }
   }
   return words
