@@ -23,7 +23,7 @@ function app() {
 
 function seeded() {
   const { db, sqlite } = createSqliteD1()
-  seedUsername(sqlite, { name: CANONICAL, pubkey: OWNER, status: 'active' })
+  seedUsername(sqlite, { name: CANONICAL, display: DISPLAY, pubkey: OWNER, status: 'active' })
   seedUsername(sqlite, { name: 'alice', pubkey: 'b'.repeat(64), status: 'active' })
   seedUsername(sqlite, { name: 'cool_dude', pubkey: 'c'.repeat(64), status: 'active' })
   return db
@@ -49,6 +49,21 @@ describe.skipIf(!sqliteAvailable())('WebFinger lookup of an internationalized na
     expect(res.status).toBe(200)
     const jrd = await res.json() as { subject: string }
     expect(jrd.subject).toBe(`acct:${CANONICAL}@divine.video`)
+  })
+
+  // Lowercasing the display form gives the handle for an ASCII name but not
+  // for this one, so only a Unicode row shows which column the JRD is built from.
+  it('builds every JRD field from the punycode handle, not the display form', async () => {
+    const res = await app().fetch(lookup(DISPLAY), { DB: seeded() }, createExecutionContext())
+
+    expect(res.status).toBe(200)
+    const jrd = await res.json() as { subject: string; aliases: string[]; links: { rel: string; href: string }[] }
+    const profileUrl = `https://${CANONICAL}.divine.video`
+    const actorUrl = `https://divine.video/ap/users/${CANONICAL}`
+    expect(jrd.subject).toBe(`acct:${CANONICAL}@divine.video`)
+    expect(jrd.aliases).toEqual([profileUrl, actorUrl])
+    expect(jrd.links.find((link) => link.rel === 'http://webfinger.net/rel/profile-page')?.href).toBe(profileUrl)
+    expect(jrd.links.find((link) => link.rel === 'self')?.href).toBe(actorUrl)
   })
 
   it('still finds it when the acct already carries the punycode form', async () => {
