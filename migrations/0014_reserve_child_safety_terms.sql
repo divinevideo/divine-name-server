@@ -56,6 +56,7 @@ INSERT OR IGNORE INTO reserved_words (word, category, reason, created_at) VALUES
 ('pederastia', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('pornoinfantil', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('pornografiainfantil', 'child_safety', 'Child sexual abuse material', unixepoch()),
+('xn--pornografainfantil-pyb', 'child_safety', 'Child sexual abuse material', unixepoch()),  -- pornografíainfantil
 ('sexoconninos', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('xn--sexoconnios-9db', 'child_safety', 'Child sexual abuse material', unixepoch()),  -- sexoconniños
 ('abusoinfantil', 'child_safety', 'Child sexual abuse material', unixepoch()),
@@ -65,8 +66,10 @@ INSERT OR IGNORE INTO reserved_words (word, category, reason, created_at) VALUES
 
 -- Portuguese
 ('estuprodecrianca', 'child_safety', 'Child sexual abuse material', unixepoch()),
+('xn--estuprodecriana-rmb', 'child_safety', 'Child sexual abuse material', unixepoch()),  -- estuprodecriança
 ('estuproinfantil', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('sexocomcrianca', 'child_safety', 'Child sexual abuse material', unixepoch()),
+('xn--sexocomcriana-tgb', 'child_safety', 'Child sexual abuse material', unixepoch()),  -- sexocomcriança
 
 -- French
 ('xn--pdophile-b1a', 'child_safety', 'Child sexual abuse material', unixepoch()),  -- pédophile
@@ -87,6 +90,7 @@ INSERT OR IGNORE INTO reserved_words (word, category, reason, created_at) VALUES
 ('kindersex', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('kindficker', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('kindesmissbrauch', 'child_safety', 'Child sexual abuse material', unixepoch()),
+('xn--kindesmibrauch-7fb', 'child_safety', 'Child sexual abuse material', unixepoch()),  -- kindesmißbrauch
 
 -- Japanese
 ('xn--tckyfi0a', 'child_safety', 'Child sexual abuse material', unixepoch()),  -- ロリコン
