@@ -89,6 +89,7 @@ INSERT OR IGNORE INTO reserved_words (word, category, reason, created_at) VALUES
 ('kinderpornografie', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('kindersex', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('kindficker', 'child_safety', 'Child sexual abuse material', unixepoch()),
+('kinderficker', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('kindesmissbrauch', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('xn--kindesmibrauch-7fb', 'child_safety', 'Child sexual abuse material', unixepoch()),  -- kindesmißbrauch
 
@@ -108,6 +109,7 @@ INSERT OR IGNORE INTO reserved_words (word, category, reason, created_at) VALUES
 ('xn--o80b38b9yht7nb0r', 'child_safety', 'Child sexual abuse material', unixepoch()),  -- 아동포르노
 ('xn--oj4bng25hid', 'child_safety', 'Child sexual abuse material', unixepoch()),  -- 소아성애
 ('ahdongporno', 'child_safety', 'Child sexual abuse material', unixepoch()),
+('adongporno', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('soaseongae', 'child_safety', 'Child sexual abuse material', unixepoch()),
 
 -- Russian
