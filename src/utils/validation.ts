@@ -129,6 +129,19 @@ export function validateUsername(username: string): { display: string; canonical
   }
 }
 
+/**
+ * Returns the canonical DNS-label form when a name is valid for new claims.
+ * Lookup routes use this to try current names first while retaining their
+ * own behavior for legacy stored names that predate the current rules.
+ */
+export function canonicalizeUsernameOrNull(username: string): string | null {
+  try {
+    return validateUsername(username).canonical
+  } catch {
+    return null
+  }
+}
+
 export class RelayValidationError extends Error {
   constructor(message: string) {
     super(message)

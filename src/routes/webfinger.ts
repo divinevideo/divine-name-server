@@ -3,7 +3,7 @@
 
 import { Hono } from 'hono'
 import { getUsernameByName, countActiveUsernames } from '../db/queries'
-import { validateUsername } from '../utils/validation'
+import { canonicalizeUsernameOrNull } from '../utils/validation'
 
 type Bindings = {
   DB: D1Database
@@ -41,19 +41,14 @@ webfinger.get('/.well-known/webfinger', async (c) => {
       return c.notFound()
     }
 
-    // Look the name up by its canonical form, the way nip05.ts does. For a
-    // Unicode name that form is punycode, and it is what both `name` and
-    // `username_canonical` hold — the display form matches neither column, so
-    // comparing it finds nothing. A local-part no username could ever have is
-    // simply not found rather than an error.
-    let canonicalUser: string
-    try {
-      canonicalUser = validateUsername(user).canonical
-    } catch {
-      return c.notFound()
+    // Current names are stored in canonical (punycode for Unicode) form, but
+    // imported legacy rows can contain characters today's claim rules reject.
+    // Try canonical first, then preserve the route's previous raw lookup.
+    const canonicalUser = canonicalizeUsernameOrNull(user)
+    let username = canonicalUser ? await getUsernameByName(c.env.DB, canonicalUser) : null
+    if (!username && canonicalUser !== user) {
+      username = await getUsernameByName(c.env.DB, user)
     }
-
-    const username = await getUsernameByName(c.env.DB, canonicalUser)
 
     if (!username || username.status !== 'active') {
       return c.notFound()

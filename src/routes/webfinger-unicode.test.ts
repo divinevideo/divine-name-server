@@ -25,6 +25,7 @@ function seeded() {
   const { db, sqlite } = createSqliteD1()
   seedUsername(sqlite, { name: CANONICAL, pubkey: OWNER, status: 'active' })
   seedUsername(sqlite, { name: 'alice', pubkey: 'b'.repeat(64), status: 'active' })
+  seedUsername(sqlite, { name: 'cool_dude', pubkey: 'c'.repeat(64), status: 'active' })
   return db
 }
 
@@ -64,6 +65,12 @@ describe.skipIf(!sqliteAvailable())('WebFinger lookup of an internationalized na
 
   it('still finds an ASCII name typed in mixed case', async () => {
     const res = await app().fetch(lookup('ALICE'), { DB: seeded() }, createExecutionContext())
+
+    expect(res.status).toBe(200)
+  })
+
+  it('still finds an active legacy name that current claim rules reject', async () => {
+    const res = await app().fetch(lookup('cool_dude'), { DB: seeded() }, createExecutionContext())
 
     expect(res.status).toBe(200)
   })
