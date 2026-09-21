@@ -26,9 +26,9 @@ describe('validateUsername', () => {
     })
 
     it('should accept mixed case usernames', () => {
-      const result = validateUsername('MrBeast')
-      expect(result.display).toBe('MrBeast')
-      expect(result.canonical).toBe('mrbeast')
+      const result = validateUsername('CreatorExample')
+      expect(result.display).toBe('CreatorExample')
+      expect(result.canonical).toBe('creatorexample')
     })
 
     it('should accept usernames with numbers', () => {
@@ -119,9 +119,9 @@ describe('validateUsername', () => {
 
   describe('canonicalization', () => {
     it('should preserve case in display but lowercase canonical', () => {
-      const result = validateUsername('MrBeast')
-      expect(result.display).toBe('MrBeast')
-      expect(result.canonical).toBe('mrbeast')
+      const result = validateUsername('CreatorExample')
+      expect(result.display).toBe('CreatorExample')
+      expect(result.canonical).toBe('creatorexample')
     })
 
     it('should handle all uppercase', () => {

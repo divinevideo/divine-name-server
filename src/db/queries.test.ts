@@ -645,7 +645,7 @@ describe('createReservation', () => {
 })
 
 // Stateful mock that faithfully tracks revoked_at through the revoke-then-upsert flow.
-// Reproduces the ericartell bug: claimUsername on a name the same pubkey already owns
+// Reproduces the reclaimed-name regression: claimUsername on a name the same pubkey already owns
 // should NOT leave revoked_at set.
 function createStatefulMockDB(initialRecords: Partial<Username>[] = []) {
   const records: Partial<Username>[] = [...initialRecords]
@@ -759,18 +759,18 @@ function createStatefulMockDB(initialRecords: Partial<Username>[] = []) {
   } as unknown as D1Database & { _records: Partial<Username>[] }
 }
 
-describe('revoked_at clearing (ericartell bug)', () => {
+describe('revoked_at clearing (reclaimed-name regression)', () => {
   it('claimUsername: re-claiming same name should clear revoked_at', async () => {
     const db = createStatefulMockDB([{
-      id: 1, name: 'ericartell', username_display: 'EricArtell', username_canonical: 'ericartell',
+      id: 1, name: 'reclaimeduser', username_display: 'ReclaimedUser', username_canonical: 'reclaimeduser',
       pubkey: 'aaa111', status: 'active', revoked_at: null,
       created_at: 1700000000, updated_at: 1700000000, claimed_at: 1700000000,
     }])
 
     // Same pubkey re-claims the same name (e.g., updating relays)
-    await claimUsername(db, 'EricArtell', 'ericartell', 'aaa111', ['wss://relay.divine.video'])
+    await claimUsername(db, 'ReclaimedUser', 'reclaimeduser', 'aaa111', ['wss://relay.divine.video'])
 
-    const record = db._records.find(r => r.username_canonical === 'ericartell')!
+    const record = db._records.find(r => r.username_canonical === 'reclaimeduser')!
     expect(record.status).toBe('active')
     expect(record.revoked_at).toBeNull()
   })

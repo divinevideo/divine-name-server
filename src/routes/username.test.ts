@@ -316,7 +316,7 @@ describe('Username Claiming - Case Insensitive', () => {
         'Authorization': 'Nostr base64...',
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ name: 'MrBeast' })
+      body: JSON.stringify({ name: 'CreatorExample' })
     })
     
     const res = await app.fetch(req, { DB: db }, createExecutionContext())
@@ -324,12 +324,12 @@ describe('Username Claiming - Case Insensitive', () => {
     expect(res.status).toBe(200)
     const json = await res.json() as any
     expect(json.ok).toBe(true)
-    expect(json.name).toBe('MrBeast') // Display name preserved
+    expect(json.name).toBe('CreatorExample') // Display name preserved
     expect(verifyNip98Event).toHaveBeenCalledWith(
       expect.anything(),
       'POST',
       'http://localhost/api/username/claim',
-      JSON.stringify({ name: 'MrBeast' }),
+      JSON.stringify({ name: 'CreatorExample' }),
       300
     )
   })
@@ -338,20 +338,20 @@ describe('Username Claiming - Case Insensitive', () => {
     const app = createTestApp()
     const db = createMockDB()
 
-    // First claim: MrBeast
+    // First claim: CreatorExample
     const req1 = new Request('http://localhost/api/username/claim', {
       method: 'POST',
       headers: {
         'Authorization': 'Nostr base64...',
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ name: 'MrBeast' })
+      body: JSON.stringify({ name: 'CreatorExample' })
     })
 
     const res1 = await app.fetch(req1, { DB: db }, createExecutionContext())
     expect(res1.status).toBe(200)
 
-    // Second claim: mrbeast (should fail)
+    // Second claim: creatorexample (should fail)
     vi.mocked(verifyNip98Event).mockResolvedValue('differentpubkey456')
     const req2 = new Request('http://localhost/api/username/claim', {
       method: 'POST',
@@ -359,7 +359,7 @@ describe('Username Claiming - Case Insensitive', () => {
         'Authorization': 'Nostr base64...',
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ name: 'mrbeast' })
+      body: JSON.stringify({ name: 'creatorexample' })
     })
 
     const res2 = await app.fetch(req2, { DB: db }, createExecutionContext())
@@ -372,7 +372,7 @@ describe('Username Claiming - Case Insensitive', () => {
     const app = createTestApp()
     // Existing active name owned by a lower-cased pubkey.
     const db = createMockDB([
-      { id: 1, name: 'MrBeast', username_display: 'MrBeast', username_canonical: 'mrbeast', pubkey: 'abc123', status: 'active', relays: null },
+      { id: 1, name: 'CreatorExample', username_display: 'CreatorExample', username_canonical: 'creatorexample', pubkey: 'abc123', status: 'active', relays: null },
     ])
     // NIP-98 presents the SAME key, upper-cased.
     vi.mocked(verifyNip98Event).mockResolvedValue('ABC123')
@@ -380,7 +380,7 @@ describe('Username Claiming - Case Insensitive', () => {
     const req = new Request('http://localhost/api/username/claim', {
       method: 'POST',
       headers: { 'Authorization': 'Nostr base64...', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'MrBeast' })
+      body: JSON.stringify({ name: 'CreatorExample' })
     })
 
     const res = await app.fetch(req, { DB: db }, createExecutionContext())
@@ -770,15 +770,15 @@ describe('Public Username Endpoints', () => {
       const app = createTestApp()
       const db = createMockDB()
 
-      const req = new Request('http://localhost/api/username/check/MrBeast', {
+      const req = new Request('http://localhost/api/username/check/CreatorExample', {
         method: 'GET'
       })
 
       const res = await app.fetch(req, { DB: db }, createExecutionContext())
       expect(res.status).toBe(200)
       const json = await res.json() as any
-      expect(json.name).toBe('MrBeast')
-      expect(json.canonical).toBe('mrbeast')
+      expect(json.name).toBe('CreatorExample')
+      expect(json.canonical).toBe('creatorexample')
     })
   })
 
