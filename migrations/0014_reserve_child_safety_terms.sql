@@ -13,7 +13,9 @@ INSERT OR IGNORE INTO reserved_words (word, category, reason, created_at) VALUES
 ('paedo', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('paedophile', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('paedophilia', 'child_safety', 'Child sexual abuse material', unixepoch()),
+('childporn', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('kidporn', 'child_safety', 'Child sexual abuse material', unixepoch()),
+('kiddieporn', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('kiddyporn', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('childsex', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('kidsex', 'child_safety', 'Child sexual abuse material', unixepoch()),
@@ -107,8 +109,11 @@ INSERT OR IGNORE INTO reserved_words (word, category, reason, created_at) VALUES
 ('pedofil', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('detskoeporno', 'child_safety', 'Child sexual abuse material', unixepoch());
 
--- childporn and kiddieporn were already present but filed as 'Foul Language ',
--- which handles them identically to ordinary profanity. Move them to the same
--- category as the terms above so the policy category is reportable as one set.
+-- childporn and kiddieporn exist in production under the 'Foul Language '
+-- category, which handles them identically to ordinary profanity. Move them to
+-- the category above so the policy category is reportable as one set. They are
+-- also in the insert above: no migration ever created them, so a database built
+-- from this repo has no row for this UPDATE to find and would otherwise leave
+-- the two most obvious terms in the category unblocked.
 UPDATE reserved_words SET category = 'child_safety', reason = 'Child sexual abuse material'
 WHERE word IN ('childporn', 'kiddieporn');
