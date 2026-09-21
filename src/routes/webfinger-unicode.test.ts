@@ -26,6 +26,7 @@ function seeded() {
   seedUsername(sqlite, { name: CANONICAL, display: DISPLAY, pubkey: OWNER, status: 'active' })
   seedUsername(sqlite, { name: 'alice', pubkey: 'b'.repeat(64), status: 'active' })
   seedUsername(sqlite, { name: 'cool_dude', pubkey: 'c'.repeat(64), status: 'active' })
+  seedUsername(sqlite, { name: 'josé', pubkey: 'd'.repeat(64), status: 'active' })
   return db
 }
 
@@ -86,6 +87,15 @@ describe.skipIf(!sqliteAvailable())('WebFinger lookup of an internationalized na
 
   it('still finds an active legacy name that current claim rules reject', async () => {
     const res = await app().fetch(lookup('cool_dude'), { DB: seeded() }, createExecutionContext())
+
+    expect(res.status).toBe(200)
+  })
+
+  // The raw lookup runs whenever the canonical one misses, not only when the
+  // current rules reject the name. `josé` canonicalizes to punycode, so a
+  // legacy row holding it as typed is the case that tells those two apart.
+  it('still finds a legacy row that holds a Unicode name as typed', async () => {
+    const res = await app().fetch(lookup('josé'), { DB: seeded() }, createExecutionContext())
 
     expect(res.status).toBe(200)
   })
