@@ -879,7 +879,7 @@ describe('Admin Tag Endpoints', () => {
         reserved_reason: 'Brand protection', admin_notes: null,
       },
       {
-        id: 2, name: 'lelepons', username_display: 'LelePons', username_canonical: 'lelepons',
+        id: 2, name: 'creatortwo', username_display: 'CreatorTwo', username_canonical: 'creatortwo',
         pubkey: null, email: null, relays: null, status: 'reserved',
         recyclable: 1, created_at: 1700000100, updated_at: 1700000100,
         reserved_reason: 'Brand protection', admin_notes: null,
@@ -936,7 +936,7 @@ describe('Admin Tag Endpoints', () => {
       body: JSON.stringify({ tag: 'vip' }),
     }), { DB: db, BYPASS_LOCAL_AUTH: 'true' }, createExecutionContext())
 
-    await app.fetch(new Request('http://localhost/admin/username/lelepons/tags', {
+    await app.fetch(new Request('http://localhost/admin/username/creatortwo/tags', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
       body: JSON.stringify({ tag: 'vip' }),

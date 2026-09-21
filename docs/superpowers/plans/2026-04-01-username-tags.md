@@ -113,7 +113,7 @@ describe('username tags', () => {
   it('returns all distinct tags with counts', async () => {
     const db = createFakeD1([
       { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
-      { name: 'lelepons', username_canonical: 'lelepons', status: 'reserved', id: 2 },
+      { name: 'creatortwo', username_canonical: 'creatortwo', status: 'reserved', id: 2 },
     ])
     await addTag(db, 1, 'vip', 'matthew@divine.video')
     await addTag(db, 2, 'vip', 'matthew@divine.video')
