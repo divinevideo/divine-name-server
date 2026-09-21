@@ -151,11 +151,11 @@ export function createSqliteD1(): { db: D1Database; sqlite: SqliteDb } {
 /** Insert a `usernames` row with test-friendly defaults. */
 export function seedUsername(
   sqlite: SqliteDb,
-  row: { name: string; canonical?: string; pubkey?: string | null; status?: string; recyclable?: number }
+  row: { name: string; display?: string; canonical?: string; pubkey?: string | null; status?: string; recyclable?: number }
 ): void {
   const canonical = row.canonical ?? row.name.toLowerCase()
   sqlite.prepare(
     `INSERT INTO usernames (name, username_display, username_canonical, pubkey, status, recyclable, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, 100, 100)`
-  ).run(row.name, row.name, canonical, row.pubkey ?? null, row.status ?? 'active', row.recyclable ?? 1)
+  ).run(row.name, row.display ?? row.name, canonical, row.pubkey ?? null, row.status ?? 'active', row.recyclable ?? 1)
 }
