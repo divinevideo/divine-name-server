@@ -85,21 +85,28 @@ username.get('/check/:name', async (c) => {
       throw error
     }
 
-    // Check if reserved word
-    const reserved = await isReservedWord(c.env.DB, usernameData.canonical)
-    if (reserved) {
-      return c.json({
-        ok: true,
-        available: false,
-        name: usernameData.display,
-        canonical: usernameData.canonical,
-        code: 'reserved',
-        reason: 'Username is reserved'
-      }, 200, { 'Access-Control-Allow-Origin': '*' })
-    }
-
     // Check if already exists
     const existing = await getUsernameByName(c.env.DB, usernameData.canonical)
+
+    // Check if reserved word. A name someone is actively holding is taken, not
+    // reserved: nip05.ts keeps resolving it either way, and answering 'reserved'
+    // here would also withhold the owning pubkey clients use to tell "taken by
+    // me" from "taken by someone else".
+    const heldByOwner = existing?.status === 'active' && !!existing.pubkey
+    if (!heldByOwner) {
+      const reserved = await isReservedWord(c.env.DB, usernameData.canonical)
+      if (reserved) {
+        return c.json({
+          ok: true,
+          available: false,
+          name: usernameData.display,
+          canonical: usernameData.canonical,
+          code: 'reserved',
+          reason: 'Username is reserved'
+        }, 200, { 'Access-Control-Allow-Origin': '*' })
+      }
+    }
+
     if (existing) {
       // Expired pending-confirmation reservations are treated as available
       const now = Math.floor(Date.now() / 1000)
@@ -516,9 +523,17 @@ username.post('/claim', async (c) => {
       }
     }
 
-    // Check if name is reserved (check canonical)
-    const reserved = await isReservedWord(c.env.DB, nameCanonical)
-    if (reserved) {
+    // Check if name exists (using canonical for lookup)
+    const existing = await getUsernameByName(c.env.DB, nameCanonical)
+
+    // Check if name is reserved (check canonical). Reserving a name stops new
+    // people taking it; it does not take it off whoever already holds one.
+    // Re-claiming your own name is the only path that writes relays, so a 403
+    // here would freeze the owner's NIP-05 record on hints they can never
+    // update. The allowance ends when they let the name go — a revoked row
+    // falls through to the 403 like anyone else.
+    const ownedByClaimant = existing?.status === 'active' && existing.pubkey?.toLowerCase() === pubkey
+    if (!ownedByClaimant && await isReservedWord(c.env.DB, nameCanonical)) {
       return c.json({ ok: false, error: 'Username is reserved' }, 403)
     }
 
@@ -527,8 +542,6 @@ username.post('/claim', async (c) => {
       return c.json({ ok: false, error: 'Username release is pending', code: 'release_pending' }, 409)
     }
 
-    // Check if name exists (using canonical for lookup)
-    const existing = await getUsernameByName(c.env.DB, nameCanonical)
     if (existing) {
       if (existing.status === 'active' && existing.pubkey?.toLowerCase() !== pubkey) {
         return c.json({ ok: false, error: 'That username is already taken' }, 409)
