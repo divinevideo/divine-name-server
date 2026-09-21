@@ -2,12 +2,26 @@
 // ABOUTME: Groups words by category with add/delete functionality
 import { useState, useEffect } from 'react'
 import { getReservedWords, addReservedWord, deleteReservedWord } from '../api/client'
-import type { ReservedWord } from '../types'
+import type { ReservedWord, MatchScope } from '../types'
 import {
   USERNAME_INPUT_PATTERN,
   USERNAME_INPUT_TITLE,
   USERNAME_MAX_LENGTH,
 } from '../constants/username'
+
+const SCOPE_LABEL: Record<MatchScope, string> = {
+  whole: 'whole name',
+  token: 'separate word',
+  anywhere: 'anywhere',
+}
+
+/** `anywhere` is the one that can reject real people, so it reads differently. */
+function scopeBadgeClass(scope: MatchScope | undefined): string {
+  const base = 'inline-flex rounded-full px-2 py-0.5 text-xs font-medium '
+  if (scope === 'anywhere') return base + 'bg-amber-100 text-amber-800'
+  if (scope === 'token') return base + 'bg-blue-100 text-blue-800'
+  return base + 'bg-gray-100 text-gray-700'
+}
 
 export default function ReservedWords() {
   const [words, setWords] = useState<ReservedWord[]>([])
@@ -19,6 +33,9 @@ export default function ReservedWords() {
   const [newWord, setNewWord] = useState('')
   const [newCategory, setNewCategory] = useState('')
   const [newReason, setNewReason] = useState('')
+  // Starts at the safe end. A word added without thinking about scope blocks
+  // only the name that is that word, which is what the old behaviour was.
+  const [newScope, setNewScope] = useState<MatchScope>('whole')
   const [addLoading, setAddLoading] = useState(false)
   const [addError, setAddError] = useState<string | null>(null)
 
@@ -48,11 +65,12 @@ export default function ReservedWords() {
     setAddError(null)
 
     try {
-      const result = await addReservedWord(newWord, newCategory, newReason || undefined)
+      const result = await addReservedWord(newWord, newCategory, newReason || undefined, newScope)
       if (result.ok) {
         setNewWord('')
         setNewCategory('')
         setNewReason('')
+        setNewScope('whole')
         setShowAddForm(false)
         await loadWords()
       } else {
@@ -177,6 +195,33 @@ export default function ReservedWords() {
               </div>
             </div>
 
+            <div>
+              <label htmlFor="newScope" className="block text-sm font-medium text-gray-700">
+                Where it matches
+              </label>
+              <select
+                id="newScope"
+                value={newScope}
+                onChange={(e) => setNewScope(e.target.value as MatchScope)}
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2 border"
+              >
+                <option value="whole">The whole name only</option>
+                <option value="token">As a separate word in the name</option>
+                <option value="anywhere">Anywhere inside the name</option>
+              </select>
+              <p className="mt-2 text-sm text-gray-500">
+                {newScope === 'whole' && (
+                  <>Blocks <code>{newWord || 'word'}</code> and spellings of it like <code>{(newWord || 'word').split('').join('-')}</code>, but not longer names containing it.</>
+                )}
+                {newScope === 'token' && (
+                  <>Also blocks names where <code>{newWord || 'word'}</code> stands on its own, like <code>xx-{newWord || 'word'}-xx</code>. Not names that merely contain the letters.</>
+                )}
+                {newScope === 'anywhere' && (
+                  <>Blocks every name containing these letters, including inside other words. Check first: <code>anal</code> set this way blocks 165 existing accounts, most of them ordinary Arabic and Spanish given names.</>
+                )}
+              </p>
+            </div>
+
             {addError && (
               <div className="rounded-md bg-red-50 p-3">
                 <p className="text-sm text-red-800">{addError}</p>
@@ -229,6 +274,9 @@ export default function ReservedWords() {
                         Word
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Matches
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Reason
                       </th>
                       <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -241,6 +289,11 @@ export default function ReservedWords() {
                       <tr key={word.word}>
                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                           {word.word}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          <span className={scopeBadgeClass(word.match_scope)}>
+                            {SCOPE_LABEL[word.match_scope ?? 'whole']}
+                          </span>
                         </td>
                         <td className="px-6 py-4 text-sm text-gray-500">
                           {word.reason || '-'}

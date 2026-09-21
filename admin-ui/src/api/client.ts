@@ -6,6 +6,7 @@ import type {
   AssignResponse,
   RevokeResponse,
   ReservedWord,
+  MatchScope,
   BulkReserveResponse,
   ApiResponse,
   TagDetail,
@@ -204,12 +205,13 @@ export async function getReservedWords(): Promise<ReservedWord[]> {
 export async function addReservedWord(
   word: string,
   category: string,
-  reason?: string
+  reason?: string,
+  matchScope?: MatchScope
 ): Promise<ApiResponse & { word?: string }> {
   const response = await fetch(`${API_BASE}/reserved-words`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ word, category, reason })
+    body: JSON.stringify({ word, category, reason, match_scope: matchScope })
   })
 
   if (!response.ok) {

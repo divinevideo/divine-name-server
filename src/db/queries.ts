@@ -3,6 +3,7 @@
 
 import type { SyncItem, UsernameKVData } from '../utils/fastly-sync'
 import { validateAndNormalizePubkey } from '../utils/validation'
+import { compileTerm, matchesTerm, type TermRules } from '../utils/blocklist-match'
 
 // SQLite raises "LIKE or GLOB pattern too complex" once a LIKE pattern exceeds
 // SQLITE_MAX_LIKE_PATTERN_LENGTH (50 UTF-8 bytes). The surrounding wildcards
@@ -106,15 +107,91 @@ export interface RestoreUsernameResult {
   ownerChanged: boolean
 }
 
+/**
+ * Compiled patterns, keyed by the term and the rules that built it.
+ *
+ * Lives at module scope so it survives across requests in the same isolate. The
+ * key includes the rules, so a moderator changing a word's scope produces a new
+ * entry rather than serving the old pattern.
+ */
+const patternCache = new Map<string, RegExp>()
+
+function cachedPattern(word: string, rules: TermRules): RegExp {
+  const key = `${word}\u0000${rules.scope}${rules.leet ? 'L' : ''}${rules.digitExpand ? 'D' : ''}${rules.repeats ? 'R' : ''}`
+  let compiled = patternCache.get(key)
+  if (!compiled) {
+    compiled = compileTerm(word, rules)
+    patternCache.set(key, compiled)
+  }
+  return compiled
+}
+
+function rulesOf(row: ReservedWordRow): TermRules {
+  const scope = row.match_scope
+  return {
+    scope: scope === 'token' || scope === 'anywhere' ? scope : 'whole',
+    leet: row.match_leet !== 0,
+    digitExpand: row.match_digit_expand !== 0,
+    repeats: row.match_repeats !== 0,
+  }
+}
+
+interface ReservedWordRow {
+  word: string
+  match_scope: string
+  match_leet: number
+  match_digit_expand: number
+  match_repeats: number
+}
+
+/**
+ * Whether `word` is blocked, under each term's own matching rules.
+ *
+ * Reads the whole list on every call rather than caching it, so a moderator
+ * adding or loosening a term takes effect on the next signup instead of after a
+ * cache expiry. The list is ~600 short rows; the compiled patterns are what is
+ * expensive, and those are cached above.
+ *
+ * `word` must be the canonical form, which is punycode for Unicode names. That
+ * is the form stored in the table, so a Unicode term compared against a display
+ * form would never match the name it is meant to block.
+ */
 export async function isReservedWord(
   db: D1Database,
   word: string
 ): Promise<boolean> {
-  const result = await db.prepare(
-    'SELECT 1 FROM reserved_words WHERE word = ?'
-  ).bind(word).first()
+  const { results } = await db.prepare(
+    'SELECT word, match_scope, match_leet, match_digit_expand, match_repeats FROM reserved_words'
+  ).all<ReservedWordRow>()
 
-  return result !== null
+  for (const row of results) {
+    const rules = rulesOf(row)
+    if (matchesTerm(word, row.word, rules, cachedPattern(row.word, rules))) return true
+  }
+
+  return false
+}
+
+/**
+ * Every term that blocks `word`, for explaining a rejection.
+ *
+ * A rejected user and an appeal both need to know which word was matched, and a
+ * moderator changing a term's scope needs to see what it would newly affect.
+ */
+export async function reservedWordsMatching(
+  db: D1Database,
+  word: string
+): Promise<string[]> {
+  const { results } = await db.prepare(
+    'SELECT word, match_scope, match_leet, match_digit_expand, match_repeats FROM reserved_words'
+  ).all<ReservedWordRow>()
+
+  const hits: string[] = []
+  for (const row of results) {
+    const rules = rulesOf(row)
+    if (matchesTerm(word, row.word, rules, cachedPattern(row.word, rules))) hits.push(row.word)
+  }
+  return hits
 }
 
 export async function getUsernameByName(
@@ -1003,6 +1080,10 @@ export interface ReservedWord {
   category: string
   reason: string | null
   created_at: number
+  match_scope: TermRules['scope']
+  match_leet: number
+  match_digit_expand: number
+  match_repeats: number
 }
 
 export async function getReservedWords(
@@ -1019,17 +1100,19 @@ export async function addReservedWord(
   db: D1Database,
   word: string,
   category: string,
-  reason: string | null
+  reason: string | null,
+  matchScope: TermRules['scope'] = 'whole'
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000)
 
   await db.prepare(
-    `INSERT INTO reserved_words (word, category, reason, created_at)
-     VALUES (?, ?, ?, ?)
+    `INSERT INTO reserved_words (word, category, reason, created_at, match_scope)
+     VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(word) DO UPDATE SET
        category = excluded.category,
-       reason = excluded.reason`
-  ).bind(word.toLowerCase(), category, reason, now).run()
+       reason = excluded.reason,
+       match_scope = excluded.match_scope`
+  ).bind(word.toLowerCase(), category, reason, now, matchScope).run()
 }
 
 /**

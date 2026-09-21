@@ -80,11 +80,16 @@ export interface RevokeResponse extends ApiResponse {
   recyclable?: boolean
 }
 
+/** Where in a username a reserved word is allowed to match. */
+export type MatchScope = 'whole' | 'token' | 'anywhere'
+
 export interface ReservedWord {
   word: string
   category: string
   reason: string | null
   created_at: number
+  /** Absent on rows written before match rules existed; treat as 'whole'. */
+  match_scope?: MatchScope
 }
 
 export interface BulkReserveResult {

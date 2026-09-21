@@ -80,6 +80,9 @@ function createReleaseDB() {
             },
           }
         },
+        // D1 allows all() without bind() on a parameterless query, which is how
+        // the blocklist is read now that each word carries its own match rules.
+        all: async () => ({ results: [] }),
       }
     },
     batch: async (statements: Array<{ run: () => Promise<any> }>) => Promise.all(statements.map(statement => statement.run())),
