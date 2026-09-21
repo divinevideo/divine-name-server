@@ -261,7 +261,7 @@ describe('canonicalizeUsernameOrNull', () => {
   // Lookup routes pass it names that predate the current rules, so it has to
   // answer null exactly where validateUsername throws, and never throw itself.
   it('returns null wherever validateUsername throws', () => {
-    for (const name of ['cool_dude', 'lele.pons', '', '   ', '-alice', 'ab--cd', 'a'.repeat(64)]) {
+    for (const name of ['cool_dude', 'first.last', '', '   ', '-alice', 'ab--cd', 'a'.repeat(64)]) {
       expect(() => validateUsername(name)).toThrow(UsernameValidationError)
       expect(canonicalizeUsernameOrNull(name)).toBeNull()
     }
