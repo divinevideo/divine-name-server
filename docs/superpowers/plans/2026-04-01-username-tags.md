@@ -63,7 +63,7 @@ import { getTagsForUsername, addTag, removeTag, getAllTags, getTagsForUsernames 
 describe('username tags', () => {
   it('adds a tag to a username', async () => {
     const db = createFakeD1([
-      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+      { name: 'creatorone', username_canonical: 'creatorone', status: 'reserved', id: 1 },
     ])
     await addTag(db, 1, 'vip', 'matthew@divine.video')
     const tags = await getTagsForUsername(db, 1)
@@ -72,7 +72,7 @@ describe('username tags', () => {
 
   it('normalizes tags to lowercase', async () => {
     const db = createFakeD1([
-      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+      { name: 'creatorone', username_canonical: 'creatorone', status: 'reserved', id: 1 },
     ])
     await addTag(db, 1, '  VIP  ', 'matthew@divine.video')
     const tags = await getTagsForUsername(db, 1)
@@ -81,7 +81,7 @@ describe('username tags', () => {
 
   it('prevents duplicate tags', async () => {
     const db = createFakeD1([
-      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+      { name: 'creatorone', username_canonical: 'creatorone', status: 'reserved', id: 1 },
     ])
     await addTag(db, 1, 'vip', 'matthew@divine.video')
     await addTag(db, 1, 'vip', 'matthew@divine.video')
@@ -91,7 +91,7 @@ describe('username tags', () => {
 
   it('supports multiple tags per username', async () => {
     const db = createFakeD1([
-      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+      { name: 'creatorone', username_canonical: 'creatorone', status: 'reserved', id: 1 },
     ])
     await addTag(db, 1, 'vip', 'matthew@divine.video')
     await addTag(db, 1, 'vine-legacy', 'matthew@divine.video')
@@ -102,7 +102,7 @@ describe('username tags', () => {
 
   it('removes a tag', async () => {
     const db = createFakeD1([
-      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+      { name: 'creatorone', username_canonical: 'creatorone', status: 'reserved', id: 1 },
     ])
     await addTag(db, 1, 'vip', 'matthew@divine.video')
     await removeTag(db, 1, 'vip')
@@ -112,7 +112,7 @@ describe('username tags', () => {
 
   it('returns all distinct tags with counts', async () => {
     const db = createFakeD1([
-      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+      { name: 'creatorone', username_canonical: 'creatorone', status: 'reserved', id: 1 },
       { name: 'creatortwo', username_canonical: 'creatortwo', status: 'reserved', id: 2 },
     ])
     await addTag(db, 1, 'vip', 'matthew@divine.video')
@@ -125,7 +125,7 @@ describe('username tags', () => {
 
   it('rejects empty tags', async () => {
     const db = createFakeD1([
-      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+      { name: 'creatorone', username_canonical: 'creatorone', status: 'reserved', id: 1 },
     ])
     await expect(addTag(db, 1, '', 'matthew@divine.video')).rejects.toThrow()
     await expect(addTag(db, 1, '   ', 'matthew@divine.video')).rejects.toThrow()
@@ -244,7 +244,7 @@ Add to `src/routes/admin.test.ts`:
 describe('tags', () => {
   it('POST /admin/username/:name/tags adds a tag', async () => {
     const db = createMockDB() // seed with a reserved name
-    const req = new Request('http://names.admin.divine.video/admin/username/kingbach/tags', {
+    const req = new Request('http://names.admin.divine.video/admin/username/creatorone/tags', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
       body: JSON.stringify({ tag: 'vip' }),
@@ -259,13 +259,13 @@ describe('tags', () => {
   it('DELETE /admin/username/:name/tags/:tag removes a tag', async () => {
     const db = createMockDB()
     // First add a tag
-    await app.fetch(new Request('http://names.admin.divine.video/admin/username/kingbach/tags', {
+    await app.fetch(new Request('http://names.admin.divine.video/admin/username/creatorone/tags', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
       body: JSON.stringify({ tag: 'vip' }),
     }), { DB: db }, { waitUntil: () => {} })
     // Then remove it
-    const res = await app.fetch(new Request('http://names.admin.divine.video/admin/username/kingbach/tags/vip', {
+    const res = await app.fetch(new Request('http://names.admin.divine.video/admin/username/creatorone/tags/vip', {
       method: 'DELETE',
       headers: { 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
     }), { DB: db }, { waitUntil: () => {} })
@@ -278,7 +278,7 @@ describe('tags', () => {
   it('GET /admin/tags returns all tags with counts', async () => {
     const db = createMockDB()
     // Add tags to two names
-    await app.fetch(new Request('http://names.admin.divine.video/admin/username/kingbach/tags', {
+    await app.fetch(new Request('http://names.admin.divine.video/admin/username/creatorone/tags', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
       body: JSON.stringify({ tag: 'vip' }),
@@ -382,13 +382,13 @@ git commit -m "feat: add tag admin API endpoints"
 it('GET /admin/username/:name includes tags', async () => {
   const db = createMockDB()
   // Add a tag first
-  await app.fetch(new Request('http://names.admin.divine.video/admin/username/kingbach/tags', {
+  await app.fetch(new Request('http://names.admin.divine.video/admin/username/creatorone/tags', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
     body: JSON.stringify({ tag: 'vip' }),
   }), { DB: db }, { waitUntil: () => {} })
 
-  const res = await app.fetch(new Request('http://names.admin.divine.video/admin/username/kingbach', {
+  const res = await app.fetch(new Request('http://names.admin.divine.video/admin/username/creatorone', {
     method: 'GET',
     headers: { 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
   }), { DB: db }, { waitUntil: () => {} })
@@ -574,12 +574,12 @@ Run: `npx wrangler deploy`
 
 ```bash
 # Add a tag
-curl -X POST https://names.admin.divine.video/api/admin/username/kingbach/tags \
+curl -X POST https://names.admin.divine.video/api/admin/username/creatorone/tags \
   -H "Content-Type: application/json" \
   -d '{"tag": "vip"}'
 
 # Check it
-curl https://names.admin.divine.video/api/admin/username/kingbach
+curl https://names.admin.divine.video/api/admin/username/creatorone
 
 # List all tags
 curl https://names.admin.divine.video/api/admin/tags

@@ -1189,7 +1189,7 @@ describe('countActiveUsernames', () => {
 describe('username tags', () => {
   it('adds a tag to a username', async () => {
     const db = createFakeD1([
-      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+      { name: 'creatorone', username_canonical: 'creatorone', status: 'reserved', id: 1 },
     ])
     await addTag(db, 1, 'vip', 'matthew@divine.video')
     const tags = await getTagsForUsername(db, 1)
@@ -1198,7 +1198,7 @@ describe('username tags', () => {
 
   it('normalizes tags to lowercase', async () => {
     const db = createFakeD1([
-      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+      { name: 'creatorone', username_canonical: 'creatorone', status: 'reserved', id: 1 },
     ])
     await addTag(db, 1, '  VIP  ', 'matthew@divine.video')
     const tags = await getTagsForUsername(db, 1)
@@ -1207,7 +1207,7 @@ describe('username tags', () => {
 
   it('prevents duplicate tags', async () => {
     const db = createFakeD1([
-      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+      { name: 'creatorone', username_canonical: 'creatorone', status: 'reserved', id: 1 },
     ])
     await addTag(db, 1, 'vip', 'matthew@divine.video')
     await addTag(db, 1, 'vip', 'matthew@divine.video')
@@ -1217,7 +1217,7 @@ describe('username tags', () => {
 
   it('supports multiple tags per username', async () => {
     const db = createFakeD1([
-      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+      { name: 'creatorone', username_canonical: 'creatorone', status: 'reserved', id: 1 },
     ])
     await addTag(db, 1, 'vip', 'matthew@divine.video')
     await addTag(db, 1, 'vine-legacy', 'matthew@divine.video')
@@ -1228,7 +1228,7 @@ describe('username tags', () => {
 
   it('removes a tag', async () => {
     const db = createFakeD1([
-      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+      { name: 'creatorone', username_canonical: 'creatorone', status: 'reserved', id: 1 },
     ])
     await addTag(db, 1, 'vip', 'matthew@divine.video')
     await removeTag(db, 1, 'vip')
@@ -1238,7 +1238,7 @@ describe('username tags', () => {
 
   it('returns all distinct tags with counts', async () => {
     const db = createFakeD1([
-      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+      { name: 'creatorone', username_canonical: 'creatorone', status: 'reserved', id: 1 },
       { name: 'creatortwo', username_canonical: 'creatortwo', status: 'reserved', id: 2 },
     ])
     await addTag(db, 1, 'vip', 'matthew@divine.video')
@@ -1251,7 +1251,7 @@ describe('username tags', () => {
 
   it('rejects empty tags', async () => {
     const db = createFakeD1([
-      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+      { name: 'creatorone', username_canonical: 'creatorone', status: 'reserved', id: 1 },
     ])
     await expect(addTag(db, 1, '', 'matthew@divine.video')).rejects.toThrow()
     await expect(addTag(db, 1, '   ', 'matthew@divine.video')).rejects.toThrow()
@@ -1259,7 +1259,7 @@ describe('username tags', () => {
 
   it('returns tag details with created_by and created_at', async () => {
     const db = createFakeD1([
-      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+      { name: 'creatorone', username_canonical: 'creatorone', status: 'reserved', id: 1 },
     ])
     await addTag(db, 1, 'vip', 'matthew@divine.video')
     await addTag(db, 1, 'vine-legacy', 'liz@divine.video')
@@ -1276,7 +1276,7 @@ describe('username tags', () => {
 
   it('batch loads tags for multiple usernames', async () => {
     const db = createFakeD1([
-      { name: 'kingbach', username_canonical: 'kingbach', status: 'reserved', id: 1 },
+      { name: 'creatorone', username_canonical: 'creatorone', status: 'reserved', id: 1 },
       { name: 'creatortwo', username_canonical: 'creatortwo', status: 'reserved', id: 2 },
       { name: 'notaguser', username_canonical: 'notaguser', status: 'active', id: 3 },
     ])
