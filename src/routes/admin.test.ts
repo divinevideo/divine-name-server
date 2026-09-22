@@ -873,13 +873,13 @@ describe('Admin Tag Endpoints', () => {
   function createTagMockDB() {
     return createFakeD1([
       {
-        id: 1, name: 'kingbach', username_display: 'KingBach', username_canonical: 'kingbach',
+        id: 1, name: 'creatorone', username_display: 'CreatorOne', username_canonical: 'creatorone',
         pubkey: null, email: null, relays: null, status: 'reserved',
         recyclable: 1, created_at: 1700000000, updated_at: 1700000000,
         reserved_reason: 'Brand protection', admin_notes: null,
       },
       {
-        id: 2, name: 'lelepons', username_display: 'LelePons', username_canonical: 'lelepons',
+        id: 2, name: 'creatortwo', username_display: 'CreatorTwo', username_canonical: 'creatortwo',
         pubkey: null, email: null, relays: null, status: 'reserved',
         recyclable: 1, created_at: 1700000100, updated_at: 1700000100,
         reserved_reason: 'Brand protection', admin_notes: null,
@@ -891,7 +891,7 @@ describe('Admin Tag Endpoints', () => {
     const app = createTestApp()
     const db = createTagMockDB()
 
-    const req = new Request('http://localhost/admin/username/kingbach/tags', {
+    const req = new Request('http://localhost/admin/username/creatorone/tags', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
       body: JSON.stringify({ tag: 'vip' }),
@@ -908,14 +908,14 @@ describe('Admin Tag Endpoints', () => {
     const db = createTagMockDB()
 
     // Add a tag first
-    await app.fetch(new Request('http://localhost/admin/username/kingbach/tags', {
+    await app.fetch(new Request('http://localhost/admin/username/creatorone/tags', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
       body: JSON.stringify({ tag: 'vip' }),
     }), { DB: db, BYPASS_LOCAL_AUTH: 'true' }, createExecutionContext())
 
     // Then remove it
-    const res = await app.fetch(new Request('http://localhost/admin/username/kingbach/tags/vip', {
+    const res = await app.fetch(new Request('http://localhost/admin/username/creatorone/tags/vip', {
       method: 'DELETE',
       headers: { 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
     }), { DB: db, BYPASS_LOCAL_AUTH: 'true' }, createExecutionContext())
@@ -930,13 +930,13 @@ describe('Admin Tag Endpoints', () => {
     const db = createTagMockDB()
 
     // Add tags
-    await app.fetch(new Request('http://localhost/admin/username/kingbach/tags', {
+    await app.fetch(new Request('http://localhost/admin/username/creatorone/tags', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
       body: JSON.stringify({ tag: 'vip' }),
     }), { DB: db, BYPASS_LOCAL_AUTH: 'true' }, createExecutionContext())
 
-    await app.fetch(new Request('http://localhost/admin/username/lelepons/tags', {
+    await app.fetch(new Request('http://localhost/admin/username/creatortwo/tags', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
       body: JSON.stringify({ tag: 'vip' }),
@@ -966,7 +966,7 @@ describe('Admin Tag Endpoints', () => {
     const app = createTestApp()
     const db = createTagMockDB()
 
-    const res = await app.fetch(new Request('http://localhost/admin/username/kingbach/tags', {
+    const res = await app.fetch(new Request('http://localhost/admin/username/creatorone/tags', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
       body: JSON.stringify({}),
@@ -981,7 +981,7 @@ describe('Admin Tag Endpoints', () => {
     const app = createTestApp()
     const db = createTagMockDB()
 
-    const res = await app.fetch(new Request('http://localhost/admin/username/kingbach/tags', {
+    const res = await app.fetch(new Request('http://localhost/admin/username/creatorone/tags', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Cf-Access-Authenticated-User-Email': 'matthew@divine.video' },
       body: JSON.stringify({ tag: 'a'.repeat(51) }),
