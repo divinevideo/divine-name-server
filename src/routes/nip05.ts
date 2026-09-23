@@ -4,7 +4,7 @@
 import { Hono } from 'hono'
 import { getUsernameByName } from '../db/queries'
 import { getSubdomain } from '../utils/subdomain'
-import { validateUsername } from '../utils/validation'
+import { canonicalizeUsernameOrNull } from '../utils/validation'
 
 type Bindings = {
   DB: D1Database
@@ -20,11 +20,8 @@ nip05.get('/.well-known/nostr.json', async (c) => {
     if (subdomain) {
       // Subdomain NIP-05: return single user with "_" name
       // Convert subdomain to canonical form (handles Unicode → punycode)
-      let canonicalSubdomain: string
-      try {
-        const validated = validateUsername(subdomain)
-        canonicalSubdomain = validated.canonical
-      } catch {
+      const canonicalSubdomain = canonicalizeUsernameOrNull(subdomain)
+      if (!canonicalSubdomain) {
         return c.notFound()
       }
       const username = await getUsernameByName(c.env.DB, canonicalSubdomain)
@@ -67,11 +64,8 @@ nip05.get('/.well-known/nostr.json', async (c) => {
       }
 
       // Convert name to canonical form (handles Unicode → punycode)
-      let canonicalName: string
-      try {
-        const validated = validateUsername(name)
-        canonicalName = validated.canonical
-      } catch {
+      const canonicalName = canonicalizeUsernameOrNull(name)
+      if (!canonicalName) {
         // Invalid username format - return empty result
         return c.json({ names: {} }, 200, {
           'Cache-Control': 'public, max-age=60',
@@ -81,7 +75,7 @@ nip05.get('/.well-known/nostr.json', async (c) => {
       let username = await getUsernameByName(c.env.DB, canonicalName)
 
       // Defensive fallback: if name has dots, try stripping them
-      // Handles legacy kind 0 events with dotted NIP-05 (e.g. lele.pons -> lelepons)
+      // Handles legacy kind 0 events with dotted NIP-05 (e.g. first.last -> firstlast)
       if ((!username || username.status !== 'active' || !username.pubkey) && canonicalName.includes('.')) {
         const dotless = canonicalName.replace(/\./g, '')
         username = await getUsernameByName(c.env.DB, dotless)

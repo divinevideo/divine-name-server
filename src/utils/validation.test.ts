@@ -2,7 +2,7 @@
 // ABOUTME: Ensures usernames meet format requirements and pubkeys accept hex/npub
 
 import { describe, it, expect } from 'vitest'
-import { validateUsername, UsernameValidationError, validateRelays, RelayValidationError, validateAndNormalizePubkey, PubkeyValidationError } from './validation'
+import { validateUsername, canonicalizeUsernameOrNull, UsernameValidationError, validateRelays, RelayValidationError, validateAndNormalizePubkey, PubkeyValidationError } from './validation'
 import { getSubdomain } from './subdomain'
 
 describe('validateUsername', () => {
@@ -26,9 +26,9 @@ describe('validateUsername', () => {
     })
 
     it('should accept mixed case usernames', () => {
-      const result = validateUsername('MrBeast')
-      expect(result.display).toBe('MrBeast')
-      expect(result.canonical).toBe('mrbeast')
+      const result = validateUsername('CreatorExample')
+      expect(result.display).toBe('CreatorExample')
+      expect(result.canonical).toBe('creatorexample')
     })
 
     it('should accept usernames with numbers', () => {
@@ -119,9 +119,9 @@ describe('validateUsername', () => {
 
   describe('canonicalization', () => {
     it('should preserve case in display but lowercase canonical', () => {
-      const result = validateUsername('MrBeast')
-      expect(result.display).toBe('MrBeast')
-      expect(result.canonical).toBe('mrbeast')
+      const result = validateUsername('CreatorExample')
+      expect(result.display).toBe('CreatorExample')
+      expect(result.canonical).toBe('creatorexample')
     })
 
     it('should handle all uppercase', () => {
@@ -249,6 +249,22 @@ describe('validateUsername', () => {
       expect(result.display).toBe('abcd--ef')
       expect(result.canonical).toBe('abcd--ef')
     })
+  })
+})
+
+describe('canonicalizeUsernameOrNull', () => {
+  it('returns the canonical form of a name the current rules accept', () => {
+    expect(canonicalizeUsernameOrNull('Alice')).toBe('alice')
+    expect(canonicalizeUsernameOrNull('café')).toBe('xn--caf-dma')
+  })
+
+  // Lookup routes pass it names that predate the current rules, so it has to
+  // answer null exactly where validateUsername throws, and never throw itself.
+  it('returns null wherever validateUsername throws', () => {
+    for (const name of ['cool_dude', 'first.last', '', '   ', '-alice', 'ab--cd', 'a'.repeat(64)]) {
+      expect(() => validateUsername(name)).toThrow(UsernameValidationError)
+      expect(canonicalizeUsernameOrNull(name)).toBeNull()
+    }
   })
 })
 

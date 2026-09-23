@@ -21,7 +21,7 @@ describe('USERNAME_INPUT_PATTERN', () => {
   it('behaves identically under both flags', () => {
     const u = compile('u')
     const v = compile('v')
-    for (const s of ['alice', 'a-b', 'MrBeast', 'three-part-name', '-lead', 'trail-', 'a']) {
+    for (const s of ['alice', 'a-b', 'CreatorExample', 'three-part-name', '-lead', 'trail-', 'a']) {
       expect(u.test(s), `${s} under u`).toBe(v.test(s))
     }
   })
@@ -30,7 +30,7 @@ describe('USERNAME_INPUT_PATTERN', () => {
     it.each([
       'alice',
       'a-b',              // hyphen: the #89/#92 case
-      'MrBeast',          // uppercase: Revoke rejected these before #95
+      'CreatorExample',   // uppercase: Revoke rejected these before #95
       'three-part-name',  // multi-segment hyphens
       'a',                // single char (min length)
       'a'.repeat(63),     // max length

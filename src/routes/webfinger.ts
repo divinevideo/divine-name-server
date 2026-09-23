@@ -3,6 +3,7 @@
 
 import { Hono } from 'hono'
 import { getUsernameByName, countActiveUsernames } from '../db/queries'
+import { canonicalizeUsernameOrNull } from '../utils/validation'
 
 type Bindings = {
   DB: D1Database
@@ -40,7 +41,14 @@ webfinger.get('/.well-known/webfinger', async (c) => {
       return c.notFound()
     }
 
-    const username = await getUsernameByName(c.env.DB, user)
+    // Current names are stored in canonical (punycode for Unicode) form, but
+    // imported legacy rows can contain characters today's claim rules reject.
+    // Try canonical first, then preserve the route's previous raw lookup.
+    const canonicalUser = canonicalizeUsernameOrNull(user)
+    let username = canonicalUser ? await getUsernameByName(c.env.DB, canonicalUser) : null
+    if (!username && canonicalUser !== user) {
+      username = await getUsernameByName(c.env.DB, user)
+    }
 
     if (!username || username.status !== 'active') {
       return c.notFound()
