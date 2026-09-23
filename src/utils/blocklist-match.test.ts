@@ -33,6 +33,18 @@ describe('scope', () => {
     expect(matchesTerm('badminton', 'admin', r)).toBe(true)
   })
 
+  it('treats a separator stored in the term like any other separator', () => {
+    // A hyphenated term matches itself and its joined spelling at every scope.
+    for (const scope of ['whole', 'token', 'anywhere'] as const) {
+      const r = rules({ scope })
+      expect(matchesTerm('big-bad-word', 'big-bad-word', r), scope).toBe(true)
+      expect(matchesTerm('bigbadword', 'big-bad-word', r), scope).toBe(true)
+      expect(matchesTerm('big.bad_word', 'big-bad-word', r), scope).toBe(true)
+    }
+    expect(matchesTerm('xx-big-bad-word', 'big-bad-word', rules({ scope: 'token' }))).toBe(true)
+    expect(matchesTerm('xxbigbadword', 'big-bad-word', rules({ scope: 'token' }))).toBe(false)
+  })
+
   it('token does not fire on a name that merely contains the letters', () => {
     // `badminton` is one part, so no run of parts equals `admin`.
     expect(matchesTerm('badminton', 'admin', rules({ scope: 'token' }))).toBe(false)

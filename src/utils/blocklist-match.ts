@@ -99,7 +99,12 @@ function positionClass(char: string, rules: TermRules): string {
  * maximum-length name), but callers that check many names should cache by term.
  */
 export function compileTerm(term: string, rules: TermRules = DEFAULT_RULES): RegExp {
-  const body = [...term].map((char) => positionClass(char, rules)).join(SEPARATORS)
+  // A separator stored in the term is already allowed between every pair of
+  // characters. Kept as a literal it would be required, so a hyphenated term
+  // would never match its joined spelling, and could never match at `token`
+  // scope, where the parts are compared with their separators removed.
+  const chars = [...term].filter((char) => !/[-_.]/.test(char))
+  const body = chars.map((char) => positionClass(char, rules)).join(SEPARATORS)
   return new RegExp(body)
 }
 

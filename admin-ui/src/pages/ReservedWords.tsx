@@ -151,7 +151,15 @@ export default function ReservedWords() {
                   type="text"
                   id="newWord"
                   value={newWord}
-                  onChange={(e) => setNewWord(e.target.value.trim().toLowerCase())}
+                  onChange={(e) => {
+                    const typed = e.target.value.trim().toLowerCase()
+                    setNewWord(typed)
+                    // Adding a word that is already listed updates it. Start from
+                    // its current scope so changing a reason does not quietly
+                    // narrow what the word blocks.
+                    const existing = words.find((w) => w.word === typed)
+                    if (existing) setNewScope(existing.match_scope ?? 'whole')
+                  }}
                   required
                   pattern={USERNAME_INPUT_PATTERN}
                   title={USERNAME_INPUT_TITLE}
