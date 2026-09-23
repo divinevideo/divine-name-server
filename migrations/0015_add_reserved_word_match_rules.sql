@@ -21,6 +21,37 @@ ALTER TABLE reserved_words ADD COLUMN match_leet INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE reserved_words ADD COLUMN match_digit_expand INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE reserved_words ADD COLUMN match_repeats INTEGER NOT NULL DEFAULT 0;
 
+-- Every word tuned below already exists in production, but no migration ever
+-- created it: the original list was loaded outside this repo. Without these
+-- rows the UPDATEs that follow match nothing on any database built from the
+-- repo, and the per-word tuning silently does not happen there. OR IGNORE
+-- leaves the production rows, and the category and reason a moderator gave
+-- them, exactly as they are.
+INSERT OR IGNORE INTO reserved_words (word, category, reason, created_at) VALUES
+('2girls1cup', 'offensive', 'Offensive term', unixepoch()),
+('anal', 'offensive', 'Offensive term', unixepoch()),
+('analrape', 'offensive', 'Offensive term', unixepoch()),
+('boobs', 'offensive', 'Offensive term', unixepoch()),
+('cock', 'offensive', 'Offensive term', unixepoch()),
+('elchapo', 'offensive', 'Offensive term', unixepoch()),
+('h1tler', 'offensive', 'Offensive term', unixepoch()),
+('h1tlerfan', 'offensive', 'Offensive term', unixepoch()),
+('kkk', 'offensive', 'Offensive term', unixepoch()),
+('n1gg4', 'offensive', 'Offensive term', unixepoch()),
+('nazi', 'offensive', 'Offensive term', unixepoch()),
+('niger', 'offensive', 'Offensive term', unixepoch()),
+('nigger', 'offensive', 'Offensive term', unixepoch()),
+('nudes', 'offensive', 'Offensive term', unixepoch()),
+('pussy', 'offensive', 'Offensive term', unixepoch()),
+('pussypound', 'offensive', 'Offensive term', unixepoch()),
+('puta', 'offensive', 'Offensive term', unixepoch()),
+('puto', 'offensive', 'Offensive term', unixepoch()),
+('rape', 'offensive', 'Offensive term', unixepoch()),
+('realh1tlerfan', 'offensive', 'Offensive term', unixepoch()),
+('tities', 'offensive', 'Offensive term', unixepoch()),
+('tits', 'offensive', 'Offensive term', unixepoch()),
+('whore', 'offensive', 'Offensive term', unixepoch());
+
 -- Words that may match anywhere inside a name.
 --
 -- Each was measured individually against the registry. Every one catches more
@@ -39,8 +70,8 @@ UPDATE reserved_words SET match_scope = 'anywhere' WHERE word IN (
 -- (Arabic and Spanish given names, plus canal, analysis, analogue) to catch 8
 -- more violations, and `rape` lands on 66 (grapefruit, draper, rapper) to catch 2.
 --
--- `kkk` is the one marginal entry: one violation caught against one collision,
--- a punycode name that decodes to the Korean spelling of laughter. Included
+-- `kkk` is the one marginal entry: one violation caught against one collision
+-- with an unrelated name. Included
 -- because the catch is a hate-group reference; drop it to 'whole' if that trade
 -- is the wrong one.
 UPDATE reserved_words SET match_scope = 'token' WHERE word IN (
