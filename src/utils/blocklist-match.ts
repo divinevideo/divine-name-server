@@ -108,6 +108,10 @@ export function compileTerm(term: string, rules: TermRules = DEFAULT_RULES): Reg
   return new RegExp(body)
 }
 
+function isPunycode(value: string): boolean {
+  return value.startsWith('xn--')
+}
+
 /** Every run of consecutive separator-delimited parts, longest first. */
 function tokenRuns(name: string): string[] {
   const parts = name.split(/[-_.]/)
@@ -132,6 +136,13 @@ export function matchesTerm(
   rules: TermRules = DEFAULT_RULES,
   compiled?: RegExp
 ): boolean {
+  // Punycode is an encoding, not spelling. Its hyphens are structure rather
+  // than separators, and its trailing characters encode code points rather than
+  // letters, so splitting it into parts, reading digits as letters, or looking
+  // inside it matches unrelated names. Either side in punycode compares exactly,
+  // as every term did before these rules existed. Unicode look-alikes are #48.
+  if (isPunycode(canonicalName) || isPunycode(term)) return canonicalName === term
+
   const pattern = compiled ?? compileTerm(term, rules)
 
   switch (rules.scope) {

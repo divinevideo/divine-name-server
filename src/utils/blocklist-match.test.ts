@@ -51,6 +51,27 @@ describe('scope', () => {
   })
 })
 
+describe('punycode', () => {
+  it('matches a punycode name only when the whole name is the term', () => {
+    // `xn--caf-dma` is café. Its hyphens and tail are encoding, not words.
+    for (const scope of ['whole', 'token', 'anywhere'] as const) {
+      const r = rules({ scope })
+      expect(matchesTerm('xn--caf-dma', 'dma', r), scope).toBe(false)
+      expect(matchesTerm('xn--caf-dma', 'caf', r), scope).toBe(false)
+    }
+  })
+
+  it('compares a punycode term exactly, without substitution or separators', () => {
+    for (const scope of ['whole', 'token', 'anywhere'] as const) {
+      const r = rules({ scope, repeats: true, digitExpand: true })
+      expect(matchesTerm('xn--vusz0j', 'xn--vusz0j', r), scope).toBe(true)
+      expect(matchesTerm('xn--vu5z0j', 'xn--vusz0j', r), scope).toBe(false)
+      expect(matchesTerm('xnvusz0j', 'xn--vusz0j', r), scope).toBe(false)
+      expect(matchesTerm('xx-xn--vusz0j', 'xn--vusz0j', r), scope).toBe(false)
+    }
+  })
+})
+
 describe('digit substitution', () => {
   it('lets a digit stand for the letter it imitates', () => {
     expect(matchesTerm('f0ck', 'fock', rules({ scope: 'whole' }))).toBe(true)
