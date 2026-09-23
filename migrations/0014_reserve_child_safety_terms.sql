@@ -37,6 +37,7 @@ INSERT OR IGNORE INTO reserved_words (word, category, reason, created_at) VALUES
 -- English, coded forms
 ('lolicon', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('shotacon', 'child_safety', 'Child sexual abuse material', unixepoch()),
+('shotakon', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('childlove', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('childlover', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('boylover', 'child_safety', 'Child sexual abuse material', unixepoch()),
@@ -87,6 +88,7 @@ INSERT OR IGNORE INTO reserved_words (word, category, reason, created_at) VALUES
 ('xn--pdophilie-v2a', 'child_safety', 'Child sexual abuse material', unixepoch()),  -- pädophilie
 ('kinderporno', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('kinderpornografie', 'child_safety', 'Child sexual abuse material', unixepoch()),
+('kinderpornographie', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('kindersex', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('kindficker', 'child_safety', 'Child sexual abuse material', unixepoch()),
 ('kinderficker', 'child_safety', 'Child sexual abuse material', unixepoch()),
