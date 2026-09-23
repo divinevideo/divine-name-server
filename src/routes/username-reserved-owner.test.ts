@@ -30,7 +30,7 @@ function app() {
 function withBlockedName(options: { heldBy?: string; status?: string } = {}) {
   const { db, sqlite } = createSqliteD1()
   sqlite.prepare(
-    `INSERT INTO reserved_words (word, category, reason, created_at) VALUES (?, 'child_safety', 'test', 100)`
+    `INSERT OR IGNORE INTO reserved_words (word, category, reason, created_at) VALUES (?, 'child_safety', 'test', 100)`
   ).run(BLOCKED)
   if (options.heldBy) {
     seedUsername(sqlite, { name: BLOCKED, pubkey: options.heldBy, status: options.status ?? 'active' })
