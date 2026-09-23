@@ -399,8 +399,8 @@ admin.post('/reserved-words', async (c) => {
     // claim's canonical form, which is punycode for Unicode names. A Unicode
     // term stored in its display form would never match the name it blocks.
     const storedReason = reason || null
-    const storedScope: MatchScope = isMatchScope(matchScope) ? matchScope : 'whole'
-    await addReservedWord(c.env.DB, wordData.canonical, category, storedReason, storedScope)
+    const requestedScope: MatchScope | null = isMatchScope(matchScope) ? matchScope : null
+    const storedScope = await addReservedWord(c.env.DB, wordData.canonical, category, storedReason, requestedScope)
 
     // Echo what was stored, not what was sent. The word is already reported as
     // its canonical form, so reporting the reason raw would be the one field a

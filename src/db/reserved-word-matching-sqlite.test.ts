@@ -3,7 +3,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { sqliteAvailable, createSqlite, applyMigrations, asD1, type SqliteDb } from './sqlite-test-helpers'
-import { isReservedWord, reservedWordsMatching } from './queries'
+import { addReservedWord, isReservedWord, reservedWordsMatching } from './queries'
 
 const describeSqlite = sqliteAvailable() ? describe : describe.skip
 
@@ -101,6 +101,17 @@ describeSqlite('isReservedWord with per-term rules', () => {
     expect(await reservedWordsMatching(db, 'unrelated')).toEqual([])
   })
 
+  it('keeps the stored scope when a word is re-added without one', async () => {
+    reserve('admin', { match_scope: 'token' })
+    expect(await addReservedWord(db, 'admin', 'system', 'new reason')).toBe('token')
+    expect(await isReservedWord(db, 'my-admin')).toBe(true)
+
+    expect(await addReservedWord(db, 'admin', 'system', null, 'whole')).toBe('whole')
+    expect(await isReservedWord(db, 'my-admin')).toBe(false)
+
+    expect(await addReservedWord(db, 'fresh', 'system', null)).toBe('whole')
+  })
+
   it('picks up a moderator edit without a restart', async () => {
     reserve('admin')
     expect(await isReservedWord(db, 'myadmin')).toBe(false)
@@ -123,6 +134,22 @@ describeSqlite('migration 0015', () => {
       "SELECT COUNT(*) AS n FROM reserved_words WHERE match_scope NOT IN ('whole','token','anywhere')"
     ).get() as { n: number }
     expect(row.n).toBe(0)
+  })
+
+  it('applies its per-word tuning on a database built from the repo', async () => {
+    // The tuned words were first loaded outside the repo. If the migration only
+    // updated them, a fresh database would have no rows and no tuning.
+    const rows = sqlite.prepare(
+      "SELECT word, match_scope, match_digit_expand FROM reserved_words WHERE word IN ('pussy','nazi','h1tler')"
+    ).all() as Array<{ word: string; match_scope: string; match_digit_expand: number }>
+    const byWord = Object.fromEntries(rows.map((row) => [row.word, row]))
+    expect(byWord.pussy?.match_scope).toBe('anywhere')
+    expect(byWord.nazi?.match_scope).toBe('token')
+    expect(byWord.h1tler?.match_digit_expand).toBe(1)
+
+    const db = asD1(sqlite)
+    expect(await isReservedWord(db, 'xx-nazi-xx')).toBe(true)
+    expect(await isReservedWord(db, 'hitler')).toBe(true)
   })
 
   it('does not loosen a word that only ever collides', async () => {

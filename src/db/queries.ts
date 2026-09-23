@@ -1101,18 +1101,24 @@ export async function addReservedWord(
   word: string,
   category: string,
   reason: string | null,
-  matchScope: TermRules['scope'] = 'whole'
-): Promise<void> {
+  matchScope: TermRules['scope'] | null = null
+): Promise<TermRules['scope']> {
   const now = Math.floor(Date.now() / 1000)
 
-  await db.prepare(
+  // A null scope means the caller did not choose one. A new word then starts at
+  // 'whole', and an existing word keeps the scope it has, so re-adding a word to
+  // change its category or reason does not quietly narrow what it blocks.
+  const row = await db.prepare(
     `INSERT INTO reserved_words (word, category, reason, created_at, match_scope)
-     VALUES (?, ?, ?, ?, ?)
+     VALUES (?1, ?2, ?3, ?4, COALESCE(?5, 'whole'))
      ON CONFLICT(word) DO UPDATE SET
        category = excluded.category,
        reason = excluded.reason,
-       match_scope = excluded.match_scope`
-  ).bind(word.toLowerCase(), category, reason, now, matchScope).run()
+       match_scope = COALESCE(?5, reserved_words.match_scope)
+     RETURNING match_scope`
+  ).bind(word.toLowerCase(), category, reason, now, matchScope).first<{ match_scope: TermRules['scope'] }>()
+
+  return row?.match_scope ?? matchScope ?? 'whole'
 }
 
 /**
