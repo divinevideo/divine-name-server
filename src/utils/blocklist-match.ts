@@ -2,17 +2,14 @@
 // ABOUTME: term's own scope and character-substitution settings.
 
 /**
- * Where in a name a term is allowed to match.
+ * Where in a name a term is allowed to match deterministically.
  *
- * Which one a term gets is a property of the term, not of how severe it is. That
- * is not a style preference, it is what the registry says: `nazi` at `anywhere`
- * catches 28 violations against 11 collisions, while `klan` and `aryan` in the
- * same severity tier catch nothing at all and collide only with ordinary
- * surnames ending in -kland and given names built on Ryan and Ann. A single
- * global setting, or one derived from a severity tier, gets one of those two
- * groups wrong.
+ * `anywhere` is not a scope. A blocked word glued inside a longer word is not
+ * a pattern the matcher can settle, so that case is `ambiguous` and goes to
+ * judgment. A moderator-approved novel word sets `plain` instead, which is a
+ * substring block that never needs another call.
  */
-export type MatchScope = 'whole' | 'token' | 'anywhere'
+export type MatchScope = 'whole' | 'token'
 
 export interface TermRules {
   /** Default 'whole': the safe end. A new term blocks only the name that is that term. */
@@ -37,6 +34,12 @@ export interface TermRules {
   digitExpand: boolean
   /** Tolerate a run of one character, so `bitch` matches `biiitch`. Off by default: `aryan` with repeats matches ordinary hyphenated names containing "arry-and". */
   repeats: boolean
+  /**
+   * Substring block. Only set when a moderator approves a proposed word after
+   * seeing how many existing names it would catch. Not a scope a moderator
+   * picks from the add form.
+   */
+  plain: boolean
 }
 
 export const DEFAULT_RULES: TermRules = {
@@ -44,7 +47,11 @@ export const DEFAULT_RULES: TermRules = {
   leet: true,
   digitExpand: false,
   repeats: false,
+  plain: false,
 }
+
+/** Categories whose embeddings are a judgment, not a miss and not a block. */
+export const JUDGED_CATEGORIES = new Set(['offensive', 'child_safety'])
 
 /** Characters the namespace allows between parts of a name. */
 const SEPARATORS = '[-_.]*'
@@ -112,12 +119,27 @@ function isPunycode(value: string): boolean {
   return value.startsWith('xn--')
 }
 
-/** Every run of consecutive separator-delimited parts, longest first. */
-function tokenRuns(name: string): string[] {
-  const parts = name.split(/[-_.]/)
+/**
+ * Every run of consecutive separator-delimited parts, longest first.
+ *
+ * A run made only of single-letter parts contributes its maximal join and not
+ * the interior sub-runs. Otherwise a letter-spelled name (`q-w-e-r-t-y`) makes
+ * every short blocked word inside those letters a deterministic token hit.
+ * The whole run still matches, so `f-u-c-k` remains the word `fuck`.
+ */
+export function tokenRuns(name: string): string[] {
+  const parts = name.split(/[-_.]/).filter((part) => part.length > 0)
   const runs: string[] = []
   for (let i = 0; i < parts.length; i++) {
-    for (let j = i + 1; j <= parts.length; j++) runs.push(parts.slice(i, j).join(''))
+    for (let j = i + 1; j <= parts.length; j++) {
+      const slice = parts.slice(i, j)
+      if (slice.length > 1 && slice.every((part) => part.length === 1)) {
+        const maximal = (i === 0 || parts[i - 1].length !== 1)
+          && (j === parts.length || parts[j].length !== 1)
+        if (!maximal) continue
+      }
+      runs.push(slice.join(''))
+    }
   }
   return runs
 }
@@ -144,6 +166,7 @@ export function matchesTerm(
   if (isPunycode(canonicalName) || isPunycode(term)) return canonicalName === term
 
   const pattern = compiled ?? compileTerm(term, rules)
+  if (rules.plain && pattern.test(canonicalName)) return true
 
   switch (rules.scope) {
     case 'whole':
@@ -152,7 +175,52 @@ export function matchesTerm(
       const anchored = new RegExp(`^(?:${pattern.source})$`)
       return tokenRuns(canonicalName).some((run) => anchored.test(run))
     }
-    case 'anywhere':
-      return pattern.test(canonicalName)
   }
+}
+
+export type TermSignal = 'blocked' | 'ambiguous' | 'clear'
+
+/**
+ * `blocked` when the term matches at its scope (or as a plain substring).
+ * `ambiguous` when a judged term's letters sit inside a longer name but do not
+ * match at that scope. `clear` otherwise. Punycode is never ambiguous.
+ */
+export function termSignal(
+  canonicalName: string,
+  term: string,
+  rules: TermRules = DEFAULT_RULES,
+  judgeEmbeddings = false,
+  compiled?: RegExp
+): TermSignal {
+  if (matchesTerm(canonicalName, term, rules, compiled)) return 'blocked'
+  if (!judgeEmbeddings || isPunycode(canonicalName) || isPunycode(term)) return 'clear'
+  const pattern = compiled ?? compileTerm(term, rules)
+  return pattern.test(canonicalName) ? 'ambiguous' : 'clear'
+}
+
+export interface ListedTerm {
+  word: string
+  rules: TermRules
+  judgeEmbeddings: boolean
+}
+
+export interface NameClassification {
+  verdict: TermSignal
+  blocked: string[]
+  embedded: string[]
+}
+
+/** Blocked wins. Embedded words are longest-first so the caller asks about the specific one first. */
+export function classifyName(canonicalName: string, terms: ListedTerm[]): NameClassification {
+  const blocked: string[] = []
+  const embedded: string[] = []
+  for (const term of terms) {
+    const signal = termSignal(canonicalName, term.word, term.rules, term.judgeEmbeddings)
+    if (signal === 'blocked') blocked.push(term.word)
+    else if (signal === 'ambiguous') embedded.push(term.word)
+  }
+  embedded.sort((a, b) => b.length - a.length || a.localeCompare(b))
+  if (blocked.length > 0) return { verdict: 'blocked', blocked, embedded }
+  if (embedded.length > 0) return { verdict: 'ambiguous', blocked, embedded }
+  return { verdict: 'clear', blocked, embedded }
 }

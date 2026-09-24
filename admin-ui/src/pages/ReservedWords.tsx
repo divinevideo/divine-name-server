@@ -1,7 +1,7 @@
 // ABOUTME: Admin page displaying all reserved words that cannot be claimed as usernames
 // ABOUTME: Groups words by category with add/delete functionality
 import { useState, useEffect } from 'react'
-import { getReservedWords, addReservedWord, deleteReservedWord } from '../api/client'
+import { getReservedWords, addReservedWord, deleteReservedWord, getBlockProposals, decideBlockProposal, type BlockProposal } from '../api/client'
 import type { ReservedWord, MatchScope } from '../types'
 import {
   USERNAME_INPUT_PATTERN,
@@ -12,19 +12,17 @@ import {
 const SCOPE_LABEL: Record<MatchScope, string> = {
   whole: 'whole name',
   token: 'separate word',
-  anywhere: 'anywhere',
 }
 
-/** `anywhere` is the one that can reject real people, so it reads differently. */
 function scopeBadgeClass(scope: MatchScope | undefined): string {
   const base = 'inline-flex rounded-full px-2 py-0.5 text-xs font-medium '
-  if (scope === 'anywhere') return base + 'bg-amber-100 text-amber-800'
   if (scope === 'token') return base + 'bg-blue-100 text-blue-800'
   return base + 'bg-gray-100 text-gray-700'
 }
 
 export default function ReservedWords() {
   const [words, setWords] = useState<ReservedWord[]>([])
+  const [proposals, setProposals] = useState<BlockProposal[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -50,8 +48,9 @@ export default function ReservedWords() {
 
   const loadWords = async () => {
     try {
-      const data = await getReservedWords()
+      const [data, pending] = await Promise.all([getReservedWords(), getBlockProposals().catch(() => [])])
       setWords(data)
+      setProposals(pending)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load reserved words')
     } finally {
@@ -130,6 +129,47 @@ export default function ReservedWords() {
           {showAddForm ? 'Cancel' : '+ Add Reserved Word'}
         </button>
       </div>
+
+      {proposals.length > 0 && (
+        <div className="bg-white shadow rounded-lg p-6">
+          <h3 className="text-lg font-medium text-gray-900">Proposed words</h3>
+          <p className="mt-1 text-sm text-gray-600">
+            Approving adds the word as a plain match. The count is existing names that contain it, not a judgment.
+          </p>
+          <ul className="mt-4 divide-y divide-gray-200">
+            {proposals.map((proposal) => (
+              <li key={proposal.word} className="py-3 flex items-center justify-between gap-4">
+                <div>
+                  <span className="font-mono text-sm">{proposal.word}</span>
+                  <span className="ml-3 text-sm text-gray-500">{proposal.affected_count} existing names</span>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className="px-3 py-1 text-sm rounded-md bg-blue-600 text-white"
+                    onClick={async () => {
+                      await decideBlockProposal(proposal.word, 'approve')
+                      await loadWords()
+                    }}
+                  >
+                    Approve
+                  </button>
+                  <button
+                    type="button"
+                    className="px-3 py-1 text-sm rounded-md border border-gray-300"
+                    onClick={async () => {
+                      await decideBlockProposal(proposal.word, 'reject')
+                      await loadWords()
+                    }}
+                  >
+                    Reject
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Add Form */}
       {showAddForm && (
@@ -215,17 +255,13 @@ export default function ReservedWords() {
               >
                 <option value="whole">The whole name only</option>
                 <option value="token">As a separate word in the name</option>
-                <option value="anywhere">Anywhere inside the name</option>
               </select>
               <p className="mt-2 text-sm text-gray-500">
                 {newScope === 'whole' && (
                   <>Blocks <code>{newWord || 'word'}</code> and spellings of it like <code>{(newWord || 'word').split('').join('-')}</code>, but not longer names containing it.</>
                 )}
                 {newScope === 'token' && (
-                  <>Also blocks names where <code>{newWord || 'word'}</code> stands on its own, like <code>xx-{newWord || 'word'}-xx</code>. Not names that merely contain the letters.</>
-                )}
-                {newScope === 'anywhere' && (
-                  <>Blocks every name containing these letters, including inside other words. Check first: <code>anal</code> set this way blocks 165 existing accounts, most of them ordinary Arabic and Spanish given names.</>
+                  <>Also blocks names where <code>{newWord || 'word'}</code> stands on its own, like <code>xx-{newWord || 'word'}-xx</code>. A word glued inside a longer name is judged, not blocked by this setting.</>
                 )}
               </p>
             </div>

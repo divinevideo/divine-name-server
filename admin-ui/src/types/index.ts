@@ -81,7 +81,7 @@ export interface RevokeResponse extends ApiResponse {
 }
 
 /** Where in a username a reserved word is allowed to match. */
-export type MatchScope = 'whole' | 'token' | 'anywhere'
+export type MatchScope = 'whole' | 'token'
 
 export interface ReservedWord {
   word: string

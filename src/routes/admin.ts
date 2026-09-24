@@ -7,10 +7,11 @@ import { bech32 } from '@scure/base'
 import { getSession } from '../auth/keycast-oauth'
 import { reserveUsername, revokeUsername, restoreUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getActiveUsernamesPaginated, countActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags, getUsernameStats, updateAdminNotes, releaseHeldNameEarly, getUsernameReleaseHistory, enqueueFastlySyncTask, getQueuedFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, getLatestReleaseAttemptByPubkey, listReleaseAttempts, type ReleaseAttemptState, type SearchSort } from '../db/queries'
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
+import { approveProposal, listPendingProposals, rejectProposal } from '../db/block-verdicts'
 import type { MatchScope } from '../utils/blocklist-match'
 
 function isMatchScope(value: unknown): value is MatchScope {
-  return value === 'whole' || value === 'token' || value === 'anywhere'
+  return value === 'whole' || value === 'token'
 }
 import { verifyAccessJwt, AccessValidationError } from '../auth/cf-access'
 import { syncUsernameToFastly, deleteUsernameFromFastly, syncBatch, parseRelayHints, readUsernameFromFastly, syncAndVerifyUsername, usernameKVDataMatches } from '../utils/fastly-sync'
@@ -373,7 +374,7 @@ admin.post('/reserved-words', async (c) => {
     if (matchScope !== undefined && matchScope !== null && !isMatchScope(matchScope)) {
       return c.json({
         ok: false,
-        error: "Match scope must be one of 'whole', 'token', or 'anywhere'"
+        error: "Match scope must be one of 'whole' or 'token'"
       }, 400)
     }
 
@@ -448,6 +449,42 @@ admin.delete('/reserved-words/:word', async (c) => {
     return c.json({ ok: true, deleted: canonical ?? word.toLowerCase() })
   } catch (error) {
     console.error('Delete reserved word error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.get('/reserved-word-proposals', async (c) => {
+  try {
+    const proposals = await listPendingProposals(c.env.DB)
+    return c.json({ ok: true, proposals })
+  } catch (error) {
+    console.error('List proposals error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.post('/reserved-word-proposals/:word/approve', async (c) => {
+  try {
+    const word = c.req.param('word').toLowerCase()
+    const resolvedBy = (c.get('adminEmail' as never) as string) || null
+    const approved = await approveProposal(c.env.DB, word, resolvedBy, Math.floor(Date.now() / 1000))
+    if (!approved) return c.json({ ok: false, error: 'No pending proposal for that word' }, 404)
+    return c.json({ ok: true, word, status: 'approved' })
+  } catch (error) {
+    console.error('Approve proposal error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.post('/reserved-word-proposals/:word/reject', async (c) => {
+  try {
+    const word = c.req.param('word').toLowerCase()
+    const resolvedBy = (c.get('adminEmail' as never) as string) || null
+    const rejected = await rejectProposal(c.env.DB, word, resolvedBy, Math.floor(Date.now() / 1000))
+    if (!rejected) return c.json({ ok: false, error: 'No pending proposal for that word' }, 404)
+    return c.json({ ok: true, word, status: 'rejected' })
+  } catch (error) {
+    console.error('Reject proposal error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
   }
 })

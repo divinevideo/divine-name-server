@@ -12,14 +12,14 @@ describeSqlite('isReservedWord with per-term rules', () => {
   let db: D1Database
 
   function reserve(word: string, over: Record<string, string | number> = {}) {
-    const cols = { match_scope: 'whole', match_leet: 1, match_digit_expand: 0, match_repeats: 0, ...over }
+    const cols = { match_scope: 'whole', match_leet: 1, match_digit_expand: 0, match_repeats: 0, match_plain: 0, ...over }
     sqlite.prepare(
-      `INSERT INTO reserved_words (word, category, reason, created_at, match_scope, match_leet, match_digit_expand, match_repeats)
-       VALUES (?, 'test', NULL, 0, ?, ?, ?, ?)
+      `INSERT INTO reserved_words (word, category, reason, created_at, match_scope, match_leet, match_digit_expand, match_repeats, match_plain)
+       VALUES (?, 'test', NULL, 0, ?, ?, ?, ?, ?)
        ON CONFLICT(word) DO UPDATE SET match_scope = excluded.match_scope,
          match_leet = excluded.match_leet, match_digit_expand = excluded.match_digit_expand,
-         match_repeats = excluded.match_repeats`
-    ).run(word, cols.match_scope, cols.match_leet, cols.match_digit_expand, cols.match_repeats)
+         match_repeats = excluded.match_repeats, match_plain = excluded.match_plain`
+    ).run(word, cols.match_scope, cols.match_leet, cols.match_digit_expand, cols.match_repeats, cols.match_plain)
   }
 
   beforeEach(() => {
@@ -56,16 +56,17 @@ describeSqlite('isReservedWord with per-term rules', () => {
     expect(await isReservedWord(db, 'badminton')).toBe(false)
   })
 
-  it('honours anywhere scope', async () => {
+  it('does not honour a stored anywhere scope', async () => {
     reserve('admin', { match_scope: 'anywhere' })
-    expect(await isReservedWord(db, 'myadmin')).toBe(true)
+    expect(await isReservedWord(db, 'myadmin')).toBe(false)
+    expect(await isReservedWord(db, 'xx-admin')).toBe(true)
   })
 
   it('reads a leetspelled term back to its plain spelling only when told to', async () => {
-    reserve('h1tler', { match_scope: 'anywhere' })
+    reserve('h1tler', { match_plain: 1 })
     expect(await isReservedWord(db, 'zzz-hitler')).toBe(false)
 
-    reserve('h1tler', { match_scope: 'anywhere', match_digit_expand: 1 })
+    reserve('h1tler', { match_plain: 1, match_digit_expand: 1 })
     expect(await isReservedWord(db, 'zzz-hitler')).toBe(true)
   })
 
@@ -96,7 +97,7 @@ describeSqlite('isReservedWord with per-term rules', () => {
 
   it('reports which words matched, for explaining a rejection', async () => {
     reserve('admin')
-    reserve('min', { match_scope: 'anywhere' })
+    reserve('min', { match_scope: 'token' })
     expect((await reservedWordsMatching(db, 'ad-min')).sort()).toEqual(['admin', 'min'])
     expect(await reservedWordsMatching(db, 'unrelated')).toEqual([])
   })
@@ -115,7 +116,7 @@ describeSqlite('isReservedWord with per-term rules', () => {
   it('picks up a moderator edit without a restart', async () => {
     reserve('admin')
     expect(await isReservedWord(db, 'myadmin')).toBe(false)
-    reserve('admin', { match_scope: 'anywhere' })
+    reserve('admin', { match_plain: 1 })
     expect(await isReservedWord(db, 'myadmin')).toBe(true)
   })
 })
@@ -131,7 +132,7 @@ describeSqlite('migration 0015', () => {
 
   it('defaults every pre-existing word to whole scope', async () => {
     const row = sqlite.prepare(
-      "SELECT COUNT(*) AS n FROM reserved_words WHERE match_scope NOT IN ('whole','token','anywhere')"
+      "SELECT COUNT(*) AS n FROM reserved_words WHERE match_scope NOT IN ('whole','token')"
     ).get() as { n: number }
     expect(row.n).toBe(0)
   })
@@ -143,7 +144,7 @@ describeSqlite('migration 0015', () => {
       "SELECT word, match_scope, match_digit_expand FROM reserved_words WHERE word IN ('pussy','nazi','h1tler')"
     ).all() as Array<{ word: string; match_scope: string; match_digit_expand: number }>
     const byWord = Object.fromEntries(rows.map((row) => [row.word, row]))
-    expect(byWord.pussy?.match_scope).toBe('anywhere')
+    expect(byWord.pussy?.match_scope).toBe('token')
     expect(byWord.nazi?.match_scope).toBe('token')
     expect(byWord.h1tler?.match_digit_expand).toBe(1)
 

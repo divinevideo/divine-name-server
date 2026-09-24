@@ -238,6 +238,33 @@ export async function notifyAssignment(
   return response.json()
 }
 
+export interface BlockProposal {
+  word: string
+  status: string
+  confidence: number
+  created_at: number
+  affected_count: number
+}
+
+export async function getBlockProposals(): Promise<BlockProposal[]> {
+  const response = await fetch(`${API_BASE}/reserved-word-proposals`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch proposals: ${response.statusText}`)
+  }
+  const data = await response.json()
+  return data.proposals || []
+}
+
+export async function decideBlockProposal(word: string, decision: 'approve' | 'reject'): Promise<ApiResponse> {
+  const response = await fetch(`${API_BASE}/reserved-word-proposals/${encodeURIComponent(word)}/${decision}`, {
+    method: 'POST',
+  })
+  if (!response.ok) {
+    return parseErrorResponse<ApiResponse>(response, 'Failed to update proposal')
+  }
+  return response.json()
+}
+
 export async function deleteReservedWord(word: string): Promise<ApiResponse> {
   const response = await fetch(`${API_BASE}/reserved-words/${encodeURIComponent(word)}`, {
     method: 'DELETE'

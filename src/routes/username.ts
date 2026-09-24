@@ -7,7 +7,6 @@ import { cors } from 'hono/cors'
 import { verifyNip98Event } from '../middleware/nip98'
 import { validateUsername, validateRelays, UsernameValidationError, RelayValidationError } from '../utils/validation'
 import {
-  isReservedWord,
   getUsernameByName,
   getUsernameByPubkey,
   claimUsername,
@@ -36,6 +35,7 @@ import {
 } from '../utils/cashu'
 import { getRegistrationPrice } from '../utils/pricing'
 import { reconcileUsernameFastly } from '../utils/username-fastly-reconcile'
+import { resolveUsernameBlock, type BlockEnv } from '../utils/name-block'
 
 type Bindings = {
   DB: D1Database
@@ -45,7 +45,7 @@ type Bindings = {
   ALLOWED_MINTS?: string
   NAME_PRICE_JSON?: string
   INVITE_FAUCET_URL?: string
-}
+} & BlockEnv
 
 const username = new Hono<{ Bindings: Bindings }>()
 
@@ -94,8 +94,8 @@ username.get('/check/:name', async (c) => {
     // me" from "taken by someone else".
     const heldByOwner = existing?.status === 'active' && !!existing.pubkey
     if (!heldByOwner) {
-      const reserved = await isReservedWord(c.env.DB, usernameData.canonical)
-      if (reserved) {
+      const block = await resolveUsernameBlock(c.env.DB, usernameData.canonical, c.env)
+      if (block.kind === 'reserved') {
         return c.json({
           ok: true,
           available: false,
@@ -103,6 +103,16 @@ username.get('/check/:name', async (c) => {
           canonical: usernameData.canonical,
           code: 'reserved',
           reason: 'Username is reserved'
+        }, 200, { 'Access-Control-Allow-Origin': '*' })
+      }
+      if (block.kind === 'unavailable') {
+        return c.json({
+          ok: true,
+          available: false,
+          name: usernameData.display,
+          canonical: usernameData.canonical,
+          code: 'unavailable',
+          reason: 'Username cannot be checked right now'
         }, 200, { 'Access-Control-Allow-Origin': '*' })
       }
     }
@@ -257,10 +267,12 @@ username.post('/reserve', async (c) => {
 
     const { display: nameDisplay, canonical: nameCanonical } = usernameData
 
-    // Check if reserved word
-    const reserved = await isReservedWord(c.env.DB, nameCanonical)
-    if (reserved) {
+    const reservedBlock = await resolveUsernameBlock(c.env.DB, nameCanonical, c.env)
+    if (reservedBlock.kind === 'reserved') {
       return c.json({ ok: false, error: 'Username is reserved' }, 403, { 'Access-Control-Allow-Origin': '*' })
+    }
+    if (reservedBlock.kind === 'unavailable') {
+      return c.json({ ok: false, error: 'Username cannot be checked right now', code: 'unavailable' }, 403, { 'Access-Control-Allow-Origin': '*' })
     }
 
     // Check if name is already taken
@@ -533,8 +545,14 @@ username.post('/claim', async (c) => {
     // update. The allowance ends when they let the name go — a revoked row
     // falls through to the 403 like anyone else.
     const ownedByClaimant = existing?.status === 'active' && existing.pubkey?.toLowerCase() === pubkey
-    if (!ownedByClaimant && await isReservedWord(c.env.DB, nameCanonical)) {
-      return c.json({ ok: false, error: 'Username is reserved' }, 403)
+    if (!ownedByClaimant) {
+      const claimBlock = await resolveUsernameBlock(c.env.DB, nameCanonical, c.env)
+      if (claimBlock.kind === 'reserved') {
+        return c.json({ ok: false, error: 'Username is reserved' }, 403)
+      }
+      if (claimBlock.kind === 'unavailable') {
+        return c.json({ ok: false, error: 'Username cannot be checked right now', code: 'unavailable' }, 403)
+      }
     }
 
     const releaseAttempt = await getLatestReleaseAttemptByPubkey(c.env.DB, pubkey)
