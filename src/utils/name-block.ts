@@ -12,6 +12,7 @@ import {
   getBlockVerdict,
   getBlocklistVersion,
   listReservedWordsForMatch,
+  proposalExists,
   proposeBlockWord,
   putBlockVerdict,
   tryConsumeJevCall,
@@ -30,7 +31,6 @@ export type BlockOutcome =
   | { kind: 'unavailable' }
 
 const DEFAULT_CALLS_PER_MINUTE = 30
-const MAX_EMBEDDED_CALLS = 3
 
 function parseUnit(value: string | undefined): number | undefined {
   if (value === undefined || value.trim() === '') return undefined
@@ -73,6 +73,7 @@ async function maybePropose(
   if (min === undefined) return
   const word = proposalCandidate(reading, flagged, listed)
   if (!word) return
+  if (await proposalExists(db, word)) return
   const allowed = await tryConsumeJevCall(db, Math.floor(now / 60), parseCap(env.JEV_MAX_CALLS_PER_MINUTE))
   if (!allowed) return
   try {
@@ -115,9 +116,10 @@ export async function resolveUsernameBlock(
   let judged = 0
   let guilty: { word: string; reading: Reading | null } | null = null
 
-  for (const word of classification.embedded.slice(0, MAX_EMBEDDED_CALLS)) {
+  const embedded = classification.embedded
+  for (const word of embedded) {
     const term = terms.find((item) => item.word === word)
-    if (!term) continue
+    if (!term) return { kind: 'unavailable' }
     const allowed = await tryConsumeJevCall(db, Math.floor(now / 60), cap)
     if (!allowed) return { kind: 'unavailable' }
     const pair = readingsFor(canonical, LEXICON, termMatcher(term))
@@ -142,7 +144,7 @@ export async function resolveUsernameBlock(
     }
   }
 
-  if (judged === 0) return { kind: 'unavailable' }
+  if (!blocked && judged !== embedded.length) return { kind: 'unavailable' }
   await putBlockVerdict(db, canonical, version, blocked ? 'blocked' : 'clear', now)
   if (blocked && guilty) {
     await maybePropose(db, env, apiKey, guilty.reading, guilty.word, listed, fetchImpl, now)

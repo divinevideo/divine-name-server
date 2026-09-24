@@ -4,6 +4,7 @@
 import {
   JUDGED_CATEGORIES,
   classifyName,
+  matchesTerm,
   type ListedTerm,
   type NameClassification,
   type TermRules,
@@ -98,6 +99,13 @@ export async function tryConsumeJevCall(
   return row !== null
 }
 
+export async function proposalExists(db: D1Database, word: string): Promise<boolean> {
+  const row = await db.prepare(
+    'SELECT word FROM blocklist_proposals WHERE word = ?'
+  ).bind(word).first<{ word: string }>()
+  return row !== null
+}
+
 export async function proposeBlockWord(
   db: D1Database,
   word: string,
@@ -118,12 +126,31 @@ export interface BlockProposal {
   affected_count: number
 }
 
+const APPROVAL_RULES: TermRules = {
+  scope: 'token',
+  leet: true,
+  digitExpand: false,
+  repeats: false,
+  plain: true,
+}
+
+/** Names approval would block, using the same plain-match rules approval writes. */
 export async function countNamesContaining(db: D1Database, word: string): Promise<number> {
-  const row = await db.prepare(
-    `SELECT COUNT(*) AS n FROM usernames
-     WHERE REPLACE(REPLACE(REPLACE(username_canonical, '-', ''), '_', ''), '.', '') LIKE '%' || ? || '%'`
-  ).bind(word).first<{ n: number }>()
-  return row?.n ?? 0
+  let total = 0
+  let after = ''
+  for (;;) {
+    const { results } = await db.prepare(
+      `SELECT username_canonical FROM usernames
+       WHERE username_canonical > ? ORDER BY username_canonical LIMIT 500`
+    ).bind(after).all<{ username_canonical: string }>()
+    if (results.length === 0) break
+    for (const row of results) {
+      if (row.username_canonical && matchesTerm(row.username_canonical, word, APPROVAL_RULES)) total++
+    }
+    after = results[results.length - 1].username_canonical
+    if (results.length < 500) break
+  }
+  return total
 }
 
 export async function listPendingProposals(db: D1Database): Promise<BlockProposal[]> {
