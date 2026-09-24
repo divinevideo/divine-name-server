@@ -140,8 +140,12 @@ export async function countNamesContaining(db: D1Database, word: string): Promis
   if (!glob) return 0
   const row = await db.prepare(
     `SELECT COUNT(*) AS n FROM usernames
-     WHERE REPLACE(REPLACE(REPLACE(username_canonical, '-', ''), '_', ''), '.', '') GLOB ?`
-  ).bind(glob).first<{ n: number }>()
+     WHERE (
+       username_canonical NOT LIKE 'xn--%'
+       AND ?1 NOT LIKE 'xn--%'
+       AND REPLACE(REPLACE(REPLACE(username_canonical, '-', ''), '_', ''), '.', '') GLOB ?2
+     ) OR username_canonical = ?1`
+  ).bind(word.toLowerCase(), glob).first<{ n: number }>()
   return row?.n ?? 0
 }
 
