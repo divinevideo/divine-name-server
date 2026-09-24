@@ -151,9 +151,11 @@ describeSqlite('resolveUsernameBlock', () => {
   it('counts a leet spelling in the proposal impact', async () => {
     const { db, sqlite } = createSqliteD1()
     seedUsername(sqlite, { name: 's4ckname' })
+    seedUsername(sqlite, { name: 's-4-ck-extra' })
+    seedUsername(sqlite, { name: 'brightlantern' })
     await proposeBlockWord(db, 'sack', 0.9, 1)
     const proposals = await listPendingProposals(db)
-    expect(proposals.find((row) => row.word === 'sack')?.affected_count).toBe(1)
+    expect(proposals.find((row) => row.word === 'sack')?.affected_count).toBe(2)
     sqlite.close()
   })
 

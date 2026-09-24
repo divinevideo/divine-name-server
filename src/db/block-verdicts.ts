@@ -4,7 +4,7 @@
 import {
   JUDGED_CATEGORIES,
   classifyName,
-  matchesTerm,
+  plainMatchGlob,
   type ListedTerm,
   type NameClassification,
   type TermRules,
@@ -134,23 +134,15 @@ const APPROVAL_RULES: TermRules = {
   plain: true,
 }
 
-/** Names approval would block, using the same plain-match rules approval writes. */
+/** One lookup for names approval would block, under the rules approval writes. */
 export async function countNamesContaining(db: D1Database, word: string): Promise<number> {
-  let total = 0
-  let after = ''
-  for (;;) {
-    const { results } = await db.prepare(
-      `SELECT username_canonical FROM usernames
-       WHERE username_canonical > ? ORDER BY username_canonical LIMIT 500`
-    ).bind(after).all<{ username_canonical: string }>()
-    if (results.length === 0) break
-    for (const row of results) {
-      if (row.username_canonical && matchesTerm(row.username_canonical, word, APPROVAL_RULES)) total++
-    }
-    after = results[results.length - 1].username_canonical
-    if (results.length < 500) break
-  }
-  return total
+  const glob = plainMatchGlob(word, APPROVAL_RULES)
+  if (!glob) return 0
+  const row = await db.prepare(
+    `SELECT COUNT(*) AS n FROM usernames
+     WHERE REPLACE(REPLACE(REPLACE(username_canonical, '-', ''), '_', ''), '.', '') GLOB ?`
+  ).bind(glob).first<{ n: number }>()
+  return row?.n ?? 0
 }
 
 export async function listPendingProposals(db: D1Database): Promise<BlockProposal[]> {

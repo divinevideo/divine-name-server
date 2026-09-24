@@ -105,6 +105,28 @@ function positionClass(char: string, rules: TermRules): string {
  * Cheap enough to do per request (roughly 0.25ms for all 600 terms against a
  * maximum-length name), but callers that check many names should cache by term.
  */
+/**
+ * A SQLite GLOB for a plain substring match under these rules, or null when
+ * repeats make the form unbounded. Separators are assumed already stripped.
+ */
+export function plainMatchGlob(term: string, rules: TermRules = DEFAULT_RULES): string | null {
+  if (rules.repeats) return null
+  const chars = [...term.toLowerCase()].filter((char) => !/[-_.]/.test(char))
+  const body = chars.map((char) => {
+    const accepted = new Set<string>([char])
+    if (rules.leet && !/[0-9]/.test(char)) {
+      for (const digit of LEET[char] ?? '') accepted.add(digit)
+    }
+    if (rules.digitExpand && /[0-9]/.test(char)) {
+      for (const letter of UNLEET[char] ?? '') accepted.add(letter)
+    }
+    const parts = [...accepted].sort()
+    if (parts.length === 1) return parts[0]
+    return `[${parts.join('')}]`
+  }).join('')
+  return `*${body}*`
+}
+
 export function compileTerm(term: string, rules: TermRules = DEFAULT_RULES): RegExp {
   // A separator stored in the term is already allowed between every pair of
   // characters. Kept as a literal it would be required, so a hyphenated term
