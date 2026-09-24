@@ -18,7 +18,7 @@ function exact(word: string): (span: string) => boolean {
 
 describe('readingsFor', () => {
   it('returns a reading on each side of the blocked word', () => {
-    const pair = readingsFor('analmaster', lexicon, exact('anal'))
+    const pair = readingsFor('analvine', lexicon, exact('anal'))
     expect(pair.withWord?.segments).toContain('anal')
     expect(pair.withoutWord?.segments ?? []).not.toContain('anal')
   })
@@ -28,7 +28,7 @@ describe('readingsFor', () => {
     expect(innocent.withoutWord).not.toBeNull()
     expect(innocent.withoutWord?.segments).toContain('2')
 
-    const pair = readingsFor('analmaster2', lexicon, exact('anal'))
+    const pair = readingsFor('analvine2', lexicon, exact('anal'))
     expect(pair.withWord).not.toBeNull()
     expect(pair.withWord?.segments).toContain('2')
     expect(pair.withWord?.segments).toContain('anal')
