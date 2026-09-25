@@ -54,10 +54,12 @@ export const DEFAULT_RULES: TermRules = {
  * Categories whose embeddings are a judgment, not a miss and not a block.
  *
  * Production rows keep the category a moderator stored. Migration 0014 records
- * that ordinary profanity lives under `Foul Language `, trailing space included,
- * so the comparison trims and lowercases before matching.
+ * that ordinary profanity lives under `Foul Language `, trailing space included.
+ * A production count also has `Hate Groups` and `child_safety`, and no
+ * `offensive` row. The comparison trims and lowercases before matching.
+ * System categories stay scope-only.
  */
-const JUDGED_CATEGORIES = new Set(['offensive', 'child_safety', 'foul language'])
+const JUDGED_CATEGORIES = new Set(['offensive', 'child_safety', 'foul language', 'hate groups'])
 
 export function judgesEmbeddings(category: string | null | undefined): boolean {
   if (!category) return false
@@ -135,6 +137,16 @@ export function plainMatchGlob(term: string, rules: TermRules = DEFAULT_RULES): 
  * Cheap enough to do per request (roughly 0.25ms for all 600 terms against a
  * maximum-length name), but callers that check many names should cache by term.
  */
+const anchoredByCompiled = new WeakMap<RegExp, RegExp>()
+
+function anchoredPattern(compiled: RegExp): RegExp {
+  const found = anchoredByCompiled.get(compiled)
+  if (found) return found
+  const anchored = new RegExp(`^(?:${compiled.source})$`)
+  anchoredByCompiled.set(compiled, anchored)
+  return anchored
+}
+
 export function compileTerm(term: string, rules: TermRules = DEFAULT_RULES): RegExp {
   // A separator stored in the term is already allowed between every pair of
   // characters. Kept as a literal it would be required, so a hyphenated term
@@ -279,13 +291,12 @@ export function matchesTerm(
   const pattern = compiled ?? compileTerm(term, rules)
   if (rules.plain && pattern.test(canonicalName)) return true
 
+  const anchored = anchoredPattern(pattern)
   switch (rules.scope) {
     case 'whole':
-      return new RegExp(`^(?:${pattern.source})$`).test(canonicalName)
-    case 'token': {
-      const anchored = new RegExp(`^(?:${pattern.source})$`)
+      return anchored.test(canonicalName)
+    case 'token':
       return tokenRuns(canonicalName).some((run) => anchored.test(run))
-    }
   }
 }
 
@@ -313,6 +324,7 @@ export interface ListedTerm {
   word: string
   rules: TermRules
   judgeEmbeddings: boolean
+  compiled?: RegExp
 }
 
 export interface NameClassification {
@@ -326,7 +338,8 @@ export function classifyName(canonicalName: string, terms: ListedTerm[]): NameCl
   const blocked: string[] = []
   const embedded: string[] = []
   for (const term of terms) {
-    const signal = termSignal(canonicalName, term.word, term.rules, term.judgeEmbeddings)
+    term.compiled ??= compileTerm(term.word, term.rules)
+    const signal = termSignal(canonicalName, term.word, term.rules, term.judgeEmbeddings, term.compiled)
     if (signal === 'blocked') blocked.push(term.word)
     else if (signal === 'ambiguous') embedded.push(term.word)
   }

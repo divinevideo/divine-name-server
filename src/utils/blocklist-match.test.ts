@@ -2,7 +2,7 @@
 // ABOUTME: collisions measured against the live registry that motivated each one.
 
 import { describe, it, expect } from 'vitest'
-import { compileTerm, matchesTerm, termSignal, tokenRuns, DEFAULT_RULES, type TermRules } from './blocklist-match'
+import { classifyName, compileTerm, judgesEmbeddings, matchesTerm, termSignal, tokenRuns, DEFAULT_RULES, type ListedTerm, type TermRules } from './blocklist-match'
 
 const rules = (over: Partial<TermRules> = {}): TermRules => ({ ...DEFAULT_RULES, ...over })
 
@@ -183,7 +183,30 @@ describe('collisions of the kind that make scope per-term', () => {
   })
 })
 
+describe('judged categories', () => {
+  it('judges production content labels after trim and case fold', () => {
+    expect(judgesEmbeddings('Foul Language ')).toBe(true)
+    expect(judgesEmbeddings('Hate Groups')).toBe(true)
+    expect(judgesEmbeddings('child_safety')).toBe(true)
+    expect(judgesEmbeddings('offensive')).toBe(true)
+    expect(judgesEmbeddings('system')).toBe(false)
+    expect(judgesEmbeddings(null)).toBe(false)
+  })
+})
+
 describe('compiled patterns', () => {
+  it('reuses a compiled pattern across names in one classification', () => {
+    const terms: ListedTerm[] = [{
+      word: 'anal',
+      rules: rules({ scope: 'token' }),
+      judgeEmbeddings: true,
+    }]
+    expect(classifyName('analmaster', terms).verdict).toBe('ambiguous')
+    expect(terms[0].compiled).toBeInstanceOf(RegExp)
+    expect(classifyName('xx-anal-xx', terms).verdict).toBe('blocked')
+    expect(classifyName('brightlantern', terms).verdict).toBe('clear')
+  })
+
   it('is safe to reuse a compiled pattern across names', () => {
     const compiled = compileTerm('admin', rules({ plain: true }))
     const r = rules({ plain: true })
