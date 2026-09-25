@@ -101,6 +101,11 @@ export function asD1(db: SqliteDb): D1Database {
   function execute(sql: string, params: unknown[]) {
     const statement = db.prepare(sql)
     if (isRead(sql)) return { rows: statement.all(...params), meta: { changes: 0, last_row_id: 0 } }
+    // A write with RETURNING hands back rows, as D1 does; each one is a changed row.
+    if (/\bRETURNING\b/i.test(sql)) {
+      const rows = statement.all(...params)
+      return { rows, meta: { changes: rows.length, last_row_id: 0 } }
+    }
     const result = statement.run(...params)
     return {
       rows: [] as unknown[],

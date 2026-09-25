@@ -3,6 +3,8 @@
 
 import type { SyncItem, UsernameKVData } from '../utils/fastly-sync'
 import { validateAndNormalizePubkey } from '../utils/validation'
+import { matchesTerm, type TermRules } from '../utils/blocklist-match'
+import { bumpBlocklistVersion, listReservedWordsForMatch } from './block-verdicts'
 
 // SQLite raises "LIKE or GLOB pattern too complex" once a LIKE pattern exceeds
 // SQLITE_MAX_LIKE_PATTERN_LENGTH (50 UTF-8 bytes). The surrounding wildcards
@@ -106,15 +108,25 @@ export interface RestoreUsernameResult {
   ownerChanged: boolean
 }
 
+/**
+ * Whether `word` is blocked, under each term's own matching rules.
+ *
+ * Reads the whole list on every call rather than caching it, so a moderator
+ * adding or loosening a term takes effect on the next signup instead of after a
+ * cache expiry. Embeddings are not a block here: check, reserve, and claim
+ * resolve those through judgment. This boolean is the deterministic hit, which
+ * release finalization also uses so an already-registered name is not re-judged.
+ *
+ * `word` must be the canonical form, which is punycode for Unicode names. That
+ * is the form stored in the table, so a Unicode term compared against a display
+ * form would never match the name it is meant to block.
+ */
 export async function isReservedWord(
   db: D1Database,
   word: string
 ): Promise<boolean> {
-  const result = await db.prepare(
-    'SELECT 1 FROM reserved_words WHERE word = ?'
-  ).bind(word).first()
-
-  return result !== null
+  const terms = await listReservedWordsForMatch(db)
+  return terms.some((term) => matchesTerm(word, term.word, term.rules))
 }
 
 export async function getUsernameByName(
@@ -1003,6 +1015,11 @@ export interface ReservedWord {
   category: string
   reason: string | null
   created_at: number
+  match_scope: TermRules['scope']
+  match_leet: number
+  match_digit_expand: number
+  match_repeats: number
+  match_plain: number
 }
 
 export async function getReservedWords(
@@ -1019,17 +1036,27 @@ export async function addReservedWord(
   db: D1Database,
   word: string,
   category: string,
-  reason: string | null
-): Promise<void> {
+  reason: string | null,
+  matchScope: TermRules['scope'] | null = null
+): Promise<TermRules['scope']> {
   const now = Math.floor(Date.now() / 1000)
 
-  await db.prepare(
-    `INSERT INTO reserved_words (word, category, reason, created_at)
-     VALUES (?, ?, ?, ?)
+  // A null scope means the caller did not choose one. A new word then starts at
+  // 'whole', and an existing word keeps the scope it has, so re-adding a word to
+  // change its category or reason does not quietly narrow what it blocks.
+  const row = await db.prepare(
+    `INSERT INTO reserved_words (word, category, reason, created_at, match_scope)
+     VALUES (?1, ?2, ?3, ?4, COALESCE(?5, 'whole'))
      ON CONFLICT(word) DO UPDATE SET
        category = excluded.category,
-       reason = excluded.reason`
-  ).bind(word.toLowerCase(), category, reason, now).run()
+       reason = excluded.reason,
+       match_scope = COALESCE(?5, reserved_words.match_scope),
+       match_plain = 0
+     RETURNING match_scope`
+  ).bind(word.toLowerCase(), category, reason, now, matchScope).first<{ match_scope: TermRules['scope'] }>()
+
+  await bumpBlocklistVersion(db)
+  return row?.match_scope ?? matchScope ?? 'whole'
 }
 
 /**
@@ -1048,6 +1075,7 @@ export async function deleteReservedWord(
   await db.prepare(
     `DELETE FROM reserved_words WHERE word IN (${placeholders})`
   ).bind(...forms).run()
+  await bumpBlocklistVersion(db)
 }
 
 export async function exportUsernamesByStatus(

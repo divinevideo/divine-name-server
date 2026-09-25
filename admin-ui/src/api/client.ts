@@ -6,6 +6,7 @@ import type {
   AssignResponse,
   RevokeResponse,
   ReservedWord,
+  MatchScope,
   BulkReserveResponse,
   ApiResponse,
   TagDetail,
@@ -204,12 +205,13 @@ export async function getReservedWords(): Promise<ReservedWord[]> {
 export async function addReservedWord(
   word: string,
   category: string,
-  reason?: string
+  reason?: string,
+  matchScope?: MatchScope
 ): Promise<ApiResponse & { word?: string }> {
   const response = await fetch(`${API_BASE}/reserved-words`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ word, category, reason })
+    body: JSON.stringify({ word, category, reason, match_scope: matchScope })
   })
 
   if (!response.ok) {
@@ -233,6 +235,33 @@ export async function notifyAssignment(
     throw new Error(`Notify assignment failed: ${response.statusText}`)
   }
 
+  return response.json()
+}
+
+export interface BlockProposal {
+  word: string
+  status: string
+  confidence: number
+  created_at: number
+  affected_count: number
+}
+
+export async function getBlockProposals(): Promise<BlockProposal[]> {
+  const response = await fetch(`${API_BASE}/reserved-word-proposals`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch proposals: ${response.statusText}`)
+  }
+  const data = await response.json()
+  return data.proposals || []
+}
+
+export async function decideBlockProposal(word: string, decision: 'approve' | 'reject'): Promise<ApiResponse> {
+  const response = await fetch(`${API_BASE}/reserved-word-proposals/${encodeURIComponent(word)}/${decision}`, {
+    method: 'POST',
+  })
+  if (!response.ok) {
+    return parseErrorResponse<ApiResponse>(response, 'Failed to update proposal')
+  }
   return response.json()
 }
 

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Username } from '../src/db/queries'
 
-const { getUsernamesUpdatedSince, expireStaleReservations, expireHolds, getStaleReleaseAttempts, rollbackReleaseAttempt, getQueuedFastlySyncTasks, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, syncBatch } = vi.hoisted(() => ({
+const { getUsernamesUpdatedSince, expireStaleReservations, expireHolds, getStaleReleaseAttempts, rollbackReleaseAttempt, getQueuedFastlySyncTasks, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, syncBatch, pruneBlocklistData } = vi.hoisted(() => ({
   getUsernamesUpdatedSince: vi.fn<() => Promise<Username[]>>(),
   expireStaleReservations: vi.fn<() => Promise<number>>(),
   expireHolds: vi.fn<() => Promise<number>>(),
@@ -12,7 +12,13 @@ const { getUsernamesUpdatedSince, expireStaleReservations, expireHolds, getStale
   clearFastlySyncTasks: vi.fn<() => Promise<void>>(),
   markFastlySyncTaskFailures: vi.fn<() => Promise<void>>(),
   syncBatch: vi.fn(),
+  pruneBlocklistData: vi.fn(),
 }))
+
+vi.mock('../src/db/block-verdicts', async () => {
+  const actual = await vi.importActual<typeof import('../src/db/block-verdicts')>('../src/db/block-verdicts')
+  return { ...actual, pruneBlocklistData }
+})
 
 vi.mock('../src/db/queries', async () => {
   const actual = await vi.importActual<typeof import('../src/db/queries')>('../src/db/queries')
@@ -48,6 +54,7 @@ describe('ATProto cron sync payloads', () => {
     getStaleReleaseAttempts.mockResolvedValue([])
     getQueuedFastlySyncTasks.mockResolvedValue([])
     syncBatch.mockResolvedValue({ synced: 1, deleted: 0, failed: 0, errors: [], successes: [], failures: [] })
+    pruneBlocklistData.mockResolvedValue(undefined)
   })
 
   it('includes atproto_did and atproto_state in the hourly Fastly reconciliation payload', async () => {
@@ -110,6 +117,7 @@ describe('ATProto cron sync payloads', () => {
       ],
       { concurrency: 10 }
     )
+    expect(pruneBlocklistData).toHaveBeenCalledWith(expect.anything(), expect.any(Number))
   })
 
   it('maps revoked usernames to delete action', async () => {
