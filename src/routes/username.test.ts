@@ -751,10 +751,12 @@ describe('Public Username Endpoints', () => {
           // the name `admin`.
           const row = {
             word: 'admin',
+            category: 'system',
             match_scope: 'whole',
             match_leet: 1,
             match_digit_expand: 0,
             match_repeats: 0,
+            match_plain: 0,
           }
           return {
             all: async () => ({ results: [row] }),

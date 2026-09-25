@@ -79,6 +79,13 @@ describe('punycode', () => {
     }
   })
 
+  it('does not exempt a name that only starts with the punycode prefix', () => {
+    const r = rules({ scope: 'token' })
+    expect(matchesTerm('xn--hate', 'hate', r)).toBe(true)
+    expect(matchesTerm('xn--hate-a', 'hate', r)).toBe(true)
+    expect(termSignal('xn--hate', 'hate', r, true)).toBe('blocked')
+  })
+
   it('compares a punycode term exactly, without substitution or separators', () => {
     for (const scope of ['whole', 'token'] as const) {
       const r = rules({ scope, repeats: true, digitExpand: true })

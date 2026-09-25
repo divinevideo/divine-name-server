@@ -2,7 +2,7 @@
 // ABOUTME: per-minute call cap. Deterministic matching stays in queries.ts.
 
 import {
-  JUDGED_CATEGORIES,
+  judgesEmbeddings,
   plainMatchGlob,
   type ListedTerm,
   type TermRules,
@@ -36,7 +36,7 @@ export async function listReservedWordsForMatch(db: D1Database): Promise<ListedT
   return results.map((row) => ({
     word: row.word,
     rules: rulesOf(row),
-    judgeEmbeddings: JUDGED_CATEGORIES.has(row.category),
+    judgeEmbeddings: judgesEmbeddings(row.category),
   }))
 }
 
@@ -56,11 +56,13 @@ export async function bumpBlocklistVersion(db: D1Database): Promise<void> {
 export async function getBlockVerdict(
   db: D1Database,
   canonical: string,
-  version: number
+  version: number,
+  threshold: number
 ): Promise<'blocked' | 'clear' | null> {
   const row = await db.prepare(
-    'SELECT verdict FROM block_verdicts WHERE canonical = ? AND blocklist_version = ?'
-  ).bind(canonical, version).first<{ verdict: 'blocked' | 'clear' }>()
+    `SELECT verdict FROM block_verdicts
+     WHERE canonical = ? AND blocklist_version = ? AND threshold = ?`
+  ).bind(canonical, version, String(threshold)).first<{ verdict: 'blocked' | 'clear' }>()
   return row?.verdict ?? null
 }
 
@@ -68,14 +70,16 @@ export async function putBlockVerdict(
   db: D1Database,
   canonical: string,
   version: number,
+  threshold: number,
   verdict: 'blocked' | 'clear',
   now: number
 ): Promise<void> {
   await db.prepare(
-    `INSERT INTO block_verdicts (canonical, blocklist_version, verdict, created_at)
-     VALUES (?1, ?2, ?3, ?4)
-     ON CONFLICT(canonical, blocklist_version) DO UPDATE SET verdict = excluded.verdict, created_at = excluded.created_at`
-  ).bind(canonical, version, verdict, now).run()
+    `INSERT INTO block_verdicts (canonical, blocklist_version, threshold, verdict, created_at)
+     VALUES (?1, ?2, ?3, ?4, ?5)
+     ON CONFLICT(canonical, blocklist_version, threshold) DO UPDATE SET
+       verdict = excluded.verdict, created_at = excluded.created_at`
+  ).bind(canonical, version, String(threshold), verdict, now).run()
 }
 
 /** Keep cache rows current and recent, and bound the rolling call buckets. */

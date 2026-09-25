@@ -168,12 +168,12 @@ describeSqlite('migration 0015', () => {
   it('prunes verdicts for old blocklists and expired entries, and bounds call buckets', async () => {
     const now = 1_800_000_000
     sqlite.prepare('UPDATE blocklist_meta SET version = 2 WHERE id = 1').run()
-    sqlite.prepare('INSERT INTO block_verdicts (canonical, blocklist_version, verdict, created_at) VALUES (?, ?, ?, ?)')
-      .run('old-version', 1, 'clear', now)
-    sqlite.prepare('INSERT INTO block_verdicts (canonical, blocklist_version, verdict, created_at) VALUES (?, ?, ?, ?)')
-      .run('expired', 2, 'clear', now - 31 * 24 * 60 * 60)
-    sqlite.prepare('INSERT INTO block_verdicts (canonical, blocklist_version, verdict, created_at) VALUES (?, ?, ?, ?)')
-      .run('recent', 2, 'clear', now - 10)
+    sqlite.prepare('INSERT INTO block_verdicts (canonical, blocklist_version, threshold, verdict, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run('old-version', 1, '0.5', 'clear', now)
+    sqlite.prepare('INSERT INTO block_verdicts (canonical, blocklist_version, threshold, verdict, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run('expired', 2, '0.5', 'clear', now - 31 * 24 * 60 * 60)
+    sqlite.prepare('INSERT INTO block_verdicts (canonical, blocklist_version, threshold, verdict, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run('recent', 2, '0.5', 'clear', now - 10)
     sqlite.prepare('INSERT INTO jev_call_buckets (minute_bucket, calls) VALUES (?, ?)')
       .run(Math.floor(now / 60) - 24 * 60 - 1, 2)
     sqlite.prepare('INSERT INTO jev_call_buckets (minute_bucket, calls) VALUES (?, ?)')

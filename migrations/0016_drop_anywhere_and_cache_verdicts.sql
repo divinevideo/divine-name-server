@@ -17,9 +17,11 @@ INSERT OR IGNORE INTO blocklist_meta (id, version) VALUES (1, 1);
 CREATE TABLE IF NOT EXISTS block_verdicts (
   canonical TEXT NOT NULL,
   blocklist_version INTEGER NOT NULL,
+  -- The threshold the verdict was judged under. A later change must not reuse it.
+  threshold TEXT NOT NULL,
   verdict TEXT NOT NULL CHECK (verdict IN ('blocked', 'clear')),
   created_at INTEGER NOT NULL,
-  PRIMARY KEY (canonical, blocklist_version)
+  PRIMARY KEY (canonical, blocklist_version, threshold)
 );
 
 CREATE TABLE IF NOT EXISTS blocklist_proposals (

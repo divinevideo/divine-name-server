@@ -57,6 +57,50 @@ describeSqlite('resolveUsernameBlock', () => {
     sqlite.close()
   })
 
+  it('judges an embedding stored under the production profanity category', async () => {
+    const { db, sqlite } = createSqliteD1()
+    sqlite.prepare(
+      `INSERT INTO reserved_words (word, category, reason, created_at, match_scope) VALUES ('zxqword', 'Foul Language ', NULL, 1, 'token')`
+    ).run()
+    const calls: string[] = []
+    const outcome = await resolveUsernameBlock(
+      db,
+      'zxqwordextra',
+      { TYPESAFE_API_KEY: 'test', JEV_BLOCK_MIN: '0.5' },
+      jev(0.8, calls),
+      1_700_000_000
+    )
+    expect(outcome).toEqual({ kind: 'reserved' })
+    expect(calls).toHaveLength(1)
+    sqlite.close()
+  })
+
+  it('does not reuse a clear cached under a different threshold', async () => {
+    const { db, sqlite } = createSqliteD1()
+    sqlite.prepare(
+      `INSERT INTO reserved_words (word, category, reason, created_at, match_scope) VALUES ('zxqword', 'offensive', NULL, 1, 'token')`
+    ).run()
+    const calls: string[] = []
+    const first = await resolveUsernameBlock(
+      db,
+      'zxqwordextra',
+      { TYPESAFE_API_KEY: 'test', JEV_BLOCK_MIN: '0.5' },
+      jev(0.2, calls),
+      1_700_000_000
+    )
+    const second = await resolveUsernameBlock(
+      db,
+      'zxqwordextra',
+      { TYPESAFE_API_KEY: 'test', JEV_BLOCK_MIN: '0.1' },
+      jev(0.2, calls),
+      1_700_000_100
+    )
+    expect(first).toEqual({ kind: 'clear' })
+    expect(second).toEqual({ kind: 'reserved' })
+    expect(calls).toHaveLength(2)
+    sqlite.close()
+  })
+
   it('asks once about an embedding and caches a block', async () => {
     const { db, sqlite } = createSqliteD1()
     sqlite.prepare(

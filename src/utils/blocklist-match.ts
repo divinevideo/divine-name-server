@@ -50,8 +50,19 @@ export const DEFAULT_RULES: TermRules = {
   plain: false,
 }
 
-/** Categories whose embeddings are a judgment, not a miss and not a block. */
-export const JUDGED_CATEGORIES = new Set(['offensive', 'child_safety'])
+/**
+ * Categories whose embeddings are a judgment, not a miss and not a block.
+ *
+ * Production rows keep the category a moderator stored. Migration 0014 records
+ * that ordinary profanity lives under `Foul Language `, trailing space included,
+ * so the comparison trims and lowercases before matching.
+ */
+const JUDGED_CATEGORIES = new Set(['offensive', 'child_safety', 'foul language'])
+
+export function judgesEmbeddings(category: string | null | undefined): boolean {
+  if (!category) return false
+  return JUDGED_CATEGORIES.has(category.trim().toLowerCase())
+}
 
 /** Characters the namespace allows between parts of a name. */
 const SEPARATORS = '[-_.]*'
@@ -134,8 +145,89 @@ export function compileTerm(term: string, rules: TermRules = DEFAULT_RULES): Reg
   return new RegExp(body)
 }
 
+function decodeDigit(code: number): number {
+  if (code >= 48 && code <= 57) return code - 22
+  if (code >= 65 && code <= 90) return code - 65
+  if (code >= 97 && code <= 122) return code - 97
+  return 36
+}
+
+function adaptBias(delta: number, numPoints: number, first: boolean): number {
+  delta = first ? Math.floor(delta / 700) : delta >> 1
+  delta += Math.floor(delta / numPoints)
+  let k = 0
+  while (delta > 455) {
+    delta = Math.floor(delta / 35)
+    k += 36
+  }
+  return k + Math.floor((36 * delta) / (delta + 38))
+}
+
+/** RFC 3492 decode of the part after `xn--`. Null when the payload is not punycode. */
+function decodePunycode(input: string): string | null {
+  const base = 36
+  const tMin = 1
+  const tMax = 26
+  const delimiter = input.lastIndexOf('-')
+  const output: number[] = []
+  let i = 0
+  if (delimiter > 0) {
+    for (let j = 0; j < delimiter; j++) {
+      const code = input.charCodeAt(j)
+      if (code >= 0x80) return null
+      output.push(code)
+    }
+    i = delimiter + 1
+  } else if (delimiter === 0) {
+    i = 1
+  }
+
+  let n = 128
+  let bias = 72
+  let index = 0
+  while (i < input.length) {
+    const oldIndex = index
+    let w = 1
+    for (let k = base; ; k += base) {
+      if (i >= input.length) return null
+      const digit = decodeDigit(input.charCodeAt(i++))
+      if (digit >= base) return null
+      if (digit > (Number.MAX_SAFE_INTEGER - index) / w) return null
+      index += digit * w
+      const t = k <= bias ? tMin : k >= bias + tMax ? tMax : k - bias
+      if (digit < t) break
+      if (w > Number.MAX_SAFE_INTEGER / (base - t)) return null
+      w *= base - t
+    }
+    const length = output.length + 1
+    bias = adaptBias(index - oldIndex, length, oldIndex === 0)
+    n += Math.floor(index / length)
+    index %= length
+    if (n > 0x10ffff || (n >= 0xd800 && n <= 0xdfff)) return null
+    output.splice(index, 0, n)
+    index++
+  }
+  return String.fromCodePoint(...output)
+}
+
+function toAsciiLabel(label: string): string | null {
+  try {
+    return new URL(`http://${label}.test`).hostname.split('.')[0] ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * A label is punycode only when it decodes to non-ASCII and re-encodes to itself.
+ * A name that merely starts with `xn--` is ordinary text, not an encoding.
+ */
 function isPunycode(value: string): boolean {
-  return value.startsWith('xn--')
+  if (!value.startsWith('xn--')) return false
+  const decoded = decodePunycode(value.slice(4))
+  if (decoded == null) return false
+  if (![...decoded].some((char) => (char.codePointAt(0) ?? 0) > 127)) return false
+  return toAsciiLabel(decoded) === value
 }
 
 /**

@@ -105,7 +105,7 @@ export async function resolveUsernameBlock(
   if (!apiKey || threshold === undefined) return { kind: 'unavailable' }
 
   const version = await getBlocklistVersion(db)
-  const cached = await getBlockVerdict(db, canonical, version)
+  const cached = await getBlockVerdict(db, canonical, version, threshold)
   if (cached === 'blocked') return { kind: 'reserved' }
   if (cached === 'clear') return { kind: 'clear' }
   if (!allowJudgment) return { kind: 'unavailable' }
@@ -143,7 +143,7 @@ export async function resolveUsernameBlock(
   }
 
   // Reaching this point without a block means every embedded word was judged.
-  await putBlockVerdict(db, canonical, version, blocked ? 'blocked' : 'clear', now)
+  await putBlockVerdict(db, canonical, version, threshold, blocked ? 'blocked' : 'clear', now)
   if (blocked && guilty) {
     await maybePropose(db, env, apiKey, guilty.reading, guilty.word, listed, fetchImpl, now)
   }
