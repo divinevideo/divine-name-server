@@ -94,7 +94,9 @@ username.get('/check/:name', async (c) => {
     // me" from "taken by someone else".
     const heldByOwner = existing?.status === 'active' && !!existing.pubkey
     if (!heldByOwner) {
-      const block = await resolveUsernameBlock(c.env.DB, usernameData.canonical, c.env)
+      // Availability checks are public and may be called on every keystroke.
+      // Do not let them spend the shared paid-judgment budget.
+      const block = await resolveUsernameBlock(c.env.DB, usernameData.canonical, c.env, fetch, undefined, false)
       if (block.kind === 'reserved') {
         return c.json({
           ok: true,
@@ -267,14 +269,6 @@ username.post('/reserve', async (c) => {
 
     const { display: nameDisplay, canonical: nameCanonical } = usernameData
 
-    const reservedBlock = await resolveUsernameBlock(c.env.DB, nameCanonical, c.env)
-    if (reservedBlock.kind === 'reserved') {
-      return c.json({ ok: false, error: 'Username is reserved' }, 403, { 'Access-Control-Allow-Origin': '*' })
-    }
-    if (reservedBlock.kind === 'unavailable') {
-      return c.json({ ok: false, error: 'Username cannot be checked right now', code: 'unavailable' }, 403, { 'Access-Control-Allow-Origin': '*' })
-    }
-
     // Check if name is already taken
     const existing = await getUsernameByName(c.env.DB, nameCanonical)
     if (existing) {
@@ -314,6 +308,23 @@ username.post('/reserve', async (c) => {
     if (!cashu_token && !invite_code) {
       return c.json({ ok: false, error: 'Payment or invite code required' }, 403, { 'Access-Control-Allow-Origin': '*' })
     }
+
+    // Invite redemption is one-way. Screen invite requests without judgment
+    // before consuming the code; only a validated Cashu payment can spend a
+    // paid judgment call from this public endpoint.
+    let reservedBlock: Awaited<ReturnType<typeof resolveUsernameBlock>> | null = null
+    if (invite_code) {
+      reservedBlock = await resolveUsernameBlock(c.env.DB, nameCanonical, c.env, fetch, undefined, false)
+      if (reservedBlock.kind === 'reserved') {
+        return c.json({ ok: false, error: 'Username is reserved' }, 403, { 'Access-Control-Allow-Origin': '*' })
+      }
+      if (reservedBlock.kind === 'unavailable') {
+        return c.json({ ok: false, error: 'Username cannot be checked right now', code: 'unavailable' }, 503, { 'Access-Control-Allow-Origin': '*' })
+      }
+    }
+
+    let cashuProofData: Array<{ secret: string; amount: number }> | null = null
+    let cashuTokenHash: string | null = null
 
     if (cashu_token) {
       // Parse and validate Cashu token format
@@ -358,12 +369,10 @@ username.post('/reserve', async (c) => {
         return c.json({ ok: false, error: 'Cashu proof has already been used' }, 409, { 'Access-Control-Allow-Origin': '*' })
       }
 
-      // Store proofs as spent before creating the reservation
-      const tokenHash = await hashCashuToken(cashu_token)
-      const proofData = parsed.tokens.flatMap(t =>
+      cashuTokenHash = await hashCashuToken(cashu_token)
+      cashuProofData = parsed.tokens.flatMap(t =>
         t.proofs.map(p => ({ secret: p.secret, amount: p.amount }))
       )
-      await storeSpentProofs(c.env.DB, proofData, tokenHash, nameCanonical)
 
     } else if (invite_code) {
       if (!c.env.INVITE_FAUCET_URL) {
@@ -380,6 +389,21 @@ username.post('/reserve', async (c) => {
       if (!faucetRes.ok) {
         return c.json({ ok: false, error: 'Invalid invite code' }, 403, { 'Access-Control-Allow-Origin': '*' })
       }
+    }
+
+    if (cashu_token) {
+      reservedBlock = await resolveUsernameBlock(c.env.DB, nameCanonical, c.env)
+      if (reservedBlock.kind === 'reserved') {
+        return c.json({ ok: false, error: 'Username is reserved' }, 403, { 'Access-Control-Allow-Origin': '*' })
+      }
+      if (reservedBlock.kind === 'unavailable') {
+        return c.json({ ok: false, error: 'Username cannot be checked right now', code: 'unavailable' }, 503, { 'Access-Control-Allow-Origin': '*' })
+      }
+    }
+
+    // Consume validated proofs only after the block check succeeds.
+    if (cashuProofData && cashuTokenHash) {
+      await storeSpentProofs(c.env.DB, cashuProofData, cashuTokenHash, nameCanonical)
     }
 
     // Generate confirmation token and set expiry (48 hours)
@@ -551,7 +575,7 @@ username.post('/claim', async (c) => {
         return c.json({ ok: false, error: 'Username is reserved' }, 403)
       }
       if (claimBlock.kind === 'unavailable') {
-        return c.json({ ok: false, error: 'Username cannot be checked right now', code: 'unavailable' }, 403)
+        return c.json({ ok: false, error: 'Username cannot be checked right now', code: 'unavailable' }, 503)
       }
     }
 

@@ -38,6 +38,25 @@ describeSqlite('resolveUsernameBlock', () => {
     sqlite.close()
   })
 
+  it('does not call Jev for a public availability check on an embedding', async () => {
+    const { db, sqlite } = createSqliteD1()
+    sqlite.prepare(
+      `INSERT INTO reserved_words (word, category, reason, created_at, match_scope) VALUES ('zxqword', 'offensive', NULL, 1, 'token')`
+    ).run()
+    const calls: string[] = []
+    const outcome = await resolveUsernameBlock(
+      db,
+      'zxqwordextra',
+      { TYPESAFE_API_KEY: 'test', JEV_BLOCK_MIN: '0.5' },
+      jev(0.8, calls),
+      1_700_000_000,
+      false
+    )
+    expect(outcome).toEqual({ kind: 'unavailable' })
+    expect(calls).toEqual([])
+    sqlite.close()
+  })
+
   it('asks once about an embedding and caches a block', async () => {
     const { db, sqlite } = createSqliteD1()
     sqlite.prepare(

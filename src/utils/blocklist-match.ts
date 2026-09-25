@@ -81,7 +81,7 @@ function escapeRegex(char: string): string {
  * form. Folding the name destroys information the next term needs, and it cannot
  * express that `1` is a valid `i` here but a literal `1` in `1488`.
  */
-function positionClass(char: string, rules: TermRules): string {
+function acceptedCharacters(char: string, rules: TermRules): string[] {
   const accepted = new Set<string>([char])
 
   if (rules.leet && !/[0-9]/.test(char)) {
@@ -91,7 +91,11 @@ function positionClass(char: string, rules: TermRules): string {
     for (const letter of UNLEET[char] ?? '') accepted.add(letter)
   }
 
-  const parts = [...accepted].sort().map(escapeRegex)
+  return [...accepted].sort()
+}
+
+function positionClass(char: string, rules: TermRules): string {
+  const parts = acceptedCharacters(char, rules).map(escapeRegex)
   if (parts.length === 1 && !rules.repeats) return parts[0]
 
   // `(?:a|4)+` would accept "a4a4"; `(?:a+|4+)` only repeats one character.
@@ -100,12 +104,6 @@ function positionClass(char: string, rules: TermRules): string {
 }
 
 /**
- * Compiles one term to a pattern that matches the term's spelling variants.
- *
- * Cheap enough to do per request (roughly 0.25ms for all 600 terms against a
- * maximum-length name), but callers that check many names should cache by term.
- */
-/**
  * A SQLite GLOB for a plain substring match under these rules, or null when
  * repeats make the form unbounded. Separators are assumed already stripped.
  */
@@ -113,20 +111,19 @@ export function plainMatchGlob(term: string, rules: TermRules = DEFAULT_RULES): 
   if (rules.repeats) return null
   const chars = [...term.toLowerCase()].filter((char) => !/[-_.]/.test(char))
   const body = chars.map((char) => {
-    const accepted = new Set<string>([char])
-    if (rules.leet && !/[0-9]/.test(char)) {
-      for (const digit of LEET[char] ?? '') accepted.add(digit)
-    }
-    if (rules.digitExpand && /[0-9]/.test(char)) {
-      for (const letter of UNLEET[char] ?? '') accepted.add(letter)
-    }
-    const parts = [...accepted].sort()
+    const parts = acceptedCharacters(char, rules)
     if (parts.length === 1) return parts[0]
     return `[${parts.join('')}]`
   }).join('')
   return `*${body}*`
 }
 
+/**
+ * Compiles one term to a pattern that matches the term's spelling variants.
+ *
+ * Cheap enough to do per request (roughly 0.25ms for all 600 terms against a
+ * maximum-length name), but callers that check many names should cache by term.
+ */
 export function compileTerm(term: string, rules: TermRules = DEFAULT_RULES): RegExp {
   // A separator stored in the term is already allowed between every pair of
   // characters. Kept as a literal it would be required, so a hyphenated term

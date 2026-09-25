@@ -90,6 +90,8 @@ export interface ReservedWord {
   created_at: number
   /** Absent on rows written before match rules existed; treat as 'whole'. */
   match_scope?: MatchScope
+  /** Moderator-approved proposal matches as a substring across longer names. */
+  match_plain?: number
 }
 
 export interface BulkReserveResult {

@@ -129,20 +129,6 @@ export async function isReservedWord(
   return terms.some((term) => matchesTerm(word, term.word, term.rules))
 }
 
-/**
- * Every term that blocks `word`, for explaining a rejection.
- *
- * A rejected user and an appeal both need to know which word was matched, and a
- * moderator changing a term's scope needs to see what it would newly affect.
- */
-export async function reservedWordsMatching(
-  db: D1Database,
-  word: string
-): Promise<string[]> {
-  const terms = await listReservedWordsForMatch(db)
-  return terms.filter((term) => matchesTerm(word, term.word, term.rules)).map((term) => term.word)
-}
-
 export async function getUsernameByName(
   db: D1Database,
   name: string
@@ -1033,6 +1019,7 @@ export interface ReservedWord {
   match_leet: number
   match_digit_expand: number
   match_repeats: number
+  match_plain: number
 }
 
 export async function getReservedWords(
@@ -1063,7 +1050,8 @@ export async function addReservedWord(
      ON CONFLICT(word) DO UPDATE SET
        category = excluded.category,
        reason = excluded.reason,
-       match_scope = COALESCE(?5, reserved_words.match_scope)
+       match_scope = COALESCE(?5, reserved_words.match_scope),
+       match_plain = 0
      RETURNING match_scope`
   ).bind(word.toLowerCase(), category, reason, now, matchScope).first<{ match_scope: TermRules['scope'] }>()
 

@@ -20,11 +20,18 @@ function scopeBadgeClass(scope: MatchScope | undefined): string {
   return base + 'bg-gray-100 text-gray-700'
 }
 
+function matchLabel(word: ReservedWord): string {
+  return word.match_plain === 1
+    ? 'substring (approved)'
+    : SCOPE_LABEL[word.match_scope ?? 'whole']
+}
+
 export default function ReservedWords() {
   const [words, setWords] = useState<ReservedWord[]>([])
   const [proposals, setProposals] = useState<BlockProposal[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [proposalAction, setProposalAction] = useState<string | null>(null)
 
   // Add form state
   const [showAddForm, setShowAddForm] = useState(false)
@@ -48,13 +55,30 @@ export default function ReservedWords() {
 
   const loadWords = async () => {
     try {
-      const [data, pending] = await Promise.all([getReservedWords(), getBlockProposals().catch(() => [])])
+      const [data, pending] = await Promise.all([getReservedWords(), getBlockProposals()])
       setWords(data)
       setProposals(pending)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load reserved words')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleProposalDecision = async (word: string, decision: 'approve' | 'reject') => {
+    setError(null)
+    setProposalAction(word)
+    try {
+      const result = await decideBlockProposal(word, decision)
+      if (!result.ok) {
+        setError(result.error || `Failed to ${decision} proposal`)
+        return
+      }
+      await loadWords()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Failed to ${decision} proposal`)
+    } finally {
+      setProposalAction(null)
     }
   }
 
@@ -112,6 +136,7 @@ export default function ReservedWords() {
 
   // Get unique categories for the dropdown
   const existingCategories = [...new Set(words.map(w => w.category))].sort()
+  const existingWord = words.find((word) => word.word === newWord)
 
   return (
     <div className="space-y-6">
@@ -147,20 +172,16 @@ export default function ReservedWords() {
                   <button
                     type="button"
                     className="px-3 py-1 text-sm rounded-md bg-blue-600 text-white"
-                    onClick={async () => {
-                      await decideBlockProposal(proposal.word, 'approve')
-                      await loadWords()
-                    }}
+                    onClick={() => handleProposalDecision(proposal.word, 'approve')}
+                    disabled={proposalAction === proposal.word}
                   >
                     Approve
                   </button>
                   <button
                     type="button"
                     className="px-3 py-1 text-sm rounded-md border border-gray-300"
-                    onClick={async () => {
-                      await decideBlockProposal(proposal.word, 'reject')
-                      await loadWords()
-                    }}
+                    onClick={() => handleProposalDecision(proposal.word, 'reject')}
+                    disabled={proposalAction === proposal.word}
                   >
                     Reject
                   </button>
@@ -258,12 +279,22 @@ export default function ReservedWords() {
               </select>
               <p className="mt-2 text-sm text-gray-500">
                 {newScope === 'whole' && (
-                  <>Blocks <code>{newWord || 'word'}</code> and spellings of it like <code>{(newWord || 'word').split('').join('-')}</code>, but not longer names containing it.</>
+                  <>Blocks <code>{newWord || 'word'}</code> and spellings of it like <code>{(newWord || 'word').split('').join('-')}</code>. Longer names are not blocked by this setting.</>
                 )}
                 {newScope === 'token' && (
-                  <>Also blocks names where <code>{newWord || 'word'}</code> stands on its own, like <code>xx-{newWord || 'word'}-xx</code>. A word glued inside a longer name is judged, not blocked by this setting.</>
+                  <>Also blocks names where <code>{newWord || 'word'}</code> stands on its own, like <code>xx-{newWord || 'word'}-xx</code>. A word inside a longer name is not blocked by this setting.</>
                 )}
               </p>
+              {['offensive', 'child_safety'].includes(newCategory.toLowerCase()) && (
+                <p className="mt-2 text-sm text-gray-500">
+                  For these categories, a word inside a longer name is sent for judgment.
+                </p>
+              )}
+              {existingWord?.match_plain === 1 && (
+                <p className="mt-2 text-sm text-amber-700">
+                  Saving this word replaces its approved substring match with the selected scope.
+                </p>
+              )}
             </div>
 
             {addError && (
@@ -336,7 +367,7 @@ export default function ReservedWords() {
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm">
                           <span className={scopeBadgeClass(word.match_scope)}>
-                            {SCOPE_LABEL[word.match_scope ?? 'whole']}
+                            {matchLabel(word)}
                           </span>
                         </td>
                         <td className="px-6 py-4 text-sm text-gray-500">

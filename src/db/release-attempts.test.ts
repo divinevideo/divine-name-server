@@ -4,9 +4,11 @@
 import { describe, expect, it } from 'vitest'
 import { finalizeReleaseAttempt, prepareReleaseAttempt, rollbackReleaseAttempt, type UsernameReleaseAttempt } from './queries'
 
-function createReleaseDB() {
+function createReleaseDB(options: { canonical?: string; reservedWords?: Array<Record<string, unknown>> } = {}) {
+  const canonical = options.canonical ?? 'alice'
+  const display = canonical === 'alice' ? 'Alice' : canonical
   const username: any = {
-    id: 1, name: 'Alice', username_display: 'Alice', username_canonical: 'alice', pubkey: 'a'.repeat(64),
+    id: 1, name: display, username_display: display, username_canonical: canonical, pubkey: 'a'.repeat(64),
     status: 'active', recyclable: 1, created_at: 1, updated_at: 1, revoked_at: null,
   }
   const attempts = new Map<string, UsernameReleaseAttempt>()
@@ -72,7 +74,7 @@ function createReleaseDB() {
               if (sql.includes("SET state = 'finalized'")) {
                 const [updatedAt, finalizedAt, finalizedBy, attemptId] = params
                 const attempt = attempts.get(attemptId)
-                if (attempt?.state !== 'pending' || username.status !== 'held') return { success: true, meta: { changes: 0 } }
+                if (attempt?.state !== 'pending' || !['held', 'reserved'].includes(username.status)) return { success: true, meta: { changes: 0 } }
                 attempt.state = 'finalized'; attempt.updated_at = updatedAt; attempt.finalized_at = finalizedAt; attempt.finalized_by = finalizedBy
                 return { success: true, meta: { changes: 1 } }
               }
@@ -82,7 +84,7 @@ function createReleaseDB() {
         },
         // D1 allows all() without bind() on a parameterless query, which is how
         // the blocklist is read now that each word carries its own match rules.
-        all: async () => ({ results: [] }),
+        all: async () => ({ results: sql.includes('FROM reserved_words') ? options.reservedWords ?? [] : [] }),
       }
     },
     batch: async (statements: Array<{ run: () => Promise<any> }>) => Promise.all(statements.map(statement => statement.run())),
@@ -112,6 +114,19 @@ describe('release-attempt database state machine', () => {
     expect(username).toMatchObject({ status: 'held', recyclable: 0, pubkey: null })
     expect((await finalizeReleaseAttempt(db, 'delete-attempt-00000002', 'coordinator', 201)).outcome).toBe('replayed')
     expect((await rollbackReleaseAttempt(db, owner, 'alice', 'delete-attempt-00000002')).outcome).toBe('conflict')
+  })
+
+  it('permanently reserves a released name matching a respelling rule', async () => {
+    const { db, username } = createReleaseDB({
+      canonical: 'adm1n',
+      reservedWords: [{
+        word: 'admin', category: 'system', match_scope: 'whole', match_leet: 1,
+        match_digit_expand: 0, match_repeats: 0, match_plain: 0,
+      }],
+    })
+    await prepareReleaseAttempt(db, username.pubkey, 'adm1n', 'delete-attempt-00000005', 500, 100)
+    expect((await finalizeReleaseAttempt(db, 'delete-attempt-00000005', 'coordinator', 200)).outcome).toBe('transitioned')
+    expect(username).toMatchObject({ status: 'reserved', recyclable: 0, pubkey: null })
   })
 
   it('rejects non-owners and a second pending attempt', async () => {

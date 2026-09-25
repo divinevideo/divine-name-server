@@ -35,3 +35,6 @@ CREATE TABLE IF NOT EXISTS jev_call_buckets (
   minute_bucket INTEGER PRIMARY KEY,
   calls INTEGER NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_block_verdicts_version_created
+  ON block_verdicts (blocklist_version, created_at);

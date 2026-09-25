@@ -3,7 +3,8 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { sqliteAvailable, createSqlite, applyMigrations, asD1, type SqliteDb } from './sqlite-test-helpers'
-import { addReservedWord, isReservedWord, reservedWordsMatching } from './queries'
+import { addReservedWord, isReservedWord } from './queries'
+import { pruneBlocklistData } from './block-verdicts'
 
 const describeSqlite = sqliteAvailable() ? describe : describe.skip
 
@@ -95,13 +96,6 @@ describeSqlite('isReservedWord with per-term rules', () => {
     expect(await isReservedWord(db, 'myadmin')).toBe(false)
   })
 
-  it('reports which words matched, for explaining a rejection', async () => {
-    reserve('admin')
-    reserve('min', { match_scope: 'token' })
-    expect((await reservedWordsMatching(db, 'ad-min')).sort()).toEqual(['admin', 'min'])
-    expect(await reservedWordsMatching(db, 'unrelated')).toEqual([])
-  })
-
   it('keeps the stored scope when a word is re-added without one', async () => {
     reserve('admin', { match_scope: 'token' })
     expect(await addReservedWord(db, 'admin', 'system', 'new reason')).toBe('token')
@@ -118,6 +112,15 @@ describeSqlite('isReservedWord with per-term rules', () => {
     expect(await isReservedWord(db, 'myadmin')).toBe(false)
     reserve('admin', { match_plain: 1 })
     expect(await isReservedWord(db, 'myadmin')).toBe(true)
+  })
+
+  it('clears approved substring behavior when a moderator re-adds a word in the form', async () => {
+    reserve('zxqword', { match_scope: 'token', match_plain: 1 })
+    expect(await isReservedWord(db, 'myzxqword')).toBe(true)
+
+    await addReservedWord(db, 'zxqword', 'offensive', 'reviewed', 'token')
+    expect(await isReservedWord(db, 'myzxqword')).toBe(false)
+    expect(await isReservedWord(db, 'my-zxqword')).toBe(true)
   })
 })
 
@@ -160,5 +163,27 @@ describeSqlite('migration 0015', () => {
       "SELECT word, match_scope FROM reserved_words WHERE word IN ('sa','ss','orion')"
     ).all() as Array<{ word: string; match_scope: string }>
     for (const row of rows) expect(row.match_scope, row.word).toBe('whole')
+  })
+
+  it('prunes verdicts for old blocklists and expired entries, and bounds call buckets', async () => {
+    const now = 1_800_000_000
+    sqlite.prepare('UPDATE blocklist_meta SET version = 2 WHERE id = 1').run()
+    sqlite.prepare('INSERT INTO block_verdicts (canonical, blocklist_version, verdict, created_at) VALUES (?, ?, ?, ?)')
+      .run('old-version', 1, 'clear', now)
+    sqlite.prepare('INSERT INTO block_verdicts (canonical, blocklist_version, verdict, created_at) VALUES (?, ?, ?, ?)')
+      .run('expired', 2, 'clear', now - 31 * 24 * 60 * 60)
+    sqlite.prepare('INSERT INTO block_verdicts (canonical, blocklist_version, verdict, created_at) VALUES (?, ?, ?, ?)')
+      .run('recent', 2, 'clear', now - 10)
+    sqlite.prepare('INSERT INTO jev_call_buckets (minute_bucket, calls) VALUES (?, ?)')
+      .run(Math.floor(now / 60) - 24 * 60 - 1, 2)
+    sqlite.prepare('INSERT INTO jev_call_buckets (minute_bucket, calls) VALUES (?, ?)')
+      .run(Math.floor(now / 60) - 1, 2)
+
+    await pruneBlocklistData(asD1(sqlite), now)
+
+    expect(sqlite.prepare('SELECT canonical FROM block_verdicts').all()).toEqual([{ canonical: 'recent' }])
+    expect(sqlite.prepare('SELECT minute_bucket FROM jev_call_buckets').all()).toEqual([
+      { minute_bucket: Math.floor(now / 60) - 1 },
+    ])
   })
 })

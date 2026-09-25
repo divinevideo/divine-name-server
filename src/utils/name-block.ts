@@ -2,13 +2,11 @@
 // ABOUTME: call out. Ambiguous names are judged once, then cached, and refused
 // ABOUTME: if the judgment cannot be made.
 
-import { compileTerm, type ListedTerm } from './blocklist-match'
+import { classifyName, compileTerm, type ListedTerm } from './blocklist-match'
 import { formatReading, readingsFor, type Reading } from './segment'
-import { LEXICON } from './lexicon'
+import { getLexicon } from './lexicon'
 import { JevUnavailable, judgeIntent, judgeProposal, type JevFetch } from './jev'
 import {
-  classifyReserved,
-  countNamesContaining,
   getBlockVerdict,
   getBlocklistVersion,
   listReservedWordsForMatch,
@@ -94,10 +92,11 @@ export async function resolveUsernameBlock(
   canonical: string,
   env: BlockEnv,
   fetchImpl: JevFetch = fetch,
-  now = Math.floor(Date.now() / 1000)
+  now = Math.floor(Date.now() / 1000),
+  allowJudgment = true
 ): Promise<BlockOutcome> {
   const terms = await listReservedWordsForMatch(db)
-  const classification = classifyReserved(canonical, terms)
+  const classification = classifyName(canonical, terms)
   if (classification.verdict === 'blocked') return { kind: 'reserved' }
   if (classification.verdict === 'clear') return { kind: 'clear' }
 
@@ -109,11 +108,11 @@ export async function resolveUsernameBlock(
   const cached = await getBlockVerdict(db, canonical, version)
   if (cached === 'blocked') return { kind: 'reserved' }
   if (cached === 'clear') return { kind: 'clear' }
+  if (!allowJudgment) return { kind: 'unavailable' }
 
   const listed = new Set(terms.map((term) => term.word))
   const cap = parseCap(env.JEV_MAX_CALLS_PER_MINUTE)
   let blocked = false
-  let judged = 0
   let guilty: { word: string; reading: Reading | null } | null = null
 
   const embedded = classification.embedded
@@ -122,7 +121,7 @@ export async function resolveUsernameBlock(
     if (!term) return { kind: 'unavailable' }
     const allowed = await tryConsumeJevCall(db, Math.floor(now / 60), cap)
     if (!allowed) return { kind: 'unavailable' }
-    const pair = readingsFor(canonical, LEXICON, termMatcher(term))
+    const pair = readingsFor(canonical, getLexicon(), termMatcher(term))
     try {
       const answer = await judgeIntent(
         apiKey,
@@ -132,7 +131,6 @@ export async function resolveUsernameBlock(
         formatReading(pair.withoutWord),
         fetchImpl
       )
-      judged++
       if (answer.noul >= threshold) {
         blocked = true
         guilty = { word, reading: pair.withWord }
@@ -144,14 +142,10 @@ export async function resolveUsernameBlock(
     }
   }
 
-  if (!blocked && judged !== embedded.length) return { kind: 'unavailable' }
+  // Reaching this point without a block means every embedded word was judged.
   await putBlockVerdict(db, canonical, version, blocked ? 'blocked' : 'clear', now)
   if (blocked && guilty) {
     await maybePropose(db, env, apiKey, guilty.reading, guilty.word, listed, fetchImpl, now)
   }
   return blocked ? { kind: 'reserved' } : { kind: 'clear' }
-}
-
-export async function proposalImpact(db: D1Database, word: string): Promise<number> {
-  return countNamesContaining(db, word)
 }

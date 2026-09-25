@@ -3,10 +3,8 @@
 
 import {
   JUDGED_CATEGORIES,
-  classifyName,
   plainMatchGlob,
   type ListedTerm,
-  type NameClassification,
   type TermRules,
 } from '../utils/blocklist-match'
 
@@ -40,10 +38,6 @@ export async function listReservedWordsForMatch(db: D1Database): Promise<ListedT
     rules: rulesOf(row),
     judgeEmbeddings: JUDGED_CATEGORIES.has(row.category),
   }))
-}
-
-export function classifyReserved(canonical: string, terms: ListedTerm[]): NameClassification {
-  return classifyName(canonical, terms)
 }
 
 export async function getBlocklistVersion(db: D1Database): Promise<number> {
@@ -82,6 +76,17 @@ export async function putBlockVerdict(
      VALUES (?1, ?2, ?3, ?4)
      ON CONFLICT(canonical, blocklist_version) DO UPDATE SET verdict = excluded.verdict, created_at = excluded.created_at`
   ).bind(canonical, version, verdict, now).run()
+}
+
+/** Keep cache rows current and recent, and bound the rolling call buckets. */
+export async function pruneBlocklistData(db: D1Database, now: number): Promise<void> {
+  const version = await getBlocklistVersion(db)
+  await db.batch([
+    db.prepare('DELETE FROM block_verdicts WHERE blocklist_version <> ? OR created_at < ?')
+      .bind(version, now - 30 * 24 * 60 * 60),
+    db.prepare('DELETE FROM jev_call_buckets WHERE minute_bucket < ?')
+      .bind(Math.floor(now / 60) - 24 * 60),
+  ])
 }
 
 /** Reserves one call in this minute. False when the cap is already met. */
