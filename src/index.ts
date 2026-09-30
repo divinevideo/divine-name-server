@@ -11,6 +11,8 @@ import admin from './routes/admin'
 import publicRoutes from './routes/public'
 import internalAtproto from './routes/internal-atproto'
 import internalDeletion from './routes/internal-deletion'
+import internalImport from './routes/internal-import'
+import { sweepFastlyNames } from './utils/fastly-sweep'
 import { getUsernamesUpdatedSince, expireStaleReservations, expireHolds, getQueuedFastlySyncTasks, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, getStaleReleaseAttempts, rollbackReleaseAttempt } from './db/queries'
 import { syncBatch, parseRelayHints, type UsernameKVData } from './utils/fastly-sync'
 
@@ -22,6 +24,7 @@ type Bindings = {
   FASTLY_API_TOKEN?: string
   FASTLY_STORE_ID?: string
   ATPROTO_SYNC_TOKEN?: string
+  USERNAME_IMPORT_TOKEN?: string
   DELETION_COORDINATOR_TOKEN?: string
   KEYCAST_URL?: string
   KEYCAST_CLIENT_ID?: string
@@ -67,6 +70,7 @@ app.route('/api/admin', admin)
 // Internal service API (service-authenticated bearer token)
 app.route('/api/internal', internalAtproto)
 app.route('/api/internal', internalDeletion)
+app.route('/api/internal', internalImport)
 
 // NIP-05
 app.route('', nip05)
@@ -201,5 +205,6 @@ export default {
     )
 
     console.log(`Cron Fastly reconciliation: ${recentlyChanged.length} recent changes, ${queuedTasks.length} queued, ${results.synced} synced, ${results.deleted} deleted, ${results.failed} failed`)
+    await sweepFastlyNames(env)
   }
 }

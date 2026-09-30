@@ -11,6 +11,8 @@ import { verifyAccessJwt, AccessValidationError } from '../auth/cf-access'
 import { syncUsernameToFastly, deleteUsernameFromFastly, syncBatch, parseRelayHints, readUsernameFromFastly, syncAndVerifyUsername, usernameKVDataMatches } from '../utils/fastly-sync'
 import { sendAssignmentNotificationEmail } from '../utils/email'
 import authRoutes from './auth'
+import { compareFastlyName, compareFastlyPage } from '../utils/fastly-drift'
+import { reconcileUsernameFastly } from '../utils/username-fastly-reconcile'
 
 const MAX_ADMIN_NOTES_LENGTH = 5000
 const PENDING_RELEASE_OWNER_ERROR =
@@ -990,6 +992,47 @@ admin.get('/export/csv', async (c) => {
   } catch (error) {
     console.error('Export error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+// Read-only drift finder; scan both KV (orphans) and D1 (missing keys).
+admin.post('/sync/fastly/compare', async (c) => {
+  const body = await c.req.json().catch(() => null)
+  if (!body || !['kv', 'd1'].includes(body.source) ||
+      (body.cursor != null && (typeof body.cursor !== 'string' || body.cursor.length > 2048)) ||
+      (body.source === 'd1' && body.cursor != null && !/^\d+$/.test(body.cursor)) ||
+      (body.limit !== undefined && (!Number.isInteger(body.limit) || body.limit < 1 || body.limit > 100))) {
+    return c.json({ ok: false, error: 'Expected source kv or d1, a valid cursor, and limit 1–100' }, 400)
+  }
+  try {
+    return c.json({ ok: true, ...(await compareFastlyPage(c.env, body.source, body.cursor ?? null, body.limit ?? 100)) })
+  } catch {
+    return c.json({ ok: false, error: 'Comparison failed; retry this page' }, 502)
+  }
+})
+
+// Operator repair is explicit and re-reads D1; orphaned keys need separate
+// provenance review and are never automatically imported or deleted here.
+admin.post('/sync/fastly/repair', async (c) => {
+  const body = await c.req.json().catch(() => null)
+  if (!body || typeof body.name !== 'string' || body.name.length === 0 || body.name.length > 63 ||
+      (body.dry_run !== undefined && typeof body.dry_run !== 'boolean')) {
+    return c.json({ ok: false, error: 'Expected a name and optional boolean dry_run' }, 400)
+  }
+  try {
+    const name = body.name.toLowerCase()
+    const row = await getUsernameByName(c.env.DB, name)
+    if (!row || row.status !== 'active' || !row.pubkey) {
+      return c.json({ ok: false, error: 'Repair requires an active D1 owner' }, 409)
+    }
+    if (body.dry_run !== false) {
+      return c.json({ ok: true, dry_run: true, difference: await compareFastlyName(c.env, name) })
+    }
+    await reconcileUsernameFastly(c.env, name)
+    const difference = await compareFastlyName(c.env, name)
+    return c.json({ ok: difference === null, dry_run: false, difference }, difference === null ? 200 : 502)
+  } catch {
+    return c.json({ ok: false, error: 'Repair failed; retry after checking D1 ownership' }, 502)
   }
 })
 

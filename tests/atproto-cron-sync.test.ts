@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Username } from '../src/db/queries'
+vi.mock('../src/utils/fastly-sweep', () => ({ sweepFastlyNames: vi.fn() }))
 
 const { getUsernamesUpdatedSince, expireStaleReservations, expireHolds, getStaleReleaseAttempts, rollbackReleaseAttempt, getQueuedFastlySyncTasks, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, syncBatch } = vi.hoisted(() => ({
   getUsernamesUpdatedSince: vi.fn<() => Promise<Username[]>>(),
