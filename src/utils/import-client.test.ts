@@ -19,4 +19,8 @@ describe('importer API boundary', () => {
     expect(fetcher).not.toHaveBeenCalled()
     await expect(importName('https://names.example.test', 'test', { name: 'alice', pubkey: 'a'.repeat(64) })).rejects.toThrow('HTTP 500')
   })
+  it('counts a rejected source row without treating it as an insertion', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 400 })))
+    expect(await importName('https://names.example.test', 'test', { name: 'alice', pubkey: 'bad' })).toBe('invalid')
+  })
 })

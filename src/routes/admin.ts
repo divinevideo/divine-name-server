@@ -1022,8 +1022,8 @@ admin.post('/sync/fastly/repair', async (c) => {
   try {
     const name = body.name.toLowerCase()
     const row = await getUsernameByName(c.env.DB, name)
-    if (!row || row.status !== 'active' || !row.pubkey) {
-      return c.json({ ok: false, error: 'Repair requires an active D1 owner' }, 409)
+    if (!row) {
+      return c.json({ ok: false, error: 'Repair requires an existing D1 row' }, 409)
     }
     if (body.dry_run !== false) {
       return c.json({ ok: true, dry_run: true, difference: await compareFastlyName(c.env, name) })

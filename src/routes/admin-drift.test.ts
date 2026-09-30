@@ -42,6 +42,16 @@ describe.skipIf(!sqliteAvailable())('admin drift tools', () => {
     expect(JSON.parse(String(put?.[1]?.body))).toMatchObject({ pubkey: 'a'.repeat(64), status: 'active' })
     expect(sqlite.prepare('SELECT * FROM fastly_sync_queue').all()).toHaveLength(0)
   })
+  it('removes stale inactive entries using D1 authority without adopting orphan keys', async () => {
+    seedUsername(sqlite, { name: 'held-name', status: 'held', pubkey: 'b'.repeat(64) })
+    const fetcher = vi.fn(async (_url: string, options?: RequestInit) => {
+      return new Response('', { status: options?.method === 'DELETE' ? 200 : 404 })
+    })
+    vi.stubGlobal('fetch', fetcher)
+    expect((await request('repair', { name: 'held-name', dry_run: false })).status).toBe(200)
+    expect(fetcher.mock.calls[0][1]?.method).toBe('DELETE')
+    expect(sqlite.prepare('SELECT status FROM usernames WHERE name = ?').get('held-name')).toEqual({ status: 'held' })
+  })
   it.each([{ source: 'other' }, { source: 'd1', cursor: '12garbage' }, { source: 'kv', limit: 101 }, { source: 'kv', limit: 1.5 }])('rejects invalid comparison input', async body => {
     expect((await request('compare', body)).status).toBe(400)
   })

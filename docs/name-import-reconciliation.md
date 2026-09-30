@@ -25,8 +25,10 @@ separate operator review, not silent backfill conversion.
 has no direct Fastly or Wrangler write path. Inject PostgreSQL credentials and,
 for `--apply`, `NAME_SERVER_URL` plus `USERNAME_IMPORT_TOKEN` using the credential
 manager. Default execution and `--dry-run` read candidates only; `--limit=N`
-bounds the source query. `--apply` registers candidates; conflicts are counted
-and skipped. The obsolete `--skip-fastly` flag is rejected. No credentials are
+bounds the source query. `--apply` registers candidates; conflicts and invalid
+rows are counted and skipped. Malformed vanity JSON falls back to the original
+username. Authentication/service errors stop the run with a safe HTTP status
+when available. The obsolete `--skip-fastly` flag is rejected. No credentials are
 loaded from sibling `.env` files and reports contain aggregate counts only.
 
 ## Operator comparison and repair
@@ -44,7 +46,8 @@ These endpoints use the existing admin hostname and authentication boundary:
 - `POST /api/admin/sync/fastly/repair` with `{"name":"creator-example"}`
   defaults to read-only comparison. Explicit `"dry_run":false` reconciles the
   current D1 state, verifies the result, and retains unsuccessful writes in the
-  retry queue. It requires an active D1 owner at entry. If ownership changes
+  retry queue. It requires an existing D1 row at entry; inactive rows have their
+  stale KV entries deleted. If ownership changes
   during repair, reconciliation follows that newer D1 state.
 
 Comparison is a paginated observation, not an atomic snapshot of either store.

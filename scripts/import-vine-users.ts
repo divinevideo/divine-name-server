@@ -35,24 +35,34 @@ async function main() {
   }
   let inserted = 0
   let conflicts = 0
+  let invalid = 0
   for (const row of rows) {
     let vanity = row.username
     if (row.vanity_urls) {
-      const vanities = typeof row.vanity_urls === 'string' ? JSON.parse(row.vanity_urls) : row.vanity_urls
-      if (Array.isArray(vanities) && typeof vanities[0] === 'string') vanity = vanities[0]
+      try {
+        const vanities = typeof row.vanity_urls === 'string' ? JSON.parse(row.vanity_urls) : row.vanity_urls
+        if (Array.isArray(vanities) && typeof vanities[0] === 'string') vanity = vanities[0]
+      } catch {
+        // Invalid archived vanity JSON retains the original username fallback.
+      }
     }
     const name = String(vanity || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 63).replace(/^-+|-+$/g, '') || `vine-${row.vine_user_id}`
     if (apply) {
       const outcome = await importName(serverUrl!, token!, { name, pubkey: row.pubkey })
       if (outcome === 'inserted') inserted++
-      else conflicts++
+      else if (outcome === 'conflict') conflicts++
+      else invalid++
     }
   }
-  console.log(JSON.stringify({ dry_run: !apply, candidates: rows.length, inserted, conflicts }))
+  console.log(JSON.stringify({ dry_run: !apply, candidates: rows.length, inserted, conflicts, invalid }))
 }
 
-main().catch(() => {
-  console.error('Import failed; check inputs and service availability before retrying')
+main().catch(error => {
+  // Only emit the controlled status-code error, never driver/provider text
+  // which can contain source data or connection credentials.
+  const message = error instanceof Error && /^Name import failed: HTTP \d{3}$/.test(error.message)
+    ? error.message : 'Import failed; check inputs and service availability before retrying'
+  console.error(message)
   process.exitCode = 1
 })
