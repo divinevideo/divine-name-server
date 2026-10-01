@@ -3,6 +3,7 @@
 // ABOUTME: Credentials must be injected by a credential manager; defaults to dry-run.
 import pg from 'pg'
 import { importName } from '../src/utils/import-client'
+import { deriveImportName } from '../src/utils/vine-import'
 
 async function main() {
   const args = process.argv.slice(2)
@@ -37,19 +38,8 @@ async function main() {
   let conflicts = 0
   let invalid = 0
   for (const row of rows) {
-    let vanity = row.username
-    if (row.vanity_urls) {
-      try {
-        const vanities = typeof row.vanity_urls === 'string' ? JSON.parse(row.vanity_urls) : row.vanity_urls
-        if (Array.isArray(vanities) && typeof vanities[0] === 'string') vanity = vanities[0]
-      } catch {
-        // Invalid archived vanity JSON retains the original username fallback.
-      }
-    }
-    const name = String(vanity || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 63).replace(/^-+|-+$/g, '') || `vine-${row.vine_user_id}`
     if (apply) {
-      const outcome = await importName(serverUrl!, token!, { name, pubkey: row.pubkey })
+      const outcome = await importName(serverUrl!, token!, { name: deriveImportName(row), pubkey: row.pubkey })
       if (outcome === 'inserted') inserted++
       else if (outcome === 'conflict') conflicts++
       else invalid++

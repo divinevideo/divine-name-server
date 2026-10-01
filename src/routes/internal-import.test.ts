@@ -34,6 +34,14 @@ describe.skipIf(!sqliteAvailable())('ownership-checked import', () => {
     expect((await request({ name: 'alice', pubkey })).status).toBe(409)
     expect(reconcileUsernameFastly).toHaveBeenCalledTimes(1)
   })
+  // The importer sends the creator's own casing and relies on this: the name is
+  // shown as sent (profile pages, the by-pubkey lookup) and only the canonical
+  // form is lowercased.
+  it('stores the name as sent for display and lowercases only the canonical form', async () => {
+    expect((await request({ name: 'JaneDoe', pubkey })).status).toBe(201)
+    expect(sqlite.prepare('SELECT name, username_display, username_canonical FROM usernames').get())
+      .toEqual({ name: 'janedoe', username_display: 'JaneDoe', username_canonical: 'janedoe' })
+  })
   // The row is committed before the sync runs. Answering 500 would make the
   // caller stop, and its retry could only replay as a 409 conflict.
   it('still answers 201 when syncing the committed name to Fastly fails', async () => {
