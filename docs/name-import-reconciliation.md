@@ -16,11 +16,12 @@ Example request (synthetic public key):
 and failures remain queued for cron retry. 409 means a name is taken/reserved, the
 pubkey already owns a name, or the pubkey's owner has completed an account
 deletion (an import never rebuilds a public identity that deletion removed); it
-never updates an existing row or syncs a skipped assignment. A caller may choose
-a suffix for a name collision, but must not keep trying suffixes when the pubkey
-already owns a name. Replaying a successful import returns 409 and leaves
-ownership unchanged. Current DNS-label validation applies to new imports; legacy
-names with dots or underscores need separate operator review, not silent
+never updates an existing row or syncs a skipped assignment. The response does
+not say which of these applied, so a caller cannot tell a name collision from a
+pubkey that is already settled: treat every 409 as a skipped assignment and do
+not retry it with a suffix. Replaying a successful import also returns 409 and
+leaves ownership unchanged. Current DNS-label validation applies to new imports;
+legacy names with dots or underscores need separate operator review, not silent
 backfill conversion.
 
 `scripts/import-vine-users.ts` now calls that endpoint for each assignment. It
