@@ -50,8 +50,14 @@ These endpoints use the existing admin hostname and authentication boundary:
   Follow its returned cursor until null, even if a page has no differences.
 - Repeat with `source: "d1"` to find active D1 rows with missing KV keys.
   The two scans have separate cursor domains. Neither scan writes data. Errors
-  fail the page rather than count a failed read as a match. Results name the
-  affected key and reason, without copying public keys or provider errors.
+  fail the page rather than count a failed read as a match, and the cause is
+  logged. A stored value that is not a JSON object is reported as drift
+  (`invalid-kv-data` for an active name, `no-d1-row` or `inactive-d1-row` when no
+  active row owns the key) instead of failing the page. A key that differs from a
+  name only by case, such as `user:Alice` next to `alice`, is not the key the edge
+  resolves, so it is reported as `no-d1-row` and left to operator review. Results
+  name the affected key and reason, without copying public keys or provider
+  errors.
 - `POST /api/admin/sync/fastly/repair` with `{"name":"creator-example"}`
   defaults to read-only comparison. Explicit `"dry_run":false` reconciles the
   current D1 state, verifies the result, and retains unsuccessful writes in the

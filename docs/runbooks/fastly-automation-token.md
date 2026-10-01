@@ -87,7 +87,7 @@ Expected response shape:
 
 The final page returns `"cursor": null` and `"remaining": 0`. Treat the rotation as verified only after every page returns `"failed": 0`. If any page reports failures, inspect Worker logs for `Fastly API error` entries. `401` means the token value is wrong, expired, revoked, or lacks the required Fastly access.
 
-The next hourly cron can confirm that the incremental path still runs, but it is not a full backfill. The scheduled Worker syncs recently changed users from the overlap window plus queued retry tasks, so unchanged active users are not re-pushed by cron alone.
+The next hourly cron can confirm that the incremental path still runs, but it is not a full backfill. The scheduled Worker syncs recently changed users from the overlap window plus queued retry tasks, and also re-pushes up to 100 names per run from a rolling sweep of the whole table. Unchanged active users are therefore covered by cron only as the sweep reaches them (about six weeks for 100,000 names), so use the paginated backfill above for an explicit result. A wrong token also leaves up to 100 swept names queued per hourly run; they clear on their own after the first successful write.
 
 ## Runtime Sync Paths
 
@@ -96,7 +96,9 @@ The same secret is used by these code paths:
 - Public claim flow: `src/routes/username.ts` updates D1, then writes `user:{canonical_username}` to Fastly KV with `executionCtx.waitUntil`.
 - Admin assignment and revoke flow: `src/routes/admin.ts` writes or deletes Fastly KV after D1 changes.
 - Admin backfill: `POST /api/admin/sync/fastly` pushes one page of active D1 usernames with pubkeys to Fastly KV and returns `failed`, `remaining`, and `cursor` fields for paging through the full backfill.
-- Hourly cron: `src/index.ts` incrementally syncs recently changed D1 usernames and queued retry tasks to Fastly KV every hour.
+- Hourly cron: `src/index.ts` incrementally syncs recently changed D1 usernames and queued retry tasks to Fastly KV every hour, then sweeps 100 more names from a durable cursor over the whole table (`src/utils/fastly-sweep.ts`).
+- Import API: `POST /api/internal/username/import` (`src/routes/internal-import.ts`) writes the name it has just inserted.
+- Drift tools: `POST /api/admin/sync/fastly/compare` never writes; it reads Fastly KV and D1. `POST /api/admin/sync/fastly/repair` writes from D1 only when called with `"dry_run": false`.
 - Vine import script: `scripts/import-vine-users.ts` calls the ownership-checked name-server import API with an injected `USERNAME_IMPORT_TOKEN`; it has no direct Fastly write path. See [import and reconciliation](../name-import-reconciliation.md).
 
 The mutation paths are intentionally non-blocking. A user or admin request can succeed even if the Fastly write fails later, so use the admin backfill endpoint or logs to confirm the rotation.
