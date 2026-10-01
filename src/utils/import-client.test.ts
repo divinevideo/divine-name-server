@@ -47,7 +47,7 @@ describe('describeImportFailure', () => {
     expect(describeImportFailure(new ImportServiceError('Name import failed: HTTP 502'))).toBe('Name import failed: HTTP 502')
   })
   it('never prints driver or provider text, which can carry source data or credentials', () => {
-    const message = describeImportFailure(new Error('password authentication failed for postgres://importer:secret@db.example.test'))
+    const message = describeImportFailure(new Error('password authentication failed for user "importer" on db.example.test'))
     expect(message).toBe('Import failed; check inputs and service availability before retrying')
     expect(describeImportFailure('not an error')).toBe(message)
   })
