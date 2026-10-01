@@ -33,6 +33,16 @@ describe.skipIf(!sqliteAvailable())('ownership-checked import', () => {
     expect((await request({ name: 'alice', pubkey })).status).toBe(409)
     expect(reconcileUsernameFastly).toHaveBeenCalledTimes(1)
   })
+  // The row is committed before the sync runs. Answering 500 would make the
+  // caller stop, and its retry could only replay as a 409 conflict.
+  it('still answers 201 when syncing the committed name to Fastly fails', async () => {
+    vi.mocked(reconcileUsernameFastly).mockRejectedValueOnce(new Error('D1 unavailable'))
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect((await request({ name: 'alice', pubkey })).status).toBe(201)
+    expect(sqlite.prepare('SELECT name, status FROM usernames').all()).toEqual([{ name: 'alice', status: 'active' }])
+    expect(log).toHaveBeenCalledWith('Username import KV sync deferred for alice:', 'D1 unavailable')
+    log.mockRestore()
+  })
   it.each(['active', 'reserved', 'held', 'burned', 'revoked', 'pending-release'])('cannot replace %s ownership', async status => {
     seedUsername(sqlite, { name: 'alice', pubkey: 'b'.repeat(64), status })
     expect((await request({ name: 'alice', pubkey })).status).toBe(409)

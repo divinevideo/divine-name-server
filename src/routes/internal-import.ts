@@ -31,7 +31,14 @@ internalImport.post('/username/import', async (c) => {
     if (result.meta.changes === 0) {
       return c.json({ ok: false, error: 'Name is taken, reserved, or pubkey already owns a name' }, 409)
     }
-    await reconcileUsernameFastly(c.env, canonical)
+    try {
+      await reconcileUsernameFastly(c.env, canonical)
+    } catch (error) {
+      // The row is committed, so this is a 201. KV catches up through the retry
+      // queue or the six-hour cron window; a 500 would only make the caller stop,
+      // and its replay would come back as a 409.
+      console.error(`Username import KV sync deferred for ${canonical}:`, error instanceof Error ? error.message : 'unknown error')
+    }
     return c.json({ ok: true, name: canonical, claim_source: 'vine-import' }, 201)
   } catch (error) {
     if (error instanceof UsernameValidationError || error instanceof PubkeyValidationError || error instanceof RelayValidationError) {
