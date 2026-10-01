@@ -7,12 +7,13 @@ import {
   getQueuedFastlySyncTask,
   getUsernameByName,
   markFastlySyncTaskFailures,
+  type UsernameSyncState,
 } from '../db/queries'
 import { deleteUsernameFromFastly, parseRelayHints, syncAndVerifyUsername, type FastlyEnv, type SyncItem } from './fastly-sync'
 
 type ReconcileEnv = FastlyEnv & { DB: D1Database }
 
-export function desiredUsernameSyncItem(username: Awaited<ReturnType<typeof getUsernameByName>>, canonical: string): SyncItem {
+export function desiredUsernameSyncItem(username: UsernameSyncState | null, canonical: string): SyncItem {
   if (username?.status === 'active' && username.pubkey) {
     return {
       username: canonical,

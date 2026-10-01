@@ -40,6 +40,28 @@ export interface Username {
   atproto_state: 'pending' | 'ready' | 'failed' | 'disabled' | null
 }
 
+export type UsernameSyncState = Pick<Username, 'pubkey' | 'relays' | 'status' | 'atproto_did' | 'atproto_state'>
+
+export async function getUsernameSyncStates(db: D1Database, names: string[]): Promise<Map<string, UsernameSyncState | null>> {
+  if (names.length === 0) return new Map()
+  // JSON expansion uses one bounded parameter and one D1 statement for the
+  // queue page, rather than exhausting the invocation's query budget on reads.
+  // The correlated lookup preserves getUsernameByName's canonical/legacy rule.
+  const rows = await db.prepare(`
+    SELECT requested.value AS username, u.pubkey, u.relays, u.status, u.atproto_did, u.atproto_state
+    FROM json_each(?) AS requested
+    LEFT JOIN usernames u ON u.id = (
+      SELECT id FROM usernames
+      WHERE username_canonical = LOWER(requested.value) OR name = requested.value
+      LIMIT 1
+    )
+  `).bind(JSON.stringify(names)).all<Omit<UsernameSyncState, 'status'> & { username: string; status: Username['status'] | null }>()
+  return new Map(rows.results.map(row => [row.username, row.status === null ? null : {
+    pubkey: row.pubkey, relays: row.relays, status: row.status,
+    atproto_did: row.atproto_did, atproto_state: row.atproto_state,
+  }]))
+}
+
 export interface UsernameReleaseHistoryRow {
   id: number
   username_canonical: string

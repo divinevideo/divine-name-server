@@ -14,7 +14,7 @@ import internalDeletion from './routes/internal-deletion'
 import internalImport from './routes/internal-import'
 import { sweepFastlyNames } from './utils/fastly-sweep'
 import { desiredUsernameSyncItem } from './utils/username-fastly-reconcile'
-import { getUsernameByName, getUsernamesUpdatedSince, expireStaleReservations, expireHolds, getQueuedFastlySyncTasks, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, getStaleReleaseAttempts, rollbackReleaseAttempt } from './db/queries'
+import { getUsernameSyncStates, getUsernamesUpdatedSince, expireStaleReservations, expireHolds, getQueuedFastlySyncTasks, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, getStaleReleaseAttempts, rollbackReleaseAttempt } from './db/queries'
 import { syncBatch, parseRelayHints, type UsernameKVData } from './utils/fastly-sync'
 
 type Bindings = {
@@ -151,10 +151,11 @@ export default {
       data?: UsernameKVData
     }>()
 
+    const queuedStates = await getUsernameSyncStates(env.DB, queuedTasks.map(task => task.username))
     for (const task of queuedTasks) {
       // Queue payloads can outlive their D1 state. A retry identifies work,
       // not ownership: derive its write/delete from today's authoritative row.
-      itemsByUsername.set(task.username, desiredUsernameSyncItem(await getUsernameByName(env.DB, task.username), task.username))
+      itemsByUsername.set(task.username, desiredUsernameSyncItem(queuedStates.get(task.username) ?? null, task.username))
     }
 
     for (const user of recentlyChanged) {
