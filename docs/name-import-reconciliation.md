@@ -26,12 +26,18 @@ backfill conversion.
 `scripts/import-vine-users.ts` now calls that endpoint for each assignment. It
 has no direct Fastly or Wrangler write path. Inject PostgreSQL credentials and,
 for `--apply`, `NAME_SERVER_URL` plus `USERNAME_IMPORT_TOKEN` using the credential
-manager. Default execution and `--dry-run` read candidates only; `--limit=N`
-bounds the source query. `--apply` registers candidates; conflicts and invalid
-rows are counted and skipped. Malformed vanity JSON falls back to the original
-username. Authentication/service errors stop the run with a safe HTTP status
-when available. The obsolete `--skip-fastly` flag is rejected. No credentials are
-loaded from sibling `.env` files and reports contain aggregate counts only.
+manager. Default execution and `--dry-run` read candidates only and report just
+the candidate count; `--limit=N` bounds the source query. `--apply` registers
+candidates one request at a time, each with a 30-second deadline; conflicts and
+invalid rows are counted and skipped. Malformed vanity JSON falls back to the
+original username. A service or network error stops the run with a fixed message
+(the HTTP status when there was one) and prints the counts so far with
+`"stopped": true`. There is no resume point: a re-run starts from the first
+candidate, and names already imported return 409, so they are counted as
+conflicts. Usage and configuration mistakes, such as the rejected obsolete
+`--skip-fastly` flag, print their own fixed message; driver and provider errors
+are never printed. No credentials are loaded from sibling `.env` files and
+reports contain aggregate counts only.
 
 ## Operator comparison and repair
 

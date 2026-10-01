@@ -2,27 +2,28 @@
 // ABOUTME: Imports archived users through the name server's ownership-checked API.
 // ABOUTME: Credentials must be injected by a credential manager; defaults to dry-run.
 import pg from 'pg'
-import { importName } from '../src/utils/import-client'
-import { deriveImportName } from '../src/utils/vine-import'
+import { describeImportFailure, importName, importUrl, ImportUsageError } from '../src/utils/import-client'
+import { importRows, type ImportRow } from '../src/utils/vine-import'
 
 async function main() {
   const args = process.argv.slice(2)
   if (args.some(arg => !['--apply', '--dry-run'].includes(arg) && !/^--limit=\d+$/.test(arg))) {
-    throw new Error('Usage: bun scripts/import-vine-users.ts [--apply | --dry-run] [--limit=N]')
+    throw new ImportUsageError('Usage: bun scripts/import-vine-users.ts [--apply | --dry-run] [--limit=N]')
   }
-  if (args.includes('--apply') && args.includes('--dry-run')) throw new Error('Choose apply or dry-run')
+  if (args.includes('--apply') && args.includes('--dry-run')) throw new ImportUsageError('Choose apply or dry-run')
   const apply = args.includes('--apply')
   const limitArg = args.find(arg => arg.startsWith('--limit='))
   const limit = limitArg ? Number(limitArg.split('=')[1]) : null
-  if (limit !== null && (!Number.isSafeInteger(limit) || limit < 1)) throw new Error('Invalid limit')
+  if (limit !== null && (!Number.isSafeInteger(limit) || limit < 1)) throw new ImportUsageError('Invalid limit')
   const databaseUrl = process.env.POSTGRES_URL || process.env.DATABASE_URL
   const serverUrl = process.env.NAME_SERVER_URL
   const token = process.env.USERNAME_IMPORT_TOKEN
-  if (!databaseUrl) throw new Error('Inject POSTGRES_URL or DATABASE_URL')
-  if (apply && (!serverUrl || !token)) throw new Error('Inject NAME_SERVER_URL and USERNAME_IMPORT_TOKEN for apply')
+  if (!databaseUrl) throw new ImportUsageError('Inject POSTGRES_URL or DATABASE_URL')
+  if (apply && (!serverUrl || !token)) throw new ImportUsageError('Inject NAME_SERVER_URL and USERNAME_IMPORT_TOKEN for apply')
+  if (apply) importUrl(serverUrl!) // a bad URL is a usage error, reported before the archive is read
   const client = new pg.Client({ connectionString: databaseUrl })
   await client.connect()
-  let rows
+  let rows: ImportRow[]
   try {
     const result = await client.query(`
       SELECT i.vine_user_id, i.username, i.pubkey, u.vanity_urls
@@ -34,25 +35,20 @@ async function main() {
   } finally {
     await client.end()
   }
-  let inserted = 0
-  let conflicts = 0
-  let invalid = 0
-  for (const row of rows) {
-    if (apply) {
-      const outcome = await importName(serverUrl!, token!, { name: deriveImportName(row), pubkey: row.pubkey })
-      if (outcome === 'inserted') inserted++
-      else if (outcome === 'conflict') conflicts++
-      else invalid++
-    }
+  if (!apply) {
+    // Nothing is sent in a dry run, so there are no outcome counts to report.
+    console.log(JSON.stringify({ dry_run: true, candidates: rows.length }))
+    return
   }
-  console.log(JSON.stringify({ dry_run: !apply, candidates: rows.length, inserted, conflicts, invalid }))
+  const { counts, processed, error } = await importRows(rows, assignment => importName(serverUrl!, token!, assignment))
+  // Counts are printed even when the run stops, so an operator can see what was
+  // already imported. A re-run starts from the first candidate and counts those
+  // names as conflicts.
+  console.log(JSON.stringify({ dry_run: false, candidates: rows.length, processed, ...counts, stopped: error !== undefined }))
+  if (error !== undefined) throw error
 }
 
 main().catch(error => {
-  // Only emit the controlled status-code error, never driver/provider text
-  // which can contain source data or connection credentials.
-  const message = error instanceof Error && /^Name import failed: HTTP \d{3}$/.test(error.message)
-    ? error.message : 'Import failed; check inputs and service availability before retrying'
-  console.error(message)
+  console.error(describeImportFailure(error))
   process.exitCode = 1
 })
