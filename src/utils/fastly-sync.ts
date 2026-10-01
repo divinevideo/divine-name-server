@@ -240,7 +240,17 @@ export async function syncAndVerifyUsername(
     return { success: true, verified: false, error }
   }
 
-  if (!usernameKVDataMatches(verifyResult.data, data)) {
+  let matches: boolean
+  try {
+    matches = usernameKVDataMatches(verifyResult.data, data)
+  } catch {
+    // A stored value with no usable relays list cannot be compared. Report it as
+    // unverified so callers queue the retry, instead of throwing past them.
+    const error = 'Fastly verify failed: stored value is malformed'
+    console.error(`${error} for ${username}`)
+    return { success: true, verified: false, error }
+  }
+  if (!matches) {
     const expected = JSON.stringify(normalizeUsernameKVData(data))
     const actual = JSON.stringify(normalizeUsernameKVData(verifyResult.data))
     const error = `Fastly verify failed: wrote ${expected} but read ${actual}`

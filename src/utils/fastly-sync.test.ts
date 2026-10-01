@@ -231,4 +231,21 @@ describe('syncAndVerifyUsername', () => {
     expect(result.success).toBe(false)
     expect(result.verified).toBe(false)
   })
+
+  // Callers (reconcile, the sweep) queue an unverified write for retry; an
+  // exception here would skip that and stop the caller on this name.
+  it.each([
+    ['no relays list', { pubkey: 'abc123', status: 'active' }],
+    ['a relays value that is not a list', { pubkey: 'abc123', status: 'active', relays: 7 }],
+  ])('should return verified:false instead of throwing when the read-back has %s', async (_label, stored) => {
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => '' })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => stored })
+
+    const result = await syncAndVerifyUsername(env, 'alice', data)
+
+    expect(result.success).toBe(true)
+    expect(result.verified).toBe(false)
+    expect(result.error).toContain('malformed')
+  })
 })
