@@ -7,10 +7,14 @@ type DriftEnv = FastlyEnv & { DB: D1Database }
 export async function compareFastlyName(env: DriftEnv, name: string) {
   const row = await getUsernameByName(env.DB, name)
   const actual = await readUsernameFromFastly(env, name)
-  if (!actual.success) throw new Error('Fastly comparison read failed')
-  if (!row) return actual.data ? { name, reason: 'no-d1-row' } : null
-  if (row.status !== 'active' || !row.pubkey) return actual.data ? { name, reason: 'inactive-d1-row' } : null
-  if (!actual.data) return { name, reason: 'missing-kv-key' }
+  // A stored value that is not a JSON object is still a key that exists. Report it
+  // as drift: failing the page instead would wedge the scan on that key forever.
+  if (!actual.success && !actual.invalidBody) throw new Error(`Fastly comparison read failed for ${name}`)
+  const present = actual.invalidBody === true || actual.data !== undefined
+  if (!row) return present ? { name, reason: 'no-d1-row' } : null
+  if (row.status !== 'active' || !row.pubkey) return present ? { name, reason: 'inactive-d1-row' } : null
+  if (!present) return { name, reason: 'missing-kv-key' }
+  if (actual.invalidBody || actual.data === undefined) return { name, reason: 'invalid-kv-data' }
   const expected = {
     pubkey: row.pubkey, relays: parseRelayHints(row.relays), status: 'active' as const,
     atproto_did: row.atproto_did, atproto_state: row.atproto_state,

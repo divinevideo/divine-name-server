@@ -55,4 +55,16 @@ describe.skipIf(!sqliteAvailable())('admin drift tools', () => {
   it.each([{ source: 'other' }, { source: 'd1', cursor: '12garbage' }, { source: 'kv', limit: 101 }, { source: 'kv', limit: 1.5 }])('rejects invalid comparison input', async body => {
     expect((await request('compare', body)).status).toBe(400)
   })
+  it('logs why a comparison or repair failed while answering with a generic 502', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 503 })))
+    const compare = await request('compare', { source: 'kv' })
+    expect(compare.status).toBe(502)
+    expect(await compare.json()).toEqual({ ok: false, error: 'Comparison failed; retry this page' })
+    expect(log).toHaveBeenCalledWith('Fastly comparison failed:', 'Fastly key listing failed')
+    const repair = await request('repair', { name: 'alice' })
+    expect(repair.status).toBe(502)
+    expect(log).toHaveBeenCalledWith('Fastly repair failed:', 'Fastly comparison read failed for alice')
+    log.mockRestore()
+  })
 })

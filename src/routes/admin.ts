@@ -1006,7 +1006,9 @@ admin.post('/sync/fastly/compare', async (c) => {
   }
   try {
     return c.json({ ok: true, ...(await compareFastlyPage(c.env, body.source, body.cursor ?? null, body.limit ?? 100)) })
-  } catch {
+  } catch (error) {
+    // The response stays generic; the log says whether it was configuration, Fastly or D1.
+    console.error('Fastly comparison failed:', error instanceof Error ? error.message : 'unknown error')
     return c.json({ ok: false, error: 'Comparison failed; retry this page' }, 502)
   }
 })
@@ -1031,7 +1033,8 @@ admin.post('/sync/fastly/repair', async (c) => {
     await reconcileUsernameFastly(c.env, name)
     const difference = await compareFastlyName(c.env, name)
     return c.json({ ok: difference === null, dry_run: false, difference }, difference === null ? 200 : 502)
-  } catch {
+  } catch (error) {
+    console.error('Fastly repair failed:', error instanceof Error ? error.message : 'unknown error')
     return c.json({ ok: false, error: 'Repair failed; retry after checking D1 ownership' }, 502)
   }
 })

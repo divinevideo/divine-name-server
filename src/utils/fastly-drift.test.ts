@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { compareFastlyPage } from './fastly-drift'
+import { compareFastlyName, compareFastlyPage } from './fastly-drift'
 import { createSqliteD1, seedUsername, sqliteAvailable, type SqliteDb } from '../db/sqlite-test-helpers'
 
 describe.skipIf(!sqliteAvailable())('read-only drift comparison', () => {
@@ -40,5 +40,30 @@ describe.skipIf(!sqliteAvailable())('read-only drift comparison', () => {
     expect((await compareFastlyPage(env, 'd1', null, 100)).differences).toEqual([])
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ pubkey, status: 'active' })))
     expect((await compareFastlyPage(env, 'd1', null, 100)).differences).toEqual([{ name: 'alice', reason: 'invalid-kv-data' }])
+  })
+
+  // A stored value that is not a JSON object is drift to report, not a read
+  // failure: failing the page would wedge the scan on that key for every retry.
+  describe.each(['plain-text-value', '', 'null', '[]', '"alice"'])('stored value %j', body => {
+    const storedValue = () => vi.fn(async (url: string | URL, _options?: RequestInit) =>
+      new URL(url).pathname.endsWith('/keys')
+        ? Response.json({ data: ['user:alice', 'user:orphan'] })
+        : new Response(body, { status: 200 }))
+
+    it('is invalid data for an active row and an orphan key in the kv scan', async () => {
+      vi.stubGlobal('fetch', storedValue())
+      expect(await compareFastlyPage(env, 'kv', null, 100)).toEqual({ checked: 2, cursor: null, differences: [
+        { name: 'alice', reason: 'invalid-kv-data' }, { name: 'orphan', reason: 'no-d1-row' },
+      ] })
+    })
+    it('is invalid data for an active row in the d1 scan', async () => {
+      vi.stubGlobal('fetch', storedValue())
+      expect((await compareFastlyPage(env, 'd1', null, 100)).differences).toEqual([{ name: 'alice', reason: 'invalid-kv-data' }])
+    })
+    it('is still a stale key for an inactive row', async () => {
+      seedUsername(sqlite, { name: 'held-name', status: 'held', pubkey: null })
+      vi.stubGlobal('fetch', storedValue())
+      expect(await compareFastlyName(env, 'held-name')).toEqual({ name: 'held-name', reason: 'inactive-d1-row' })
+    })
   })
 })

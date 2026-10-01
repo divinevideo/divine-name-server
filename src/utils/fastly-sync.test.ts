@@ -149,6 +149,22 @@ describe('readUsernameFromFastly', () => {
 
     expect(result.success).toBe(false)
     expect(result.error).toContain('500')
+    expect(result.invalidBody).toBeUndefined()
+  })
+
+  it.each([
+    ['text that is not JSON', async () => { throw new SyntaxError('Unexpected token') }],
+    ['JSON null', async () => null],
+    ['a JSON array', async () => []],
+    ['a JSON string', async () => 'alice'],
+  ])('should flag a stored value that is %s as an invalid body, not a missing key', async (_label, json) => {
+    mockFetch.mockResolvedValue({ ok: true, status: 200, json })
+
+    const result = await readUsernameFromFastly(env, 'alice')
+
+    expect(result.success).toBe(false)
+    expect(result.invalidBody).toBe(true)
+    expect(result.data).toBeUndefined()
   })
 
   it('should return error when config is missing', async () => {
