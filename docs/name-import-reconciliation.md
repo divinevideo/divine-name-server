@@ -13,13 +13,15 @@ Example request (synthetic public key):
 ```
 
 201 means D1 inserted an active `vine-import` row. KV synchronization is attempted
-and failures remain queued for cron retry. 409 means a name is taken/reserved or
-the pubkey already owns a name; it never updates an existing row or syncs a
-skipped assignment. A caller may choose a suffix for a name collision, but must
-not keep trying suffixes when the pubkey already owns a name. Replaying a
-successful import returns 409 and leaves ownership unchanged. Current DNS-label
-validation applies to new imports; legacy names with dots or underscores need
-separate operator review, not silent backfill conversion.
+and failures remain queued for cron retry. 409 means a name is taken/reserved, the
+pubkey already owns a name, or the pubkey's owner has completed an account
+deletion (an import never rebuilds a public identity that deletion removed); it
+never updates an existing row or syncs a skipped assignment. A caller may choose
+a suffix for a name collision, but must not keep trying suffixes when the pubkey
+already owns a name. Replaying a successful import returns 409 and leaves
+ownership unchanged. Current DNS-label validation applies to new imports; legacy
+names with dots or underscores need separate operator review, not silent
+backfill conversion.
 
 `scripts/import-vine-users.ts` now calls that endpoint for each assignment. It
 has no direct Fastly or Wrangler write path. Inject PostgreSQL credentials and,

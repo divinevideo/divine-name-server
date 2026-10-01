@@ -21,15 +21,21 @@ internalImport.post('/username/import', async (c) => {
     const now = Math.floor(Date.now() / 1000)
     // Ignore every unique conflict, including the one-owned-name-per-pubkey
     // index. Imports must never release, reclaim or update an existing row.
+    // A pubkey whose owner finalized an account deletion is refused as well:
+    // finalizing clears the released row's pubkey, so that index no longer sees
+    // it, and an import has no consent to rebuild the identity the deletion removed.
     const result = await c.env.DB.prepare(`
       INSERT INTO usernames (name, username_display, username_canonical, pubkey, relays,
         status, claim_source, created_at, updated_at, claimed_at)
       SELECT ?, ?, ?, ?, ?, 'active', 'vine-import', ?, ?, ?
       WHERE NOT EXISTS (SELECT 1 FROM reserved_words WHERE word = ?)
+        AND NOT EXISTS (
+          SELECT 1 FROM username_release_attempts WHERE state = 'finalized' AND LOWER(pubkey) = LOWER(?)
+        )
       ON CONFLICT DO NOTHING
-    `).bind(canonical, display, canonical, pubkey, JSON.stringify(body.relays ?? []), now, now, now, canonical).run()
+    `).bind(canonical, display, canonical, pubkey, JSON.stringify(body.relays ?? []), now, now, now, canonical, pubkey).run()
     if (result.meta.changes === 0) {
-      return c.json({ ok: false, error: 'Name is taken, reserved, or pubkey already owns a name' }, 409)
+      return c.json({ ok: false, error: 'Name is taken or reserved, or the pubkey cannot receive an imported name' }, 409)
     }
     try {
       await reconcileUsernameFastly(c.env, canonical)

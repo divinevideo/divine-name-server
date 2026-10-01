@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import internalImport from './internal-import'
+import { finalizeReleaseAttempt, prepareReleaseAttempt } from '../db/queries'
 import { createSqliteD1, seedUsername, sqliteAvailable, type SqliteDb } from '../db/sqlite-test-helpers'
 import { reconcileUsernameFastly } from '../utils/username-fastly-reconcile'
 
@@ -48,6 +49,25 @@ describe.skipIf(!sqliteAvailable())('ownership-checked import', () => {
     expect((await request({ name: 'alice', pubkey })).status).toBe(409)
     expect(sqlite.prepare('SELECT status, pubkey FROM usernames').get()).toEqual({ status, pubkey: 'b'.repeat(64) })
     expect(reconcileUsernameFastly).not.toHaveBeenCalled()
+  })
+  // Finalizing a deletion clears the released row's pubkey, so the one-owned-name
+  // index no longer sees it. The import has no consent to rebuild a public
+  // identity the deletion removed, so the attempt ledger has to stop it.
+  it('does not recreate a public name for a pubkey whose owner deleted their account', async () => {
+    seedUsername(sqlite, { name: 'cool_dude', pubkey })
+    const attemptId = 'delete-attempt-00000001'
+    const expiresAt = Math.floor(Date.now() / 1000) + 3600
+    expect((await prepareReleaseAttempt(db, pubkey, 'cool_dude', attemptId, expiresAt)).outcome).toBe('transitioned')
+    expect((await finalizeReleaseAttempt(db, attemptId, 'deletion-coordinator')).outcome).toBe('transitioned')
+    expect(sqlite.prepare('SELECT status, pubkey FROM usernames').get()).toEqual({ status: 'held', pubkey: null })
+
+    expect((await request({ name: 'cool-dude', pubkey })).status).toBe(409)
+    expect((await request({ name: 'cool-dude', pubkey: pubkey.toUpperCase() })).status).toBe(409)
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM usernames WHERE status = 'active'").get()).toEqual({ n: 0 })
+    expect(reconcileUsernameFastly).not.toHaveBeenCalled()
+
+    // Another pubkey importing the same name is unaffected.
+    expect((await request({ name: 'cool-dude', pubkey: 'b'.repeat(64) })).status).toBe(201)
   })
   it('preserves the one-owned-name-per-pubkey constraint and reserved words', async () => {
     seedUsername(sqlite, { name: 'alice', pubkey })
