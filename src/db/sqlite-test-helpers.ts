@@ -124,9 +124,13 @@ export function asD1(db: SqliteDb): D1Database {
     } as unknown as D1PreparedStatement
   }
 
-  return {
+  const binding = {
     prepare: (sql: string) => prepare(sql),
-    batch: async (statements: D1PreparedStatement[]) => {
+    // A method, not an arrow function: workerd's D1 binding throws when `batch`
+    // is called detached from it (`const batched = db.batch; batched(...)`), so
+    // the stand-in must too, or that call passes every test and fails in production.
+    async batch(this: unknown, statements: D1PreparedStatement[]) {
+      if (this !== binding) throw new TypeError('D1 batch must be called on the database binding')
       db.exec('BEGIN')
       try {
         const results = []
@@ -138,7 +142,8 @@ export function asD1(db: SqliteDb): D1Database {
         throw error
       }
     },
-  } as unknown as D1Database
+  }
+  return binding as unknown as D1Database
 }
 
 /** Fresh in-memory database with the full migration chain applied. */
