@@ -83,7 +83,11 @@ describe.skipIf(!sqliteAvailable())('ownership-checked import', () => {
     expect((await request({ name: 'admin', pubkey: 'b'.repeat(64) })).status).toBe(409)
     expect(reconcileUsernameFastly).not.toHaveBeenCalled()
   })
-  it.each([{ name: 'a.b', pubkey }, { name: 'alice', pubkey: 'bad' }, { name: 'alice', pubkey, relays: 'bad' }])('rejects invalid input', async body => {
+  it.each([
+    ['a name with a dot', { name: 'a.b', pubkey }],
+    ['a malformed pubkey', { name: 'alice', pubkey: 'bad' }],
+    ['relays that are not a list', { name: 'alice', pubkey, relays: 'bad' }],
+  ])('rejects invalid input: %s', async (_label, body) => {
     expect((await request(body)).status).toBe(400)
     expect(reconcileUsernameFastly).not.toHaveBeenCalled()
   })

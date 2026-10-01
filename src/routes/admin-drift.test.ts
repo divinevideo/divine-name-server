@@ -52,7 +52,12 @@ describe.skipIf(!sqliteAvailable())('admin drift tools', () => {
     expect(fetcher.mock.calls[0][1]?.method).toBe('DELETE')
     expect(sqlite.prepare('SELECT status FROM usernames WHERE name = ?').get('held-name')).toEqual({ status: 'held' })
   })
-  it.each([{ source: 'other' }, { source: 'd1', cursor: '12garbage' }, { source: 'kv', limit: 101 }, { source: 'kv', limit: 1.5 }])('rejects invalid comparison input', async body => {
+  it.each([
+    ['an unknown source', { source: 'other' }],
+    ['a d1 cursor that is not a number', { source: 'd1', cursor: '12garbage' }],
+    ['a limit over 100', { source: 'kv', limit: 101 }],
+    ['a limit that is not a whole number', { source: 'kv', limit: 1.5 }],
+  ])('rejects invalid comparison input: %s', async (_label, body) => {
     expect((await request('compare', body)).status).toBe(400)
   })
   it('logs why a comparison or repair failed while answering with a generic 502', async () => {
