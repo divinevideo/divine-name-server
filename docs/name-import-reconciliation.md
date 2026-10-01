@@ -44,12 +44,15 @@ Before a live `--apply`, verify that the script's derived labels agree with the
 names already published in the archived profiles. The script preserves case,
 strips combining accents and converts other non-ASCII/non-alphanumeric
 characters to collapsed hyphens; this is not proof that another publisher used
-the same rule. A mismatched label must be reviewed rather than bulk-registered.
-For an operator-reviewed backfill, the import API accepts an explicitly chosen
-name and validates it without silently rewriting punctuation. Already-owned
-pubkeys return 409, so a later attempt with a different label cannot repair a
-wrong initial assignment. The code change does not run or authorize that live
-backfill or settle names that require a different publishing rule.
+the same rule. The derivation is `deriveImportName` in `src/utils/vine-import.ts`;
+run it over the archive rows to list the labels to check, since the script's own
+report carries counts only. A mismatched label must be reviewed rather than
+bulk-registered. For an operator-reviewed backfill, the import API accepts an
+explicitly chosen name and validates it without silently rewriting punctuation.
+Already-owned pubkeys return 409, so a later attempt with a different label
+cannot repair a wrong initial assignment. The code change does not run or
+authorize that live backfill or settle names that require a different
+publishing rule.
 
 ## Operator comparison and repair
 
