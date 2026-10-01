@@ -65,14 +65,31 @@ An operator must verify provenance before backfilling through the import API.
 Do not derive a new owner from a mismatched KV entry.
 
 Migration `0015_add_fastly_sweep_cursor.sql` stores full-table sweep progress.
-After migration and deployment, each existing cron invocation reconciles up to
-100 D1 rows (including nonactive rows), re-reading current ownership for each
-write. At the end it wraps to the beginning. KV failures are queued; database
-failures preserve the page for retry. At an hourly schedule, 100,000 rows take
-about 42 days per full pass, in addition to the existing six-hour delta and retry
-queue. This is eventual self-healing, not a ban on writes made with other
+Once it is applied, each hourly cron invocation also reconciles up to 100 D1 rows
+(including nonactive rows), after the existing recent-change and retry-queue
+sync, re-reading current ownership for each write. At the end of the table it
+wraps to the beginning. KV failures are queued; database failures preserve the
+page for retry. At an hourly schedule, 100,000 rows take about 42 days per full
+pass. This is eventual self-healing, not a ban on writes made with other
 services' Fastly credentials.
 
-This change has no visual UI changes. **Live repair/backfill, credential
-provisioning, applying the migration and deployment are operator steps awaiting
-Daniel's authorization; this code change does not execute them.**
+## Rollout order
+
+Merging to `main` deploys the Worker automatically, and the deploy workflow does
+not apply D1 migrations. The sweep reads its cursor table on every cron run, so
+apply the migration before merging:
+
+1. Apply `0015_add_fastly_sweep_cursor.sql` to the remote D1 database:
+   `npx wrangler d1 migrations apply divine-name-server-db --remote`.
+2. Provision the import token: `npx wrangler secret put USERNAME_IMPORT_TOKEN`.
+   Until it is set the import route answers 503.
+3. Merge. From the next hourly run the cron also sweeps.
+4. Run the live repair and the imported-name backfill as separate operator
+   steps. Neither is part of the deploy.
+
+Steps 1, 2 and 4 are operator actions that this change does not perform. If the
+Worker is deployed before step 1, each hourly run completes its normal
+reconciliation and then fails with `no such table: fastly_sweep_cursor` until the
+migration is applied. Nothing else is affected, and the sweep starts from the
+first row once the table exists. The sweep has no switch of its own: it runs
+whenever the Fastly credentials are configured.
