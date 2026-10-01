@@ -29,7 +29,7 @@ function sourceName(row: ImportRow): string {
  * form, so lowercasing here would drop the creator's casing from their profile.
  */
 export function deriveImportName(row: ImportRow): string {
-  return sourceName(row).normalize('NFD').replace(/[̀-ͯ]/g, '')
+  return sourceName(row).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[^A-Za-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 63).replace(/^-+|-+$/g, '') || `vine-${row.vine_user_id}`
 }
 
