@@ -633,8 +633,7 @@ export async function markFastlySyncTaskFailures(
 ): Promise<void> {
   if (failures.length === 0) return
 
-  const batched = (db as D1Database & { batch?: (statements: D1PreparedStatement[]) => Promise<unknown> }).batch
-  if (typeof batched === 'function') {
+  if (typeof (db as { batch?: unknown }).batch === 'function') {
     const statements = failures.map((failure) =>
       db.prepare(
         `UPDATE fastly_sync_queue
@@ -642,7 +641,8 @@ export async function markFastlySyncTaskFailures(
          WHERE username_canonical = ?`
       ).bind(now, failure.error, failure.username)
     )
-    await batched(statements)
+    // Call it on the binding: workerd's D1 `batch` throws when detached from it.
+    await db.batch(statements)
     return
   }
 
