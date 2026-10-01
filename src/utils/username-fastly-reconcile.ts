@@ -12,7 +12,7 @@ import { deleteUsernameFromFastly, parseRelayHints, syncAndVerifyUsername, type 
 
 type ReconcileEnv = FastlyEnv & { DB: D1Database }
 
-function desiredItem(username: Awaited<ReturnType<typeof getUsernameByName>>, canonical: string): SyncItem {
+export function desiredUsernameSyncItem(username: Awaited<ReturnType<typeof getUsernameByName>>, canonical: string): SyncItem {
   if (username?.status === 'active' && username.pubkey) {
     return {
       username: canonical,
@@ -36,7 +36,7 @@ function sameDesiredState(left: SyncItem, right: SyncItem): boolean {
 export async function reconcileUsernameFastly(env: ReconcileEnv, canonical: string): Promise<void> {
   let lastError = 'Fastly state changed during reconciliation'
   for (let pass = 0; pass < 3; pass += 1) {
-    const before = desiredItem(await getUsernameByName(env.DB, canonical), canonical)
+    const before = desiredUsernameSyncItem(await getUsernameByName(env.DB, canonical), canonical)
     await enqueueFastlySyncTask(env.DB, before)
     const queued = await getQueuedFastlySyncTask(env.DB, canonical)
 
@@ -51,7 +51,7 @@ export async function reconcileUsernameFastly(env: ReconcileEnv, canonical: stri
       if (!operationSucceeded) lastError = result.error || 'Fastly delete failed'
     }
 
-    const after = desiredItem(await getUsernameByName(env.DB, canonical), canonical)
+    const after = desiredUsernameSyncItem(await getUsernameByName(env.DB, canonical), canonical)
     if (sameDesiredState(before, after)) {
       if (queued && operationSucceeded) {
         await clearFastlySyncTasks(env.DB, [{ username: canonical, generation: queued.generation }])
@@ -62,6 +62,6 @@ export async function reconcileUsernameFastly(env: ReconcileEnv, canonical: stri
     }
   }
 
-  const latest = desiredItem(await getUsernameByName(env.DB, canonical), canonical)
+  const latest = desiredUsernameSyncItem(await getUsernameByName(env.DB, canonical), canonical)
   await enqueueFastlySyncTask(env.DB, latest)
 }

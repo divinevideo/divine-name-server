@@ -9,6 +9,26 @@ describe.skipIf(!sqliteAvailable())('sweeping while Fastly misbehaves', () => {
   const bob = 'b'.repeat(64)
   afterEach(() => vi.unstubAllGlobals())
 
+  it('compares an in-sync 100-name page without queue writes or redundant KV writes', async () => {
+    const { db, sqlite } = createSqliteD1()
+    try {
+      for (let i = 0; i < 100; i++) seedUsername(sqlite, { name: `name-${i}`, pubkey: i.toString(16).padStart(64, '0') })
+      let statements = 0
+      const prepare = db.prepare.bind(db)
+      db.prepare = (sql: string) => { statements++; return prepare(sql) }
+      const fetcher = vi.fn(async (url: string | URL, options?: RequestInit) => {
+        expect(options?.method).toBe('GET')
+        const id = Number(decodeURIComponent(new URL(url).pathname).split('name-')[1])
+        return Response.json({ pubkey: id.toString(16).padStart(64, '0'), relays: [], status: 'active' })
+      })
+      vi.stubGlobal('fetch', fetcher)
+      await sweepFastlyNames({ DB: db, FASTLY_API_TOKEN: 'synthetic-token', FASTLY_STORE_ID: 'test-store' })
+      expect(statements).toBe(103)
+      expect(fetcher).toHaveBeenCalledTimes(100)
+      expect(sqlite.prepare('SELECT * FROM fastly_sync_queue').all()).toEqual([])
+    } finally { sqlite.close() }
+  })
+
   it('keeps sweeping past a name whose stored value cannot be verified, leaving it queued', async () => {
     const { db, sqlite } = createSqliteD1()
     try {
@@ -35,7 +55,7 @@ describe.skipIf(!sqliteAvailable())('sweeping while Fastly misbehaves', () => {
     try {
       seedUsername(sqlite, { name: 'alice', pubkey: alice })
       seedUsername(sqlite, { name: 'bob', pubkey: bob })
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('denied', { status: 401 })))
+      vi.stubGlobal('fetch', vi.fn(async () => new Response('denied', { status: 401 })))
       await sweepFastlyNames({ DB: db, FASTLY_API_TOKEN: 'synthetic-token', FASTLY_STORE_ID: 'test-store' })
       expect(sqlite.prepare('SELECT username_canonical, action, attempt_count FROM fastly_sync_queue ORDER BY username_canonical').all()).toEqual([
         { username_canonical: 'alice', action: 'sync', attempt_count: 1 },
@@ -49,7 +69,7 @@ describe.skipIf(!sqliteAvailable())('sweeping while Fastly misbehaves', () => {
     const { db, sqlite } = createSqliteD1()
     try {
       seedUsername(sqlite, { name: 'gone', status: 'held', pubkey: null })
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('denied', { status: 401 })))
+      vi.stubGlobal('fetch', vi.fn(async () => new Response('denied', { status: 401 })))
       await sweepFastlyNames({ DB: db, FASTLY_API_TOKEN: 'synthetic-token', FASTLY_STORE_ID: 'test-store' })
       expect(sqlite.prepare('SELECT username_canonical, action, attempt_count FROM fastly_sync_queue').all())
         .toEqual([{ username_canonical: 'gone', action: 'delete', attempt_count: 1 }])

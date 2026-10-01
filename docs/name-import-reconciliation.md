@@ -40,6 +40,17 @@ conflicts. Usage and configuration mistakes, such as the rejected obsolete
 are never printed. No credentials are loaded from sibling `.env` files and
 reports contain aggregate counts only.
 
+Before a live `--apply`, verify that the script's derived labels agree with the
+names already published in the archived profiles. The script preserves case,
+strips combining accents and converts other non-ASCII/non-alphanumeric
+characters to collapsed hyphens; this is not proof that another publisher used
+the same rule. A mismatched label must be reviewed rather than bulk-registered.
+For an operator-reviewed backfill, the import API accepts an explicitly chosen
+name and validates it without silently rewriting punctuation. Already-owned
+pubkeys return 409, so a later attempt with a different label cannot repair a
+wrong initial assignment. The code change does not run or authorize that live
+backfill or settle names that require a different publishing rule.
+
 ## Operator comparison and repair
 
 These endpoints use the existing admin hostname and authentication boundary:
@@ -73,11 +84,17 @@ Do not derive a new owner from a mismatched KV entry.
 Migration `0015_add_fastly_sweep_cursor.sql` stores full-table sweep progress.
 Once it is applied, each hourly cron invocation also reconciles up to 100 D1 rows
 (including nonactive rows), after the existing recent-change and retry-queue
-sync, re-reading current ownership for each write. At the end of the table it
+sync. It first compares each key with current D1 state and only reconciles
+differences or unsuccessful reads, re-reading current ownership for each write.
+An already matching page causes no cache or retry-queue writes. At the end of the table it
 wraps to the beginning. KV failures are queued; database failures preserve the
 page for retry. At an hourly schedule, 100,000 rows take about 42 days per full
 pass. This is eventual self-healing, not a ban on writes made with other
 services' Fastly credentials.
+
+The retry queue identifies names needing work, not authoritative payloads. Cron
+re-reads D1 for queued names even outside the recent-change window and clears
+only the queue generation it observed, preserving concurrent newer enqueues.
 
 ## Rollout order
 

@@ -13,7 +13,8 @@ import internalAtproto from './routes/internal-atproto'
 import internalDeletion from './routes/internal-deletion'
 import internalImport from './routes/internal-import'
 import { sweepFastlyNames } from './utils/fastly-sweep'
-import { getUsernamesUpdatedSince, expireStaleReservations, expireHolds, getQueuedFastlySyncTasks, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, getStaleReleaseAttempts, rollbackReleaseAttempt } from './db/queries'
+import { desiredUsernameSyncItem } from './utils/username-fastly-reconcile'
+import { getUsernameByName, getUsernamesUpdatedSince, expireStaleReservations, expireHolds, getQueuedFastlySyncTasks, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, getStaleReleaseAttempts, rollbackReleaseAttempt } from './db/queries'
 import { syncBatch, parseRelayHints, type UsernameKVData } from './utils/fastly-sync'
 
 type Bindings = {
@@ -151,7 +152,9 @@ export default {
     }>()
 
     for (const task of queuedTasks) {
-      itemsByUsername.set(task.username, task)
+      // Queue payloads can outlive their D1 state. A retry identifies work,
+      // not ownership: derive its write/delete from today's authoritative row.
+      itemsByUsername.set(task.username, desiredUsernameSyncItem(await getUsernameByName(env.DB, task.username), task.username))
     }
 
     for (const user of recentlyChanged) {
@@ -188,9 +191,9 @@ export default {
       const queued = queuedByUsername.get(result.username)
       const attempted = itemsByUsername.get(result.username)
       if (!queued || !attempted) return []
-      const sameAction = queued.action === attempted.action
-      const samePayload = JSON.stringify(queued.data || null) === JSON.stringify(attempted.data || null)
-      return sameAction && samePayload ? [{ username: queued.username, generation: queued.generation }] : []
+      // Retire the observed generation even when its old payload was superseded
+      // by D1. The generation predicate preserves a newer concurrent enqueue.
+      return [{ username: queued.username, generation: queued.generation }]
     })
     await clearFastlySyncTasks(env.DB, completedQueuedTasks)
     for (const failure of results.failures) {

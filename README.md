@@ -58,7 +58,7 @@ A scheduled handler runs hourly (`0 * * * *`):
 2. Returns deletion-held names to circulation after one year.
 3. Restores abandoned pending username releases after their recorded 72-hour recovery deadline; expiry never burns a name.
 4. Reconciles usernames changed in the last six hours, plus anything left in the durable Fastly sync queue, into Fastly KV — syncing active names and deleting revoked, burned, pending-release, or held names. Versioned queue entries prevent an older edge operation from clearing newer desired state.
-5. Sweeps 100 more names per run from a durable cursor over the whole `usernames` table (migration `0015`), re-reading each name's current D1 state and writing or deleting its KV entry, so drift older than the six-hour window heals eventually. See [Ownership-checked imports and name reconciliation](docs/name-import-reconciliation.md) for the rollout order.
+5. Compares 100 more names per run from a durable cursor over the whole `usernames` table (migration `0015`), re-reading each name's current D1 state and reconciling only differences or failed reads, so drift older than the six-hour window heals eventually. Retry-queue payloads are also re-derived from current D1 state. See [Ownership-checked imports and name reconciliation](docs/name-import-reconciliation.md) for the rollout order.
 
 ## Getting started
 

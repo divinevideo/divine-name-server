@@ -3,7 +3,8 @@ import type { Username } from '../src/db/queries'
 import { sweepFastlyNames } from '../src/utils/fastly-sweep'
 vi.mock('../src/utils/fastly-sweep', () => ({ sweepFastlyNames: vi.fn() }))
 
-const { getUsernamesUpdatedSince, expireStaleReservations, expireHolds, getStaleReleaseAttempts, rollbackReleaseAttempt, getQueuedFastlySyncTasks, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, syncBatch } = vi.hoisted(() => ({
+const { getUsernameByName, getUsernamesUpdatedSince, expireStaleReservations, expireHolds, getStaleReleaseAttempts, rollbackReleaseAttempt, getQueuedFastlySyncTasks, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, syncBatch } = vi.hoisted(() => ({
+  getUsernameByName: vi.fn(),
   getUsernamesUpdatedSince: vi.fn<() => Promise<Username[]>>(),
   expireStaleReservations: vi.fn<() => Promise<number>>(),
   expireHolds: vi.fn<() => Promise<number>>(),
@@ -20,6 +21,7 @@ vi.mock('../src/db/queries', async () => {
   const actual = await vi.importActual<typeof import('../src/db/queries')>('../src/db/queries')
   return {
     ...actual,
+    getUsernameByName,
     getUsernamesUpdatedSince,
     expireStaleReservations,
     expireHolds,
@@ -49,6 +51,7 @@ describe('ATProto cron sync payloads', () => {
     expireHolds.mockResolvedValue(0)
     getStaleReleaseAttempts.mockResolvedValue([])
     getQueuedFastlySyncTasks.mockResolvedValue([])
+    getUsernameByName.mockResolvedValue(null)
     syncBatch.mockResolvedValue({ synced: 1, deleted: 0, failed: 0, errors: [], successes: [], failures: [] })
   })
 

@@ -4,6 +4,7 @@ import { reconcileUsernameFastly } from './username-fastly-reconcile'
 import { createSqliteD1, seedUsername, sqliteAvailable } from '../db/sqlite-test-helpers'
 
 vi.mock('./username-fastly-reconcile', () => ({ reconcileUsernameFastly: vi.fn().mockResolvedValue(undefined) }))
+vi.mock('./fastly-drift', () => ({ compareFastlyName: vi.fn().mockResolvedValue({ reason: 'missing-kv-key' }) }))
 afterEach(() => vi.clearAllMocks())
 describe.skipIf(!sqliteAvailable())('durable full-table sweep', () => {
   it('revisits old active and nonactive names across bounded pages and wraps', async () => {
