@@ -42,6 +42,20 @@ describe.skipIf(!sqliteAvailable())('read-only drift comparison', () => {
     expect((await compareFastlyPage(env, 'd1', null, 100)).differences).toEqual([{ name: 'alice', reason: 'invalid-kv-data' }])
   })
 
+  // getUsernameByName folds case, but the key the scan reads is exactly user:<name>.
+  // Another spelling of an existing name is not the key the edge resolves, so repair
+  // (which acts on the canonical key) can never converge it: it is an orphan to review.
+  it.each([pubkey, 'b'.repeat(64)])('reports a key that differs from its name only by case as an orphan (owner %s)', async stored => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL, _options?: RequestInit) => {
+      const pathname = new URL(url).pathname
+      if (pathname.endsWith('/keys')) return Response.json({ data: ['user:alice', 'user:Alice'] })
+      return Response.json({ pubkey: pathname.endsWith('user%3AAlice') ? stored : pubkey, relays: [], status: 'active' })
+    }))
+    expect(await compareFastlyPage(env, 'kv', null, 100)).toEqual({ checked: 2, cursor: null, differences: [
+      { name: 'Alice', reason: 'no-d1-row' },
+    ] })
+  })
+
   // A stored value that is not a JSON object is drift to report, not a read
   // failure: failing the page would wedge the scan on that key for every retry.
   describe.each(['plain-text-value', '', 'null', '[]', '"alice"'])('stored value %j', body => {

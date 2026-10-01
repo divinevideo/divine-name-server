@@ -5,7 +5,11 @@ import { readUsernameFromFastly, parseRelayHints, usernameKVDataMatches, type Fa
 type DriftEnv = FastlyEnv & { DB: D1Database }
 
 export async function compareFastlyName(env: DriftEnv, name: string) {
-  const row = await getUsernameByName(env.DB, name)
+  const found = await getUsernameByName(env.DB, name)
+  // The lookup folds case, but the key read below is exactly user:<name>. Another
+  // spelling of an existing name (user:Alice for alice) is not the key the edge
+  // resolves and repair cannot converge it, so it has no row of its own: an orphan.
+  const row = found && (found.username_canonical || found.name) === name ? found : null
   const actual = await readUsernameFromFastly(env, name)
   // A stored value that is not a JSON object is still a key that exists. Report it
   // as drift: failing the page instead would wedge the scan on that key forever.
