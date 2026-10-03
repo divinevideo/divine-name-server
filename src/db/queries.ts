@@ -642,7 +642,7 @@ export async function markFastlySyncTaskFailures(
          WHERE username_canonical = ?`
       ).bind(now, failure.error, failure.username)
     )
-    await batched(statements)
+    await db.batch(statements)
     return
   }
 
