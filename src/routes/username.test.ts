@@ -281,7 +281,11 @@ function createMockDB(initialUsernames: any[] = []) {
               return { success: true, meta: { changes: 1 } }
             }
           }
-        }
+        },
+        // D1 allows all() without bind() on a parameterless query, which is how
+        // the blocklist is read now that each word carries its own match rules.
+        // No rows means nothing is reserved, matching first()'s default above.
+        all: async () => ({ results: [] }),
       }
     },
     batch: async (statements: Array<{ run: () => Promise<any> }>) => Promise.all(statements.map(statement => statement.run())),
@@ -742,10 +746,21 @@ describe('Public Username Endpoints', () => {
       ;(db as any).prepare = (sql: string) => {
         const stmt = originalPrepare(sql)
         if (sql.includes('reserved_words')) {
+          // The blocklist is read whole, without bind, so each word can be
+          // matched under its own rules. `admin` at the default scope blocks
+          // the name `admin`.
+          const row = {
+            word: 'admin',
+            match_scope: 'whole',
+            match_leet: 1,
+            match_digit_expand: 0,
+            match_repeats: 0,
+          }
           return {
+            all: async () => ({ results: [row] }),
             bind: (...params: any[]) => ({
               first: async () => ({ word: params[0] }),
-              all: async () => ({ results: [{ word: params[0] }] }),
+              all: async () => ({ results: [row] }),
               run: async () => ({ success: true, meta: { changes: 0 } })
             })
           }

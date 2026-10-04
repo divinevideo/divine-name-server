@@ -21,6 +21,10 @@ routes = [
 # NAME_PRICE_SATS: minimum sat amount required to reserve a name (default: 1000)
 # INVITE_FAUCET_URL: base URL of the invite code faucet service (e.g. "https://faucet.example.com")
 # Set via wrangler secret put SENDGRID_API_KEY
+# Judgment calls: wrangler secret put TYPESAFE_API_KEY
+# JEV_BLOCK_MIN is the measured block threshold (0-1]. Unset refuses ambiguous names.
+# JEV_PROPOSE_MIN is the separate word-only proposal gate. Unset proposes nothing.
+# JEV_MAX_CALLS_PER_MINUTE bounds spend. Default 30.
 # Recoverable username-release finalization: wrangler secret put DELETION_COORDINATOR_TOKEN
 [vars]
 KEYCAST_URL = "https://login.divine.video"

@@ -250,7 +250,11 @@ function createE2EMockDB(initialUsernames: Partial<MockUsername>[] = []) {
               return { success: true, meta: { changes: 0 } }
             }
           }
-        }
+        },
+        // D1 allows all() without bind() on a parameterless query, which is how
+        // the blocklist is read now that each word carries its own match rules.
+        // No rows means nothing is reserved, matching first()'s default above.
+        all: async () => ({ results: [] }),
       }
     },
 

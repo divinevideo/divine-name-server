@@ -1,24 +1,46 @@
 // ABOUTME: Admin page displaying all reserved words that cannot be claimed as usernames
 // ABOUTME: Groups words by category with add/delete functionality
 import { useState, useEffect } from 'react'
-import { getReservedWords, addReservedWord, deleteReservedWord } from '../api/client'
-import type { ReservedWord } from '../types'
+import { getReservedWords, addReservedWord, deleteReservedWord, getBlockProposals, decideBlockProposal, type BlockProposal } from '../api/client'
+import type { ReservedWord, MatchScope } from '../types'
 import {
   USERNAME_INPUT_PATTERN,
   USERNAME_INPUT_TITLE,
   USERNAME_MAX_LENGTH,
 } from '../constants/username'
 
+const SCOPE_LABEL: Record<MatchScope, string> = {
+  whole: 'whole name',
+  token: 'separate word',
+}
+
+function scopeBadgeClass(scope: MatchScope | undefined): string {
+  const base = 'inline-flex rounded-full px-2 py-0.5 text-xs font-medium '
+  if (scope === 'token') return base + 'bg-blue-100 text-blue-800'
+  return base + 'bg-gray-100 text-gray-700'
+}
+
+function matchLabel(word: ReservedWord): string {
+  return word.match_plain === 1
+    ? 'substring (approved)'
+    : SCOPE_LABEL[word.match_scope ?? 'whole']
+}
+
 export default function ReservedWords() {
   const [words, setWords] = useState<ReservedWord[]>([])
+  const [proposals, setProposals] = useState<BlockProposal[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [proposalAction, setProposalAction] = useState<string | null>(null)
 
   // Add form state
   const [showAddForm, setShowAddForm] = useState(false)
   const [newWord, setNewWord] = useState('')
   const [newCategory, setNewCategory] = useState('')
   const [newReason, setNewReason] = useState('')
+  // Starts at the safe end. A word added without thinking about scope blocks
+  // only the name that is that word, which is what the old behaviour was.
+  const [newScope, setNewScope] = useState<MatchScope>('whole')
   const [addLoading, setAddLoading] = useState(false)
   const [addError, setAddError] = useState<string | null>(null)
 
@@ -33,12 +55,30 @@ export default function ReservedWords() {
 
   const loadWords = async () => {
     try {
-      const data = await getReservedWords()
+      const [data, pending] = await Promise.all([getReservedWords(), getBlockProposals()])
       setWords(data)
+      setProposals(pending)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load reserved words')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleProposalDecision = async (word: string, decision: 'approve' | 'reject') => {
+    setError(null)
+    setProposalAction(word)
+    try {
+      const result = await decideBlockProposal(word, decision)
+      if (!result.ok) {
+        setError(result.error || `Failed to ${decision} proposal`)
+        return
+      }
+      await loadWords()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Failed to ${decision} proposal`)
+    } finally {
+      setProposalAction(null)
     }
   }
 
@@ -48,11 +88,12 @@ export default function ReservedWords() {
     setAddError(null)
 
     try {
-      const result = await addReservedWord(newWord, newCategory, newReason || undefined)
+      const result = await addReservedWord(newWord, newCategory, newReason || undefined, newScope)
       if (result.ok) {
         setNewWord('')
         setNewCategory('')
         setNewReason('')
+        setNewScope('whole')
         setShowAddForm(false)
         await loadWords()
       } else {
@@ -95,6 +136,7 @@ export default function ReservedWords() {
 
   // Get unique categories for the dropdown
   const existingCategories = [...new Set(words.map(w => w.category))].sort()
+  const existingWord = words.find((word) => word.word === newWord)
 
   return (
     <div className="space-y-6">
@@ -112,6 +154,43 @@ export default function ReservedWords() {
           {showAddForm ? 'Cancel' : '+ Add Reserved Word'}
         </button>
       </div>
+
+      {proposals.length > 0 && (
+        <div className="bg-white shadow rounded-lg p-6">
+          <h3 className="text-lg font-medium text-gray-900">Proposed words</h3>
+          <p className="mt-1 text-sm text-gray-600">
+            Approving adds the word as a plain match. The count is existing names that contain it, not a judgment.
+          </p>
+          <ul className="mt-4 divide-y divide-gray-200">
+            {proposals.map((proposal) => (
+              <li key={proposal.word} className="py-3 flex items-center justify-between gap-4">
+                <div>
+                  <span className="font-mono text-sm">{proposal.word}</span>
+                  <span className="ml-3 text-sm text-gray-500">{proposal.affected_count} existing names</span>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className="px-3 py-1 text-sm rounded-md bg-blue-600 text-white"
+                    onClick={() => handleProposalDecision(proposal.word, 'approve')}
+                    disabled={proposalAction === proposal.word}
+                  >
+                    Approve
+                  </button>
+                  <button
+                    type="button"
+                    className="px-3 py-1 text-sm rounded-md border border-gray-300"
+                    onClick={() => handleProposalDecision(proposal.word, 'reject')}
+                    disabled={proposalAction === proposal.word}
+                  >
+                    Reject
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Add Form */}
       {showAddForm && (
@@ -133,7 +212,15 @@ export default function ReservedWords() {
                   type="text"
                   id="newWord"
                   value={newWord}
-                  onChange={(e) => setNewWord(e.target.value.trim().toLowerCase())}
+                  onChange={(e) => {
+                    const typed = e.target.value.trim().toLowerCase()
+                    setNewWord(typed)
+                    // Adding a word that is already listed updates it. Start from
+                    // its current scope so changing a reason does not quietly
+                    // narrow what the word blocks.
+                    const existing = words.find((w) => w.word === typed)
+                    if (existing) setNewScope(existing.match_scope ?? 'whole')
+                  }}
                   required
                   pattern={USERNAME_INPUT_PATTERN}
                   title={USERNAME_INPUT_TITLE}
@@ -175,6 +262,39 @@ export default function ReservedWords() {
                   className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2 border"
                 />
               </div>
+            </div>
+
+            <div>
+              <label htmlFor="newScope" className="block text-sm font-medium text-gray-700">
+                Where it matches
+              </label>
+              <select
+                id="newScope"
+                value={newScope}
+                onChange={(e) => setNewScope(e.target.value as MatchScope)}
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2 border"
+              >
+                <option value="whole">The whole name only</option>
+                <option value="token">As a separate word in the name</option>
+              </select>
+              <p className="mt-2 text-sm text-gray-500">
+                {newScope === 'whole' && (
+                  <>Blocks <code>{newWord || 'word'}</code> and spellings of it like <code>{(newWord || 'word').split('').join('-')}</code>. Longer names are not blocked by this setting.</>
+                )}
+                {newScope === 'token' && (
+                  <>Also blocks names where <code>{newWord || 'word'}</code> stands on its own, like <code>xx-{newWord || 'word'}-xx</code>. A word inside a longer name is not blocked by this setting.</>
+                )}
+              </p>
+              {['offensive', 'child_safety'].includes(newCategory.toLowerCase()) && (
+                <p className="mt-2 text-sm text-gray-500">
+                  For these categories, a word inside a longer name is sent for judgment.
+                </p>
+              )}
+              {existingWord?.match_plain === 1 && (
+                <p className="mt-2 text-sm text-amber-700">
+                  Saving this word replaces its approved substring match with the selected scope.
+                </p>
+              )}
             </div>
 
             {addError && (
@@ -229,6 +349,9 @@ export default function ReservedWords() {
                         Word
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Matches
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Reason
                       </th>
                       <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -241,6 +364,11 @@ export default function ReservedWords() {
                       <tr key={word.word}>
                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                           {word.word}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          <span className={scopeBadgeClass(word.match_scope)}>
+                            {matchLabel(word)}
+                          </span>
                         </td>
                         <td className="px-6 py-4 text-sm text-gray-500">
                           {word.reason || '-'}
