@@ -1148,6 +1148,17 @@ describe('Fastly sync queue helpers', () => {
     expect(tasks[1].data).toBeUndefined()
   })
 
+  it('markFastlySyncTaskFailures preserves the D1 batch receiver', async () => {
+    const db = createFastlyQueueMock([])
+    const originalBatch = db.batch
+    db.batch = async function <T = unknown>(statements: D1PreparedStatement[]) {
+      expect(this).toBe(db)
+      return originalBatch.call(this, statements) as ReturnType<typeof db.batch<T>>
+    }
+
+    await markFastlySyncTaskFailures(db, [{ username: 'localtest', error: 'offline' }], 1000)
+  })
+
   it('clearFastlySyncTasks chunks large deletes and markFastlySyncTaskFailures accumulates attempts', async () => {
     const db = createFastlyQueueMock(Array.from({ length: 501 }, (_, i) => ({
       username_canonical: `user-${i}`,
