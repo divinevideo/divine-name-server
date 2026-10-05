@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Username } from '../src/db/queries'
+import { sweepFastlyNames } from '../src/utils/fastly-sweep'
+vi.mock('../src/utils/fastly-sweep', () => ({ sweepFastlyNames: vi.fn() }))
 
-const { getUsernamesUpdatedSince, expireStaleReservations, expireHolds, getStaleReleaseAttempts, rollbackReleaseAttempt, getQueuedFastlySyncTasks, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, syncBatch } = vi.hoisted(() => ({
+const { getUsernameSyncStates, getUsernamesUpdatedSince, expireStaleReservations, expireHolds, getStaleReleaseAttempts, rollbackReleaseAttempt, getQueuedFastlySyncTasks, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, syncBatch } = vi.hoisted(() => ({
+  getUsernameSyncStates: vi.fn(),
   getUsernamesUpdatedSince: vi.fn<() => Promise<Username[]>>(),
   expireStaleReservations: vi.fn<() => Promise<number>>(),
   expireHolds: vi.fn<() => Promise<number>>(),
@@ -18,6 +21,7 @@ vi.mock('../src/db/queries', async () => {
   const actual = await vi.importActual<typeof import('../src/db/queries')>('../src/db/queries')
   return {
     ...actual,
+    getUsernameSyncStates,
     getUsernamesUpdatedSince,
     expireStaleReservations,
     expireHolds,
@@ -47,6 +51,7 @@ describe('ATProto cron sync payloads', () => {
     expireHolds.mockResolvedValue(0)
     getStaleReleaseAttempts.mockResolvedValue([])
     getQueuedFastlySyncTasks.mockResolvedValue([])
+    getUsernameSyncStates.mockResolvedValue(new Map())
     syncBatch.mockResolvedValue({ synced: 1, deleted: 0, failed: 0, errors: [], successes: [], failures: [] })
   })
 
@@ -500,5 +505,35 @@ describe('ATProto cron sync payloads', () => {
       expect.anything(),
       [{ username: 'alice', error: 'boom' }]
     )
+  })
+
+  // The sweep is mocked here, so nothing else would notice if the hourly handler
+  // stopped calling it (or stopped awaiting it), which would silently end the
+  // self-healing pass.
+  it('runs the full-table sweep after the recent-change and retry-queue reconciliation', async () => {
+    getUsernamesUpdatedSince.mockResolvedValue([])
+    const env = {
+      DB: {} as D1Database,
+      ASSETS: { fetch: async () => new Response('not found', { status: 404 }) },
+      FASTLY_API_TOKEN: 'fastly-token',
+      FASTLY_STORE_ID: 'store-id',
+    }
+
+    await worker.scheduled({} as ScheduledEvent, env, { waitUntil: () => {}, passThroughOnException: () => {} } as ExecutionContext)
+
+    expect(sweepFastlyNames).toHaveBeenCalledTimes(1)
+    expect(sweepFastlyNames).toHaveBeenCalledWith(env)
+    expect(syncBatch.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(sweepFastlyNames).mock.invocationCallOrder[0])
+  })
+
+  it('waits for the sweep to finish, so its failure fails the invocation', async () => {
+    getUsernamesUpdatedSince.mockResolvedValue([])
+    vi.mocked(sweepFastlyNames).mockRejectedValueOnce(new Error('sweep failed'))
+
+    await expect(worker.scheduled(
+      {} as ScheduledEvent,
+      { DB: {} as D1Database, ASSETS: { fetch: async () => new Response('', { status: 404 }) }, FASTLY_API_TOKEN: 'fastly-token', FASTLY_STORE_ID: 'store-id' },
+      { waitUntil: () => {}, passThroughOnException: () => {} } as ExecutionContext
+    )).rejects.toThrow('sweep failed')
   })
 })
