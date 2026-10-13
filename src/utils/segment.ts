@@ -44,6 +44,16 @@ function endsFrom(text: string, start: number): number[] {
   return ends
 }
 
+/** True when any part of `span` counts as the blocked word, so `nazis` holds `nazi`. */
+function containsTerm(span: string, termMatches: (span: string) => boolean): boolean {
+  for (let start = 0; start < span.length; start++) {
+    for (let end = start + 1; end <= span.length; end++) {
+      if (termMatches(span.slice(start, end))) return true
+    }
+  }
+  return false
+}
+
 function spanCost(
   span: string,
   lexicon: Map<string, number>,
@@ -56,6 +66,8 @@ function spanCost(
     if (!allowTerm) return null
     return known ?? FORCED_WORD_COST
   }
+  // A reading without the word must not hide it inside a longer segment.
+  if (!allowTerm && known !== undefined && containsTerm(span, termMatches)) return null
   return known === undefined ? null : known
 }
 
@@ -114,7 +126,7 @@ export function formatReading(reading: Reading | null): string {
 
 /**
  * Cheapest segmentation that includes `word` as a segment, and the cheapest
- * that does not. Digits are atomic, so a digit in the name does not void both.
+ * whose segments do not contain it anywhere. Digits are atomic, so a digit in the name does not void both.
  * `termMatches` decides which spans count as the blocked word, including leet.
  */
 function forcedWithWord(
