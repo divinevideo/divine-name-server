@@ -36,7 +36,7 @@ export async function listReservedWordsForMatch(db: D1Database): Promise<ListedT
   return results.map((row) => ({
     word: row.word,
     rules: rulesOf(row),
-    judgeEmbeddings: judgesEmbeddings(row.category),
+    judgeEmbeddings: judgesEmbeddings(row.word, row.category),
   }))
 }
 

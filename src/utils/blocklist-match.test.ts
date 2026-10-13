@@ -185,19 +185,25 @@ describe('collisions of the kind that make scope per-term', () => {
 
 describe('judged categories', () => {
   it('judges production content labels after trim and case fold', () => {
-    expect(judgesEmbeddings('Foul Language ')).toBe(true)
-    expect(judgesEmbeddings('Hate Groups')).toBe(true)
-    expect(judgesEmbeddings('child_safety')).toBe(true)
-    expect(judgesEmbeddings('offensive')).toBe(true)
-    expect(judgesEmbeddings('slur')).toBe(true)
+    expect(judgesEmbeddings('zorbex', 'Foul Language ')).toBe(true)
+    expect(judgesEmbeddings('zorbex', 'Hate Groups')).toBe(true)
+    expect(judgesEmbeddings('zorbex', 'child_safety')).toBe(true)
+    expect(judgesEmbeddings('zorbex', 'offensive')).toBe(true)
+    expect(judgesEmbeddings('zorbex', 'slur')).toBe(true)
   })
 
   it('judges an unknown label and keeps host and brand words scope-only', () => {
-    expect(judgesEmbeddings('Some New Label')).toBe(true)
-    expect(judgesEmbeddings(null)).toBe(true)
+    expect(judgesEmbeddings('zorbex', 'Some New Label')).toBe(true)
+    expect(judgesEmbeddings('zorbex', null)).toBe(true)
     for (const category of ['system', 'app', 'subdomain', 'protocol', 'brand', ' System ']) {
-      expect(judgesEmbeddings(category), category).toBe(false)
+      expect(judgesEmbeddings('zorbex', category), category).toBe(false)
     }
+  })
+
+  it('keeps words under four characters scope-only in every category', () => {
+    expect(judgesEmbeddings('zq', 'Hate Groups')).toBe(false)
+    expect(judgesEmbeddings('zqx', 'slur')).toBe(false)
+    expect(judgesEmbeddings('zqxw', 'slur')).toBe(true)
   })
 })
 

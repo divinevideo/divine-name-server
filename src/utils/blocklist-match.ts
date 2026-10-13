@@ -61,7 +61,16 @@ export const DEFAULT_RULES: TermRules = {
  */
 const SCOPE_ONLY_CATEGORIES = new Set(['system', 'app', 'subdomain', 'protocol', 'brand'])
 
-export function judgesEmbeddings(category: string | null | undefined): boolean {
+/**
+ * Words shorter than this stay scope-only too. Two- and three-character words
+ * such as `ss` or `14` sit inside about one name in ten by accident, and in the
+ * adjudicated set no real violation depended on judging one of them inside a
+ * longer name. They still block as a whole name or a separate word.
+ */
+export const MIN_JUDGED_LENGTH = 4
+
+export function judgesEmbeddings(word: string, category: string | null | undefined): boolean {
+  if (word.length < MIN_JUDGED_LENGTH) return false
   if (!category) return true
   return !SCOPE_ONLY_CATEGORIES.has(category.trim().toLowerCase())
 }
