@@ -60,15 +60,17 @@ function spanCost(
   termMatches: (span: string) => boolean,
   allowTerm: boolean
 ): number | null {
-  if (/^[0-9]+$/.test(span)) return DIGIT_COST + span.length * 0.05
   const known = lexicon.get(span)
   if (termMatches(span)) {
     if (!allowTerm) return null
     return known ?? FORCED_WORD_COST
   }
-  // A reading without the word must not hide it inside a longer segment.
-  if (!allowTerm && known !== undefined && containsTerm(span, termMatches)) return null
-  return known === undefined ? null : known
+  const digits = /^[0-9]+$/.test(span)
+  if (!digits && known === undefined) return null
+  // A reading without the word must not hide it inside a longer segment,
+  // whether that segment is a word or a run of digits.
+  if (!allowTerm && containsTerm(span, termMatches)) return null
+  return digits ? DIGIT_COST + span.length * 0.05 : known!
 }
 
 function cheapest(
@@ -136,7 +138,9 @@ function forcedWithWord(
 ): Reading | null {
   let best: Reading | null = null
   for (let start = 0; start < text.length; start++) {
-    for (const end of endsFrom(text, start)) {
+    // Any span may hold the word, including part of a digit run.
+    const limit = Math.min(text.length, start + MAX_LETTERS)
+    for (let end = start + 1; end <= limit; end++) {
       const span = text.slice(start, end)
       if (!termMatches(span)) continue
       const leftText = text.slice(0, start)

@@ -54,4 +54,15 @@ describe('readingsFor', () => {
     const pair = readingsFor('canalvine', lexicon, exact('nalv'))
     expect(pair.withoutWord?.segments).toEqual(['canal', 'vine'])
   })
+
+  it('finds a numeric word inside a longer digit run and keeps it out of the other reading', () => {
+    const pair = readingsFor('24680', lexicon, exact('2468'))
+    expect(pair.withWord?.segments).toEqual(['2468', '0'])
+    expect(pair.withoutWord).toBeNull()
+  })
+
+  it('places a word that starts with a digit', () => {
+    const pair = readingsFor('vine4nal', lexicon, (span) => span === 'anal' || span === '4nal')
+    expect(pair.withWord?.segments).toContain('4nal')
+  })
 })
