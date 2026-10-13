@@ -205,6 +205,12 @@ describe('judged categories', () => {
     expect(judgesEmbeddings('zqx', 'slur')).toBe(false)
     expect(judgesEmbeddings('zqxw', 'slur')).toBe(true)
   })
+
+  it('does not count a stored separator toward that length', () => {
+    expect(judgesEmbeddings('z-q-x', 'slur')).toBe(false)
+    expect(judgesEmbeddings('z.q_x', 'slur')).toBe(false)
+    expect(judgesEmbeddings('z-q-x-w', 'slur')).toBe(true)
+  })
 })
 
 describe('compiled patterns', () => {
