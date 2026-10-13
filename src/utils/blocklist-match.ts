@@ -51,19 +51,19 @@ export const DEFAULT_RULES: TermRules = {
 }
 
 /**
- * Categories whose embeddings are a judgment, not a miss and not a block.
+ * Categories whose embeddings stay scope-only: a host, product or brand word
+ * inside a longer name is not a judgment question.
  *
- * Production rows keep the category a moderator stored. Migration 0014 records
- * that ordinary profanity lives under `Foul Language `, trailing space included.
- * A production count also has `Hate Groups` and `child_safety`, and no
- * `offensive` row. The comparison trims and lowercases before matching.
- * System categories stay scope-only.
+ * Every other category is judged. Production rows keep the label a moderator
+ * typed, such as `Foul Language ` with a trailing space, `Hate Groups`, `slur`
+ * and `child_safety`, so a new or misspelled content label is judged rather
+ * than silently skipped. The comparison trims and lowercases first.
  */
-const JUDGED_CATEGORIES = new Set(['offensive', 'child_safety', 'foul language', 'hate groups'])
+const SCOPE_ONLY_CATEGORIES = new Set(['system', 'app', 'subdomain', 'protocol', 'brand'])
 
 export function judgesEmbeddings(category: string | null | undefined): boolean {
-  if (!category) return false
-  return JUDGED_CATEGORIES.has(category.trim().toLowerCase())
+  if (!category) return true
+  return !SCOPE_ONLY_CATEGORIES.has(category.trim().toLowerCase())
 }
 
 /** Characters the namespace allows between parts of a name. */

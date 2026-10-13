@@ -189,8 +189,15 @@ describe('judged categories', () => {
     expect(judgesEmbeddings('Hate Groups')).toBe(true)
     expect(judgesEmbeddings('child_safety')).toBe(true)
     expect(judgesEmbeddings('offensive')).toBe(true)
-    expect(judgesEmbeddings('system')).toBe(false)
-    expect(judgesEmbeddings(null)).toBe(false)
+    expect(judgesEmbeddings('slur')).toBe(true)
+  })
+
+  it('judges an unknown label and keeps host and brand words scope-only', () => {
+    expect(judgesEmbeddings('Some New Label')).toBe(true)
+    expect(judgesEmbeddings(null)).toBe(true)
+    for (const category of ['system', 'app', 'subdomain', 'protocol', 'brand', ' System ']) {
+      expect(judgesEmbeddings(category), category).toBe(false)
+    }
   })
 })
 
