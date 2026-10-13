@@ -10,11 +10,11 @@ const lexicon = lexiconFromLines([
   'alvarez 50',
   'canal 40',
   'vine 30',
-  'far 60',
+  'quil 60',
   'zorbs 60',
   'zorb 20',
-  'mail 60',
-  'smail 5',
+  'brop 60',
+  'sbrop 5',
 ].join('\n'))
 
 function exact(word: string): (span: string) => boolean {
@@ -45,7 +45,7 @@ describe('readingsFor', () => {
   })
 
   it('keeps the word out of every segment of the reading without it', () => {
-    const pair = readingsFor('farzorbsmail', lexicon, exact('zorb'))
+    const pair = readingsFor('quilzorbsbrop', lexicon, exact('zorb'))
     expect(pair.withWord?.segments).toContain('zorb')
     expect(pair.withoutWord).toBeNull()
   })
