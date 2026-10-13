@@ -42,6 +42,12 @@ describe('judgeIntent', () => {
     await expect(ask(respond(200, { answers: {} }))).rejects.toBeInstanceOf(JevUnavailable)
   })
 
+  it('fails when only the other question has a score', async () => {
+    await expect(
+      ask(respond(200, { answers: { belongs: { noul: 0.1 } } }))
+    ).rejects.toBeInstanceOf(JevUnavailable)
+  })
+
   it('fails when the score is not a number', async () => {
     await expect(
       ask(respond(200, { answers: { meant: { noul: '0.9' } } }))

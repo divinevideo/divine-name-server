@@ -165,7 +165,7 @@ describeSqlite('migration 0015', () => {
     for (const row of rows) expect(row.match_scope, row.word).toBe('whole')
   })
 
-  it('prunes verdicts for old blocklists and expired entries, and bounds call buckets', async () => {
+  it('prunes verdicts for old blocklists and keeps a current verdict, and bounds call buckets', async () => {
     const now = 1_800_000_000
     sqlite.prepare('UPDATE blocklist_meta SET version = 2 WHERE id = 1').run()
     sqlite.prepare('INSERT INTO block_verdicts (canonical, blocklist_version, threshold, verdict, created_at) VALUES (?, ?, ?, ?, ?)')
@@ -181,7 +181,10 @@ describeSqlite('migration 0015', () => {
 
     await pruneBlocklistData(asD1(sqlite), now)
 
-    expect(sqlite.prepare('SELECT canonical FROM block_verdicts').all()).toEqual([{ canonical: 'recent' }])
+    expect(sqlite.prepare('SELECT canonical FROM block_verdicts ORDER BY canonical').all()).toEqual([
+      { canonical: 'expired' },
+      { canonical: 'recent' },
+    ])
     expect(sqlite.prepare('SELECT minute_bucket FROM jev_call_buckets').all()).toEqual([
       { minute_bucket: Math.floor(now / 60) - 1 },
     ])

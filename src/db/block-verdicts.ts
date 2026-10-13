@@ -82,12 +82,12 @@ export async function putBlockVerdict(
   ).bind(canonical, version, String(threshold), verdict, now).run()
 }
 
-/** Keep cache rows current and recent, and bound the rolling call buckets. */
+/** Drop verdicts for a replaced blocklist, and bound the rolling call buckets. */
 export async function pruneBlocklistData(db: D1Database, now: number): Promise<void> {
   const version = await getBlocklistVersion(db)
   await db.batch([
-    db.prepare('DELETE FROM block_verdicts WHERE blocklist_version <> ? OR created_at < ?')
-      .bind(version, now - 30 * 24 * 60 * 60),
+    db.prepare('DELETE FROM block_verdicts WHERE blocklist_version <> ?')
+      .bind(version),
     db.prepare('DELETE FROM jev_call_buckets WHERE minute_bucket < ?')
       .bind(Math.floor(now / 60) - 24 * 60),
   ])

@@ -38,7 +38,8 @@ const PROPOSE_QUESTION = {
 async function postJev(
   apiKey: string,
   body: unknown,
-  fetchImpl: JevFetch
+  fetchImpl: JevFetch,
+  answerKey: 'meant' | 'belongs'
 ): Promise<JevCall> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), JEV_TIMEOUT_MS)
@@ -56,7 +57,7 @@ async function postJev(
     const payload = await response.json() as {
       answers?: { meant?: { noul?: unknown }; belongs?: { noul?: unknown } }
     }
-    const noul = payload.answers?.meant?.noul ?? payload.answers?.belongs?.noul
+    const noul = payload.answers?.[answerKey]?.noul
     if (typeof noul !== 'number' || !Number.isFinite(noul)) {
       throw new JevUnavailable('jev answer missing')
     }
@@ -87,7 +88,7 @@ export function judgeIntent(
       reading_if_word_is_accidental: accidental,
     },
     questions: { meant: INTENT_QUESTION },
-  }, fetchImpl)
+  }, fetchImpl, 'meant')
 }
 
 /**
@@ -103,5 +104,5 @@ export function judgeProposal(
     model: 'jev-latest',
     state: { word },
     questions: { belongs: PROPOSE_QUESTION },
-  }, fetchImpl)
+  }, fetchImpl, 'belongs')
 }
