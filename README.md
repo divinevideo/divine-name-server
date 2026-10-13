@@ -58,6 +58,7 @@ A scheduled handler runs hourly (`0 * * * *`):
 2. Returns deletion-held names to circulation after one year.
 3. Restores abandoned pending username releases after their recorded 72-hour recovery deadline; expiry never burns a name.
 4. Reconciles usernames changed in the last six hours, plus anything left in the durable Fastly sync queue, into Fastly KV — syncing active names and deleting revoked, burned, pending-release, or held names. Versioned queue entries prevent an older edge operation from clearing newer desired state.
+5. Compares 100 more names per run from a durable cursor over the whole `usernames` table (migration `0015`), re-reading each name's current D1 state and reconciling only differences or failed reads, so drift older than the six-hour window heals eventually. Retry-queue payloads are also re-derived from current D1 state. See [Ownership-checked imports and name reconciliation](docs/name-import-reconciliation.md) for the rollout order.
 
 ## Getting started
 
@@ -125,6 +126,7 @@ Bindings and variables live in `wrangler.toml`.
 | `FASTLY_STORE_ID` | var | Fastly KV store the edge mirror writes to |
 | `FASTLY_API_TOKEN` | secret | Auth for Fastly KV sync (`wrangler secret put`) |
 | `ATPROTO_SYNC_TOKEN` | secret | Bearer token for the internal ATProto sync endpoint |
+| `USERNAME_IMPORT_TOKEN` | secret | Bearer token for the internal Vine import endpoint. It can create active names, so keep it separate from the other service tokens; the endpoint answers 503 until it is set |
 | `SENDGRID_API_KEY` | secret | Sends reservation-confirmation and assignment emails |
 | `ALLOWED_MINTS` | var | Comma-separated Cashu mint allowlist for paid reservations |
 | `NAME_PRICE_JSON` | var | Overrides the tiered reservation pricing (JSON of length tier → sats) |
@@ -284,6 +286,8 @@ Guarded by the hostname + auth rules above. Highlights:
 | `POST` | `/api/admin/username/set-atproto` | Set a name's `did:plc:` and handle-resolution state |
 | `GET` | `/api/admin/username/:name/nip05-status` | Compare D1 vs Fastly KV for a name |
 | `POST` | `/api/admin/username/:name/sync-to-fastly` · `/api/admin/sync/fastly` | Force edge re-sync |
+| `POST` | `/api/admin/sync/fastly/compare` | Read-only, paginated scan of Fastly KV or D1 for drift (`source`: `kv` or `d1`) |
+| `POST` | `/api/admin/sync/fastly/repair` | Compare one name with Fastly KV; with `"dry_run": false`, re-sync it from D1 |
 | `GET` | `/api/admin/export/csv` | Export the registry as CSV |
 | `GET`/`POST`/`DELETE` | `/api/admin/reserved-words[/:word]` | Manage reserved words |
 | `POST`/`DELETE` | `/api/admin/username/:name/tags[/:tag]` | Manage per-name tags |
@@ -302,6 +306,8 @@ Admin sessions are established via the Keycast OAuth flow under `/api/admin/auth
 ### Internal API (`/api/internal`)
 
 `POST /api/internal/username/set-atproto` — service-to-service variant of the ATProto linking endpoint, authenticated with the `ATPROTO_SYNC_TOKEN` bearer token.
+
+`POST /api/internal/username/import` — ownership-checked import of one archived Vine name, authenticated with the `USERNAME_IMPORT_TOKEN` bearer token. It inserts an active `vine-import` row, never updates an existing one, and answers `409` for a taken or reserved name, a pubkey that already owns a name, or a pubkey whose owner deleted their account. See [Ownership-checked imports and name reconciliation](docs/name-import-reconciliation.md).
 
 The deletion coordinator endpoints under `/api/internal/username/release/` are authenticated with `DELETION_COORDINATOR_TOKEN`; their status, rollback, and finalize contracts are documented in [Recoverable release lifecycle](#recoverable-release-lifecycle).
 

@@ -149,6 +149,22 @@ describe('readUsernameFromFastly', () => {
 
     expect(result.success).toBe(false)
     expect(result.error).toContain('500')
+    expect(result.invalidBody).toBeUndefined()
+  })
+
+  it.each([
+    ['text that is not JSON', async () => { throw new SyntaxError('Unexpected token') }],
+    ['JSON null', async () => null],
+    ['a JSON array', async () => []],
+    ['a JSON string', async () => 'alice'],
+  ])('should flag a stored value that is %s as an invalid body, not a missing key', async (_label, json) => {
+    mockFetch.mockResolvedValue({ ok: true, status: 200, json })
+
+    const result = await readUsernameFromFastly(env, 'alice')
+
+    expect(result.success).toBe(false)
+    expect(result.invalidBody).toBe(true)
+    expect(result.data).toBeUndefined()
   })
 
   it('should return error when config is missing', async () => {
@@ -214,5 +230,22 @@ describe('syncAndVerifyUsername', () => {
 
     expect(result.success).toBe(false)
     expect(result.verified).toBe(false)
+  })
+
+  // Callers (reconcile, the sweep) queue an unverified write for retry; an
+  // exception here would skip that and stop the caller on this name.
+  it.each([
+    ['no relays list', { pubkey: 'abc123', status: 'active' }],
+    ['a relays value that is not a list', { pubkey: 'abc123', status: 'active', relays: 7 }],
+  ])('should return verified:false instead of throwing when the read-back has %s', async (_label, stored) => {
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => '' })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => stored })
+
+    const result = await syncAndVerifyUsername(env, 'alice', data)
+
+    expect(result.success).toBe(true)
+    expect(result.verified).toBe(false)
+    expect(result.error).toContain('malformed')
   })
 })

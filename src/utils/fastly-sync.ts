@@ -168,10 +168,15 @@ export async function deleteUsernameFromFastly(
   return { success: false, error: lastError }
 }
 
+/**
+ * Read a username's KV value. A key that exists but does not hold a JSON object
+ * is a failed read with `invalidBody` set, so callers can tell it from an outage
+ * and from a missing key (`success` with no `data`).
+ */
 export async function readUsernameFromFastly(
   env: FastlyEnv,
   username: string
-): Promise<{ success: boolean; data?: UsernameKVData; error?: string }> {
+): Promise<{ success: boolean; data?: UsernameKVData; error?: string; invalidBody?: boolean }> {
   if (!env.FASTLY_API_TOKEN || !env.FASTLY_STORE_ID) {
     return { success: false, error: 'Fastly sync configuration is missing' }
   }
@@ -196,8 +201,16 @@ export async function readUsernameFromFastly(
       return { success: false, error: `Fastly API error: ${response.status} ${errorText}` }
     }
 
-    const data = await response.json() as UsernameKVData
-    return { success: true, data }
+    let body: unknown
+    try {
+      body = await response.json()
+    } catch {
+      body = undefined
+    }
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+      return { success: false, invalidBody: true, error: 'Fastly value is not a JSON object' }
+    }
+    return { success: true, data: body as UsernameKVData }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error'
     return { success: false, error: message }
@@ -227,7 +240,17 @@ export async function syncAndVerifyUsername(
     return { success: true, verified: false, error }
   }
 
-  if (!usernameKVDataMatches(verifyResult.data, data)) {
+  let matches: boolean
+  try {
+    matches = usernameKVDataMatches(verifyResult.data, data)
+  } catch {
+    // A stored value with no usable relays list cannot be compared. Report it as
+    // unverified so callers queue the retry, instead of throwing past them.
+    const error = 'Fastly verify failed: stored value is malformed'
+    console.error(`${error} for ${username}`)
+    return { success: true, verified: false, error }
+  }
+  if (!matches) {
     const expected = JSON.stringify(normalizeUsernameKVData(data))
     const actual = JSON.stringify(normalizeUsernameKVData(verifyResult.data))
     const error = `Fastly verify failed: wrote ${expected} but read ${actual}`
