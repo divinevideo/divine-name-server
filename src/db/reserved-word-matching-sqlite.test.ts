@@ -1,5 +1,5 @@
 // ABOUTME: Runs isReservedWord against the real migration chain, so the matching
-// ABOUTME: rules are exercised through the columns 0015 actually creates.
+// ABOUTME: rules are exercised through the columns 0016 actually creates.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { sqliteAvailable, createSqlite, applyMigrations, asD1, type SqliteDb } from './sqlite-test-helpers'
@@ -82,7 +82,7 @@ describeSqlite('isReservedWord with per-term rules', () => {
   })
 
   it('a term with no rules set behaves as whole scope', async () => {
-    // Rows written before 0015 take the column defaults.
+    // Rows written before 0016 take the column defaults.
     sqlite.prepare(
       "INSERT INTO reserved_words (word, category, reason, created_at) VALUES ('legacy', 'test', NULL, 0)"
     ).run()
@@ -124,7 +124,7 @@ describeSqlite('isReservedWord with per-term rules', () => {
   })
 })
 
-describeSqlite('migration 0015', () => {
+describeSqlite('migration 0016', () => {
   let sqlite: SqliteDb
 
   beforeEach(() => {

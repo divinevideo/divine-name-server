@@ -1,4 +1,4 @@
--- Migration 0015: give each reserved word its own matching rules.
+-- Migration 0016: give each reserved word its own matching rules.
 --
 -- Until now the check was whole-string equality, so reserving `admin` did
 -- nothing against `ad-min`, `xadminx` or `myadmin`.
