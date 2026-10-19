@@ -1,7 +1,7 @@
 -- Drop the hardcoded anywhere list. Those words stay at token scope.
 -- A blocked word glued inside a longer name is judged, not substring-blocked.
--- match_plain is the moderator-approved exception: a proposed word, once
--- approved, is a plain substring match and does not need another call.
+-- match_plain records moderator approval. Approval uses token scope, not a
+-- substring exception; hidden uses still go through the judgment layer.
 
 UPDATE reserved_words SET match_scope = 'token' WHERE match_scope = 'anywhere';
 
@@ -17,7 +17,7 @@ INSERT OR IGNORE INTO blocklist_meta (id, version) VALUES (1, 1);
 CREATE TABLE IF NOT EXISTS block_verdicts (
   canonical TEXT NOT NULL,
   blocklist_version INTEGER NOT NULL,
-  -- The threshold the verdict was judged under. A later change must not reuse it.
+  -- Model/question policy and threshold. A policy change must not reuse it.
   threshold TEXT NOT NULL,
   verdict TEXT NOT NULL CHECK (verdict IN ('blocked', 'clear')),
   created_at INTEGER NOT NULL,

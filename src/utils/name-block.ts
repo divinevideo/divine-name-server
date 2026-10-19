@@ -5,7 +5,7 @@
 import { classifyName, compileTerm, type ListedTerm } from './blocklist-match'
 import { formatReading, readingsFor, type Reading } from './segment'
 import { getLexicon } from './lexicon'
-import { JevUnavailable, judgeIntent, judgeProposal, type JevFetch } from './jev'
+import { JudgmentUnavailable, JUDGMENT_POLICY, judgeIntent, judgeProposal, type JudgmentAI } from './judgment'
 import {
   getBlockVerdict,
   getBlocklistVersion,
@@ -13,14 +13,14 @@ import {
   proposalExists,
   proposeBlockWord,
   putBlockVerdict,
-  tryConsumeJevCall,
+  tryConsumeJudgmentCall,
 } from '../db/block-verdicts'
 
 export interface BlockEnv {
-  TYPESAFE_API_KEY?: string
-  JEV_BLOCK_MIN?: string
-  JEV_PROPOSE_MIN?: string
-  JEV_MAX_CALLS_PER_MINUTE?: string
+  AI?: JudgmentAI
+  JUDGMENT_BLOCK_MIN?: string
+  JUDGMENT_PROPOSE_MIN?: string
+  JUDGMENT_MAX_CALLS_PER_MINUTE?: string
 }
 
 export type BlockOutcome =
@@ -40,7 +40,7 @@ function parseUnit(value: string | undefined): number | undefined {
 function parseCap(value: string | undefined): number {
   if (value === undefined || value.trim() === '') return DEFAULT_CALLS_PER_MINUTE
   const n = Number(value)
-  if (!Number.isInteger(n) || n < 1) return DEFAULT_CALLS_PER_MINUTE
+  if (!Number.isInteger(n) || n < 0) return 0
   return n
 }
 
@@ -60,58 +60,65 @@ function proposalCandidate(reading: Reading | null, flagged: string, listed: Set
 async function maybePropose(
   db: D1Database,
   env: BlockEnv,
-  apiKey: string,
+  ai: JudgmentAI,
   reading: Reading | null,
   flagged: string,
   listed: Set<string>,
-  fetchImpl: JevFetch,
-  now: number
+  now: () => number
 ): Promise<void> {
-  const min = parseUnit(env.JEV_PROPOSE_MIN)
+  const min = parseUnit(env.JUDGMENT_PROPOSE_MIN)
   if (min === undefined) return
   const word = proposalCandidate(reading, flagged, listed)
   if (!word) return
   if (await proposalExists(db, word)) return
-  const allowed = await tryConsumeJevCall(db, Math.floor(now / 60), parseCap(env.JEV_MAX_CALLS_PER_MINUTE))
+  const allowed = await tryConsumeJudgmentCall(db, Math.floor(now() / 60), parseCap(env.JUDGMENT_MAX_CALLS_PER_MINUTE))
   if (!allowed) return
   try {
-    const answer = await judgeProposal(apiKey, word, fetchImpl)
-    if (answer.noul >= min) await proposeBlockWord(db, word, answer.noul, now)
+    const answer = await judgeProposal(ai, word)
+    if (answer.noul >= min) await proposeBlockWord(db, word, answer.noul, now())
   } catch (error) {
-    if (!(error instanceof JevUnavailable)) throw error
+    if (!(error instanceof JudgmentUnavailable)) throw error
   }
 }
 
 /**
  * Deterministic block or clear returns immediately. Ambiguous names are refused
- * when the key, the measured threshold, the cap, or the service is missing.
+ * when a configured judgment fails. Without a binding or threshold the second
+ * layer is disabled: ambiguous names are clear, and only scoped hits block.
  * A verdict is cached only after a real judgment, keyed by blocklist version.
  */
 export async function resolveUsernameBlock(
   db: D1Database,
   canonical: string,
   env: BlockEnv,
-  fetchImpl: JevFetch = fetch,
-  now = Math.floor(Date.now() / 1000),
+  now: number | (() => number) = () => Math.floor(Date.now() / 1000),
   allowJudgment = true
 ): Promise<BlockOutcome> {
+  const clock = () => typeof now === 'function' ? now() : now
+  // Observe the version before reading terms. An edit during the read must not
+  // let a verdict based on older terms poison the newly edited version's cache.
+  const version = await getBlocklistVersion(db)
   const terms = await listReservedWordsForMatch(db)
   const classification = classifyName(canonical, terms)
   if (classification.verdict === 'blocked') return { kind: 'reserved' }
   if (classification.verdict === 'clear') return { kind: 'clear' }
 
-  const threshold = parseUnit(env.JEV_BLOCK_MIN)
-  const apiKey = env.TYPESAFE_API_KEY
-  if (!apiKey || threshold === undefined) return { kind: 'unavailable' }
+  if (!env.AI || env.JUDGMENT_BLOCK_MIN === undefined || env.JUDGMENT_BLOCK_MIN.trim() === '') {
+    return { kind: 'clear' }
+  }
+  const threshold = parseUnit(env.JUDGMENT_BLOCK_MIN)
+  if (threshold === undefined) return { kind: 'unavailable' }
+  // A provider or question change must not reuse a previous model's verdict,
+  // even if its numeric threshold and the blocklist version happen to match.
+  const policyKey = `${JUDGMENT_POLICY}:${threshold}`
 
-  const version = await getBlocklistVersion(db)
-  const cached = await getBlockVerdict(db, canonical, version, threshold)
+  const cached = await getBlockVerdict(db, canonical, version, policyKey)
   if (cached === 'blocked') return { kind: 'reserved' }
   if (cached === 'clear') return { kind: 'clear' }
   if (!allowJudgment) return { kind: 'unavailable' }
 
   const listed = new Set(terms.map((term) => term.word))
-  const cap = parseCap(env.JEV_MAX_CALLS_PER_MINUTE)
+  const cap = parseCap(env.JUDGMENT_MAX_CALLS_PER_MINUTE)
   let blocked = false
   let guilty: { word: string; reading: Reading | null } | null = null
 
@@ -119,17 +126,16 @@ export async function resolveUsernameBlock(
   for (const word of embedded) {
     const term = terms.find((item) => item.word === word)
     if (!term) return { kind: 'unavailable' }
-    const allowed = await tryConsumeJevCall(db, Math.floor(now / 60), cap)
+    const allowed = await tryConsumeJudgmentCall(db, Math.floor(clock() / 60), cap)
     if (!allowed) return { kind: 'unavailable' }
     const pair = readingsFor(canonical, getLexicon(), termMatcher(term))
     try {
       const answer = await judgeIntent(
-        apiKey,
+        env.AI,
         canonical,
         word,
         formatReading(pair.withWord),
-        formatReading(pair.withoutWord),
-        fetchImpl
+        formatReading(pair.withoutWord)
       )
       if (answer.noul >= threshold) {
         blocked = true
@@ -137,15 +143,15 @@ export async function resolveUsernameBlock(
         break
       }
     } catch (error) {
-      if (error instanceof JevUnavailable) return { kind: 'unavailable' }
+      if (error instanceof JudgmentUnavailable) return { kind: 'unavailable' }
       throw error
     }
   }
 
   // Reaching this point without a block means every embedded word was judged.
-  await putBlockVerdict(db, canonical, version, threshold, blocked ? 'blocked' : 'clear', now)
+  await putBlockVerdict(db, canonical, version, policyKey, blocked ? 'blocked' : 'clear', clock())
   if (blocked && guilty) {
-    await maybePropose(db, env, apiKey, guilty.reading, guilty.word, listed, fetchImpl, now)
+    await maybePropose(db, env, env.AI, guilty.reading, guilty.word, listed, clock)
   }
   return blocked ? { kind: 'reserved' } : { kind: 'clear' }
 }

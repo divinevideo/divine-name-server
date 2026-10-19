@@ -34,10 +34,10 @@ describe('scope', () => {
     expect(termSignal('badminton', 'admin', r, false)).toBe('clear')
   })
 
-  it('plain substring match is the approved-word exception', () => {
+  it('approval does not turn a hidden use into a deterministic block', () => {
     const r = rules({ scope: 'token', plain: true })
-    expect(matchesTerm('myadmin', 'admin', r)).toBe(true)
-    expect(termSignal('myadmin', 'admin', r, true)).toBe('blocked')
+    expect(matchesTerm('myadmin', 'admin', r)).toBe(false)
+    expect(termSignal('myadmin', 'admin', r, true)).toBe('ambiguous')
   })
 
   it('a run of single letters matches only as a whole, not inside a spelled name', () => {
@@ -229,8 +229,8 @@ describe('compiled patterns', () => {
   it('is safe to reuse a compiled pattern across names', () => {
     const compiled = compileTerm('admin', rules({ plain: true }))
     const r = rules({ plain: true })
-    expect(matchesTerm('myadmin', 'admin', r, compiled)).toBe(true)
-    expect(matchesTerm('myadmin', 'admin', r, compiled)).toBe(true)
+    expect(matchesTerm('admin', 'admin', r, compiled)).toBe(true)
+    expect(matchesTerm('admin', 'admin', r, compiled)).toBe(true)
     expect(matchesTerm('nothing', 'admin', r, compiled)).toBe(false)
   })
 

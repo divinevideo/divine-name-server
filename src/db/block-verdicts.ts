@@ -2,7 +2,9 @@
 // ABOUTME: per-minute call cap. Deterministic matching stays in queries.ts.
 
 import {
+  compileTerm,
   judgesEmbeddings,
+  matchesTerm,
   plainMatchGlob,
   type ListedTerm,
   type TermRules,
@@ -21,10 +23,9 @@ interface MatchRow {
 function rulesOf(row: MatchRow): TermRules {
   return {
     scope: row.match_scope === 'token' || row.match_scope === 'anywhere' ? 'token' : 'whole',
-    leet: row.match_leet !== 0,
     digitExpand: row.match_digit_expand !== 0,
     repeats: row.match_repeats !== 0,
-    plain: row.match_plain === 1,
+    plain: false,
   }
 }
 
@@ -57,7 +58,7 @@ export async function getBlockVerdict(
   db: D1Database,
   canonical: string,
   version: number,
-  threshold: number
+  threshold: number | string
 ): Promise<'blocked' | 'clear' | null> {
   const row = await db.prepare(
     `SELECT verdict FROM block_verdicts
@@ -70,7 +71,7 @@ export async function putBlockVerdict(
   db: D1Database,
   canonical: string,
   version: number,
-  threshold: number,
+  threshold: number | string,
   verdict: 'blocked' | 'clear',
   now: number
 ): Promise<void> {
@@ -94,11 +95,12 @@ export async function pruneBlocklistData(db: D1Database, now: number): Promise<v
 }
 
 /** Reserves one call in this minute. False when the cap is already met. */
-export async function tryConsumeJevCall(
+export async function tryConsumeJudgmentCall(
   db: D1Database,
   minuteBucket: number,
   cap: number
 ): Promise<boolean> {
+  if (cap < 1) return false
   const row = await db.prepare(
     `INSERT INTO jev_call_buckets (minute_bucket, calls) VALUES (?1, 1)
      ON CONFLICT(minute_bucket) DO UPDATE SET calls = calls + 1
@@ -137,25 +139,38 @@ export interface BlockProposal {
 
 const APPROVAL_RULES: TermRules = {
   scope: 'token',
-  leet: true,
   digitExpand: false,
   repeats: false,
-  plain: true,
+  plain: false,
 }
 
 /** One lookup for names approval would block, under the rules approval writes. */
 export async function countNamesContaining(db: D1Database, word: string): Promise<number> {
-  const glob = plainMatchGlob(word, APPROVAL_RULES)
-  if (!glob) return 0
-  const row = await db.prepare(
-    `SELECT COUNT(*) AS n FROM usernames
-     WHERE (
-       username_canonical NOT LIKE 'xn--%'
-       AND ?1 NOT LIKE 'xn--%'
-       AND REPLACE(REPLACE(REPLACE(username_canonical, '-', ''), '_', ''), '.', '') GLOB ?2
-     ) OR username_canonical = ?1`
-  ).bind(word.toLowerCase(), glob).first<{ n: number }>()
-  return row?.n ?? 0
+  // Approval preserves an existing row's expansion/repeat settings. Count with
+  // those settings too if the word was added while its proposal was pending.
+  const existing = await db.prepare(
+    'SELECT match_digit_expand, match_repeats FROM reserved_words WHERE word = ?'
+  ).bind(word).first<{ match_digit_expand: number; match_repeats: number }>()
+  const rules = { ...APPROVAL_RULES, digitExpand: !!existing?.match_digit_expand, repeats: !!existing?.match_repeats }
+  const glob = plainMatchGlob(word, rules)
+  const compiled = compileTerm(word.toLowerCase(), rules)
+  let afterId = 0
+  let count = 0
+  // A broad/short term must not materialize the registry in one D1 response.
+  // Repeated-character rules have no bounded GLOB prefilter; page that scan too.
+  while (true) {
+    const page = await db.prepare(
+      `SELECT id, username_canonical FROM usernames
+       WHERE id > ?3 AND (?2 IS NULL OR username_canonical = ?1
+         OR REPLACE(REPLACE(REPLACE(username_canonical, '-', ''), '_', ''), '.', '') GLOB ?2)
+       ORDER BY id LIMIT 1000`
+    ).bind(word.toLowerCase(), glob, afterId).all<{ id: number; username_canonical: string }>()
+    for (const row of page.results) {
+      if (matchesTerm(row.username_canonical, word.toLowerCase(), rules, compiled)) count++
+      afterId = row.id
+    }
+    if (page.results.length < 1000) return count
+  }
 }
 
 export async function listPendingProposals(db: D1Database): Promise<BlockProposal[]> {

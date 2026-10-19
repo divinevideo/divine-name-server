@@ -1,237 +1,201 @@
-// ABOUTME: Judgment runs only for an embedding, caches the verdict, and refuses
-// ABOUTME: the name when the model cannot be asked.
-
-import { describe, expect, it } from 'vitest'
+// ABOUTME: Runs configured, disabled, cached and failed judgments through real SQLite.
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSqliteD1, seedUsername, sqliteAvailable } from '../db/sqlite-test-helpers'
-import { listPendingProposals, proposeBlockWord } from '../db/block-verdicts'
-import { resolveUsernameBlock } from './name-block'
-import type { JevFetch } from './jev'
+import { approveProposal, bumpBlocklistVersion, listPendingProposals, proposeBlockWord } from '../db/block-verdicts'
+import { resolveUsernameBlock, type BlockEnv } from './name-block'
+import type { JudgmentAI } from './judgment'
 
-const describeSqlite = sqliteAvailable() ? describe : describe.skip
+const databases: ReturnType<typeof createSqliteD1>[] = []
+afterEach(() => { for (const { sqlite } of databases.splice(0)) sqlite.close() })
 
-function jev(noul: number, calls: string[]): JevFetch {
-  return async (_url, init) => {
-    calls.push(String(init.body))
-    return new Response(JSON.stringify({ answers: { meant: { noul }, belongs: { noul } } }), { status: 200 })
-  }
+function setup(word = 'zxqword', category = 'slur', scope = 'token') {
+  const handle = createSqliteD1()
+  databases.push(handle)
+  handle.sqlite.exec('DELETE FROM reserved_words')
+  handle.sqlite.prepare('INSERT INTO reserved_words (word, category, created_at, match_scope) VALUES (?, ?, 1, ?)')
+    .run(word, category, scope)
+  return handle
 }
 
-describeSqlite('resolveUsernameBlock', () => {
-  it('blocks a scoped hit without calling out', async () => {
-    const { db, sqlite } = createSqliteD1()
-    sqlite.prepare(
-      `INSERT INTO reserved_words (word, category, reason, created_at, match_scope) VALUES ('zxqword', 'offensive', NULL, 1, 'token')`
-    ).run()
-    const calls: string[] = []
-    const outcome = await resolveUsernameBlock(db, 'aa-zxqword', { TYPESAFE_API_KEY: 'test', JEV_BLOCK_MIN: '0.5' }, jev(0.9, calls))
-    expect(outcome).toEqual({ kind: 'reserved' })
-    expect(calls).toEqual([])
-    sqlite.close()
+function ai(noul: number) {
+  return { run: vi.fn(async (_model: string, _input: unknown) => ({
+    model: 'clef', answers: { meant: { type: 'noul', noul }, belongs: { type: 'noul', noul } },
+  })) }
+}
+const env = (AI: JudgmentAI, over: Partial<BlockEnv> = {}): BlockEnv => ({ AI, JUDGMENT_BLOCK_MIN: '0.5', ...over })
+
+describe.skipIf(!sqliteAvailable())('resolveUsernameBlock', () => {
+  it('blocks scoped hits even while AI is disabled', async () => {
+    const { db } = setup()
+    expect(await resolveUsernameBlock(db, 'aa-zxqword', {})).toEqual({ kind: 'reserved' })
   })
 
-  it('leaves a system word inside a longer name clear', async () => {
-    const { db, sqlite } = createSqliteD1()
-    const calls: string[] = []
-    const outcome = await resolveUsernameBlock(db, 'myadmin', { TYPESAFE_API_KEY: 'test', JEV_BLOCK_MIN: '0.5' }, jev(0.99, calls))
-    expect(outcome).toEqual({ kind: 'clear' })
-    expect(calls).toEqual([])
-    sqlite.close()
-  })
-
-  it('does not call Jev for a public availability check on an embedding', async () => {
-    const { db, sqlite } = createSqliteD1()
-    sqlite.prepare(
-      `INSERT INTO reserved_words (word, category, reason, created_at, match_scope) VALUES ('zxqword', 'offensive', NULL, 1, 'token')`
-    ).run()
-    const calls: string[] = []
-    const outcome = await resolveUsernameBlock(
-      db,
-      'zxqwordextra',
-      { TYPESAFE_API_KEY: 'test', JEV_BLOCK_MIN: '0.5' },
-      jev(0.8, calls),
-      1_700_000_000,
-      false
-    )
-    expect(outcome).toEqual({ kind: 'unavailable' })
-    expect(calls).toEqual([])
-    sqlite.close()
-  })
-
-  it('judges an embedding stored under the production profanity category', async () => {
-    const { db, sqlite } = createSqliteD1()
-    sqlite.prepare(
-      `INSERT INTO reserved_words (word, category, reason, created_at, match_scope) VALUES ('zxqword', 'Foul Language ', NULL, 1, 'token')`
-    ).run()
-    const calls: string[] = []
-    const outcome = await resolveUsernameBlock(
-      db,
-      'zxqwordextra',
-      { TYPESAFE_API_KEY: 'test', JEV_BLOCK_MIN: '0.5' },
-      jev(0.8, calls),
-      1_700_000_000
-    )
-    expect(outcome).toEqual({ kind: 'reserved' })
-    expect(calls).toHaveLength(1)
-    sqlite.close()
-  })
-
-  it('does not reuse a clear cached under a different threshold', async () => {
-    const { db, sqlite } = createSqliteD1()
-    sqlite.prepare(
-      `INSERT INTO reserved_words (word, category, reason, created_at, match_scope) VALUES ('zxqword', 'offensive', NULL, 1, 'token')`
-    ).run()
-    const calls: string[] = []
-    const first = await resolveUsernameBlock(
-      db,
-      'zxqwordextra',
-      { TYPESAFE_API_KEY: 'test', JEV_BLOCK_MIN: '0.5' },
-      jev(0.2, calls),
-      1_700_000_000
-    )
-    const second = await resolveUsernameBlock(
-      db,
-      'zxqwordextra',
-      { TYPESAFE_API_KEY: 'test', JEV_BLOCK_MIN: '0.1' },
-      jev(0.2, calls),
-      1_700_000_100
-    )
-    expect(first).toEqual({ kind: 'clear' })
-    expect(second).toEqual({ kind: 'reserved' })
-    expect(calls).toHaveLength(2)
-    sqlite.close()
-  })
-
-  it('asks once about an embedding and caches a block', async () => {
-    const { db, sqlite } = createSqliteD1()
-    sqlite.prepare(
-      `INSERT INTO reserved_words (word, category, reason, created_at, match_scope) VALUES ('zxqword', 'offensive', NULL, 1, 'token')`
-    ).run()
-    const calls: string[] = []
-    const env = { TYPESAFE_API_KEY: 'test', JEV_BLOCK_MIN: '0.5' }
-    const first = await resolveUsernameBlock(db, 'zxqwordextra', env, jev(0.8, calls), 1_700_000_000)
-    const second = await resolveUsernameBlock(db, 'zxqwordextra', env, jev(0.1, calls), 1_700_000_000)
-    expect(first).toEqual({ kind: 'reserved' })
-    expect(second).toEqual({ kind: 'reserved' })
-    expect(calls).toHaveLength(1)
-    expect(calls[0]).toContain('reading_if_word_is_intended')
-    expect(calls[0]).not.toContain('belongs')
-    sqlite.close()
-  })
-
-  it('allows an embedding the judgment says was an accident', async () => {
-    const { db, sqlite } = createSqliteD1()
-    sqlite.prepare(
-      `INSERT INTO reserved_words (word, category, reason, created_at, match_scope) VALUES ('zxqword', 'offensive', NULL, 1, 'token')`
-    ).run()
-    const outcome = await resolveUsernameBlock(
-      db,
-      'zxqwordextra',
-      { TYPESAFE_API_KEY: 'test', JEV_BLOCK_MIN: '0.5' },
-      jev(0.2, []),
-      1_700_000_000
-    )
-    expect(outcome).toEqual({ kind: 'clear' })
-    sqlite.close()
-  })
-
-  it('refuses an embedding when the model is unreachable and does not cache that', async () => {
-    const { db, sqlite } = createSqliteD1()
-    sqlite.prepare(
-      `INSERT INTO reserved_words (word, category, reason, created_at, match_scope) VALUES ('zxqword', 'offensive', NULL, 1, 'token')`
-    ).run()
-    const failing: JevFetch = async () => { throw new Error('down') }
-    const env = { TYPESAFE_API_KEY: 'test', JEV_BLOCK_MIN: '0.5' }
-    expect(await resolveUsernameBlock(db, 'zxqwordextra', env, failing, 1_700_000_000)).toEqual({ kind: 'unavailable' })
-    const calls: string[] = []
-    expect(await resolveUsernameBlock(db, 'zxqwordextra', env, jev(0.1, calls), 1_700_000_100)).toEqual({ kind: 'clear' })
-    expect(calls).toHaveLength(1)
-    sqlite.close()
-  })
-
-  it('judges every embedded word before caching a clear', async () => {
-    const { db, sqlite } = createSqliteD1()
-    for (const word of ['abcd', 'bcde', 'cdef', 'defg']) {
-      sqlite.prepare(
-        `INSERT INTO reserved_words (word, category, reason, created_at, match_scope) VALUES (?, 'offensive', NULL, 1, 'token')`
-      ).run(word)
+  it.each([{}, { JUDGMENT_BLOCK_MIN: '0.5' }, { AI: ai(0.9) }, { AI: ai(0.9), JUDGMENT_BLOCK_MIN: '' }])(
+    'allows ambiguous names when the feature is not configured', async (disabled) => {
+      const { db, sqlite } = setup()
+      expect(await resolveUsernameBlock(db, 'zxqwordextra', disabled)).toEqual({ kind: 'clear' })
+      expect(sqlite.prepare('SELECT COUNT(*) AS n FROM block_verdicts').get()).toEqual({ n: 0 })
     }
-    const calls: string[] = []
-    const fetchImpl: JevFetch = async (_url, init) => {
-      const body = String(init.body)
-      calls.push(body)
-      const flagged = (JSON.parse(body) as { state?: { flagged_word?: string } }).state?.flagged_word
-      const noul = flagged === 'defg' ? 0.9 : 0.1
-      return new Response(JSON.stringify({ answers: { meant: { noul }, belongs: { noul: 0.1 } } }), { status: 200 })
-    }
-    const outcome = await resolveUsernameBlock(
-      db,
-      'abcdefg',
-      { TYPESAFE_API_KEY: 'test', JEV_BLOCK_MIN: '0.5' },
-      fetchImpl,
-      1_700_000_000
-    )
-    expect(outcome).toEqual({ kind: 'reserved' })
-    expect(calls).toHaveLength(4)
-    sqlite.close()
+  )
+
+  it('refuses invalid configured thresholds without spending a call', async () => {
+    const { db } = setup(); const AI = ai(0.1)
+    expect(await resolveUsernameBlock(db, 'zxqwordextra', env(AI, { JUDGMENT_BLOCK_MIN: 'oops' }))).toEqual({ kind: 'unavailable' })
+    expect(AI.run).not.toHaveBeenCalled()
   })
 
-  it('does not cache a clear when the call cap stops before every embedded word', async () => {
-    const { db, sqlite } = createSqliteD1()
-    for (const word of ['abcd', 'bcde']) {
-      sqlite.prepare(
-        `INSERT INTO reserved_words (word, category, reason, created_at, match_scope) VALUES (?, 'offensive', NULL, 1, 'token')`
-      ).run(word)
-    }
-    const calls: string[] = []
-    const env = { TYPESAFE_API_KEY: 'test', JEV_BLOCK_MIN: '0.5', JEV_MAX_CALLS_PER_MINUTE: '1' }
-    const first = await resolveUsernameBlock(db, 'abcdefg', env, jev(0.1, calls), 1_700_000_000)
-    expect(first).toEqual({ kind: 'unavailable' })
-    const later = await resolveUsernameBlock(db, 'abcdefg', { ...env, JEV_MAX_CALLS_PER_MINUTE: '5' }, jev(0.1, calls), 1_700_000_060)
-    expect(later).toEqual({ kind: 'clear' })
-    expect(calls.length).toBeGreaterThan(1)
-    sqlite.close()
+  it('keeps host words and short content words scope-only', async () => {
+    const first = setup('zxqword', 'system'); const AI = ai(0.9)
+    expect(await resolveUsernameBlock(first.db, 'zxqwordextra', env(AI))).toEqual({ kind: 'clear' })
+    const second = setup('zqx', 'slur')
+    expect(await resolveUsernameBlock(second.db, 'zqxextra', env(AI))).toEqual({ kind: 'clear' })
+    expect(await resolveUsernameBlock(second.db, 'aa-zqx', env(AI))).toEqual({ kind: 'reserved' })
+    expect(AI.run).not.toHaveBeenCalled()
   })
 
-  it('does not spend a proposal call on a word that is already pending', async () => {
-    const { db, sqlite } = createSqliteD1()
-    sqlite.prepare(
-      `INSERT INTO reserved_words (word, category, reason, created_at, match_scope) VALUES ('zxqword', 'offensive', NULL, 1, 'token')`
-    ).run()
+  it.each(['slur', 'Foul Language ', 'Hate Groups', 'child_safety'])('judges eligible hidden words in %s', async (category) => {
+    const { db } = setup('zxqword', category); const AI = ai(0.9)
+    expect(await resolveUsernameBlock(db, 'zxqwordextra', env(AI))).toEqual({ kind: 'reserved' })
+    expect(AI.run).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([0.1, 0.9])('caches the complete verdict at score %s until the blocklist changes', async (score) => {
+    const { db } = setup(); const AI = ai(score); const config = env(AI)
+    const first = await resolveUsernameBlock(db, 'zxqwordextra', config)
+    expect(first).toEqual({ kind: score >= 0.5 ? 'reserved' : 'clear' })
+    expect(await resolveUsernameBlock(db, 'zxqwordextra', config)).toEqual(first)
+    expect(AI.run).toHaveBeenCalledTimes(1)
+    await bumpBlocklistVersion(db)
+    await resolveUsernameBlock(db, 'zxqwordextra', config)
+    expect(AI.run).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not reuse another provider or threshold verdict', async () => {
+    const { db, sqlite } = setup(); const AI = ai(0.2)
+    sqlite.prepare("INSERT INTO block_verdicts VALUES ('zxqwordextra', 1, '0.5', 'blocked', 1)").run()
+    expect(await resolveUsernameBlock(db, 'zxqwordextra', env(AI))).toEqual({ kind: 'clear' })
+    expect(await resolveUsernameBlock(db, 'zxqwordextra', env(AI, { JUDGMENT_BLOCK_MIN: '0.1' }))).toEqual({ kind: 'reserved' })
+    expect(AI.run).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not cache older term data under a concurrently bumped version', async () => {
+    const { db, sqlite } = setup(); const AI = ai(0.1)
+    const wrapped: D1Database = Object.create(db)
+    let bump = true
+    wrapped.prepare = sql => {
+      const statement = db.prepare(sql)
+      if (sql.includes('FROM reserved_words') && bump) {
+        const all = statement.all.bind(statement)
+        statement.all = async <T>() => {
+          const result = await all<T>()
+          sqlite.exec('UPDATE blocklist_meta SET version = version + 1 WHERE id = 1')
+          bump = false
+          return result
+        }
+      }
+      return statement
+    }
+    expect(await resolveUsernameBlock(wrapped, 'zxqwordextra', env(AI))).toEqual({ kind: 'clear' })
+    const secondAI = ai(0.9)
+    expect(await resolveUsernameBlock(db, 'zxqwordextra', env(secondAI))).toEqual({ kind: 'reserved' })
+    expect(secondAI.run).toHaveBeenCalledTimes(1)
+  })
+
+  it('preserves the held invite-path no-spend behavior for an uncached ambiguous name', async () => {
+    const { db } = setup(); const AI = ai(0.9)
+    expect(await resolveUsernameBlock(db, 'zxqwordextra', env(AI), undefined, false)).toEqual({ kind: 'unavailable' })
+    expect(AI.run).not.toHaveBeenCalled()
+    await resolveUsernameBlock(db, 'zxqwordextra', env(AI))
+    expect(await resolveUsernameBlock(db, 'zxqwordextra', env(AI), undefined, false)).toEqual({ kind: 'reserved' })
+    expect(AI.run).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not cache a configured failure', async () => {
+    const { db } = setup()
+    expect(await resolveUsernameBlock(db, 'zxqwordextra', env({ run: async () => { throw new Error('down') } }))).toEqual({ kind: 'unavailable' })
+    const AI = ai(0.1)
+    expect(await resolveUsernameBlock(db, 'zxqwordextra', env(AI))).toEqual({ kind: 'clear' })
+    expect(AI.run).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses one global per-minute budget and never caches a partial clear', async () => {
+    const { db, sqlite } = setup('abcd')
+    sqlite.prepare("INSERT INTO reserved_words (word, category, created_at) VALUES ('bcde', 'slur', 1)").run()
+    const AI = ai(0.1); const config = env(AI, { JUDGMENT_MAX_CALLS_PER_MINUTE: '1' })
+    expect(await resolveUsernameBlock(db, 'abcdefg', config, 120)).toEqual({ kind: 'unavailable' })
+    expect(await resolveUsernameBlock(db, 'abcdextra', config, 120)).toEqual({ kind: 'unavailable' })
+    expect(AI.run).toHaveBeenCalledTimes(1)
+    expect(sqlite.prepare('SELECT COUNT(*) AS n FROM block_verdicts').get()).toEqual({ n: 0 })
+    expect(await resolveUsernameBlock(db, 'abcdefg', env(AI), 180)).toEqual({ kind: 'clear' })
+    expect(AI.run).toHaveBeenCalledTimes(3)
+  })
+
+  it('does not spend a proposal call for a pending word', async () => {
+    const { db } = setup(); const AI = ai(0.9)
     await proposeBlockWord(db, 'extra', 0.9, 1)
-    const calls: string[] = []
-    const outcome = await resolveUsernameBlock(
-      db,
-      'zxqwordextra',
-      { TYPESAFE_API_KEY: 'test', JEV_BLOCK_MIN: '0.5', JEV_PROPOSE_MIN: '0.5' },
-      jev(0.9, calls),
-      1_700_000_000
-    )
-    expect(outcome).toEqual({ kind: 'reserved' })
-    expect(calls.some((body) => body.includes('belongs'))).toBe(false)
-    sqlite.close()
+    await resolveUsernameBlock(db, 'zxqwordextra', env(AI, { JUDGMENT_PROPOSE_MIN: '0.5' }))
+    expect(AI.run).toHaveBeenCalledTimes(1)
   })
 
-  it('counts a leet spelling in the proposal impact', async () => {
-    const { db, sqlite } = createSqliteD1()
-    seedUsername(sqlite, { name: 's4ckname' })
-    seedUsername(sqlite, { name: 's-4-ck-extra' })
-    seedUsername(sqlite, { name: 'brightlantern' })
-    seedUsername(sqlite, { name: 'xn--sack', canonical: 'xn--sack' })
-    await proposeBlockWord(db, 'sack', 0.9, 1)
-    const proposals = await listPendingProposals(db)
-    expect(proposals.find((row) => row.word === 'sack')?.affected_count).toBe(2)
-    sqlite.close()
+  it('charges each call to its actual minute when a judgment spans a boundary', async () => {
+    const { db, sqlite } = setup('abcd')
+    sqlite.prepare("INSERT INTO reserved_words (word, category, created_at) VALUES ('bcde', 'slur', 1)").run()
+    let now = 120
+    const run = vi.fn(async () => {
+      now = 180
+      return { model: 'clef', answers: { meant: { type: 'noul', noul: 0.1 } } }
+    })
+    expect(await resolveUsernameBlock(db, 'abcdefg', env({ run }, { JUDGMENT_MAX_CALLS_PER_MINUTE: '1' }), () => now)).toEqual({ kind: 'clear' })
+    expect(sqlite.prepare('SELECT * FROM jev_call_buckets ORDER BY minute_bucket').all()).toEqual([
+      { minute_bucket: 2, calls: 1 }, { minute_bucket: 3, calls: 1 },
+    ])
   })
 
-  it('refuses an embedding when no threshold is configured, without calling', async () => {
-    const { db, sqlite } = createSqliteD1()
-    sqlite.prepare(
-      `INSERT INTO reserved_words (word, category, reason, created_at, match_scope) VALUES ('zxqword', 'offensive', NULL, 1, 'token')`
-    ).run()
-    const calls: string[] = []
-    const outcome = await resolveUsernameBlock(db, 'zxqwordextra', { TYPESAFE_API_KEY: 'test' }, jev(0.99, calls))
-    expect(outcome).toEqual({ kind: 'unavailable' })
-    expect(calls).toEqual([])
-    sqlite.close()
+  it('judges every embedded term before caching a clear verdict', async () => {
+    const { db, sqlite } = setup('abcd')
+    for (const word of ['bcde', 'cdef', 'defg']) {
+      sqlite.prepare("INSERT INTO reserved_words (word, category, created_at) VALUES (?, 'slur', 1)").run(word)
+    }
+    const run = vi.fn(async (_model: string, input: unknown) => {
+      const flagged = (input as { state: { flagged_word: string } }).state.flagged_word
+      return { model: 'clef', answers: { meant: { type: 'noul', noul: flagged === 'defg' ? 0.9 : 0.1 } } }
+    })
+    expect(await resolveUsernameBlock(db, 'abcdefg', env({ run }))).toEqual({ kind: 'reserved' })
+    expect(run).toHaveBeenCalledTimes(4)
+  })
+
+  it.each(['0', '-1', 'oops'])('refuses without calling when the configured cap is %s', async (cap) => {
+    const { db } = setup(); const AI = ai(0.1)
+    expect(await resolveUsernameBlock(db, 'zxqwordextra', env(AI, { JUDGMENT_MAX_CALLS_PER_MINUTE: cap }))).toEqual({ kind: 'unavailable' })
+    expect(AI.run).not.toHaveBeenCalled()
+  })
+
+  it('approves proposals as separate-word blocks; hidden uses still need judgment', async () => {
+    const { db, sqlite } = setup(); const AI = ai(0.9)
+    seedUsername(sqlite, { name: 'aazxqword' })
+    seedUsername(sqlite, { name: 'aa-zxqw0rd' })
+    await proposeBlockWord(db, 'zxqword', 0.9, 1)
+    expect((await listPendingProposals(db))[0].affected_count).toBe(1)
+    await approveProposal(db, 'zxqword', null, 2)
+    expect(await resolveUsernameBlock(db, 'aa-zxqword', env(AI))).toEqual({ kind: 'reserved' })
+    expect(AI.run).not.toHaveBeenCalled()
+    expect(await resolveUsernameBlock(db, 'zxqwordextra', env(AI))).toEqual({ kind: 'reserved' })
+    expect(AI.run).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses digit substitution even on a row with the old option switched off', async () => {
+    const { db, sqlite } = setup()
+    sqlite.exec('UPDATE reserved_words SET match_leet = 0')
+    expect(await resolveUsernameBlock(db, 'aa-zxqw0rd', {})).toEqual({ kind: 'reserved' })
+  })
+
+  it('counts with the expansion and repeat settings approval preserves on an existing word', async () => {
+    const { db, sqlite } = setup('zxqw0rd')
+    sqlite.exec('UPDATE reserved_words SET match_digit_expand = 1, match_repeats = 1')
+    seedUsername(sqlite, { name: 'aa-zxqword' })
+    await proposeBlockWord(db, 'zxqw0rd', 0.9, 1)
+    expect((await listPendingProposals(db))[0].affected_count).toBe(1)
+    await approveProposal(db, 'zxqw0rd', null, 2)
+    expect(await resolveUsernameBlock(db, 'aa-zxqword', {})).toEqual({ kind: 'reserved' })
   })
 })

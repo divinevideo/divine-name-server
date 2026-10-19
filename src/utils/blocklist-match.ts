@@ -6,23 +6,14 @@
  *
  * `anywhere` is not a scope. A blocked word glued inside a longer word is not
  * a pattern the matcher can settle, so that case is `ambiguous` and goes to
- * judgment. A moderator-approved novel word sets `plain` instead, which is a
- * substring block that never needs another call.
+ * judgment. Moderator approval makes a proposal a separate-word block, not a
+ * substring block: hidden uses remain ambiguous.
  */
 export type MatchScope = 'whole' | 'token'
 
 export interface TermRules {
   /** Default 'whole': the safe end. A new term blocks only the name that is that term. */
   scope: MatchScope
-  /**
-   * Let a digit stand for the letter it imitates, so `fuck` matches `f0ck`.
-   *
-   * Deliberately one-directional by default: letters expand to digits. Letter-to-
-   * letter equivalence (treating `i` and `l` as the same) is a trap. It makes
-   * `klan` match `kian` and `nazi` match `nazl`, which lands on 93 existing
-   * names, most of them ordinary Turkish and Persian given names.
-   */
-  leet: boolean
   /**
    * Also expand digits back to letters, for terms stored already leetspelled.
    *
@@ -35,16 +26,14 @@ export interface TermRules {
   /** Tolerate a run of one character, so `bitch` matches `biiitch`. Off by default: `aryan` with repeats matches ordinary hyphenated names containing "arry-and". */
   repeats: boolean
   /**
-   * Substring block. Only set when a moderator approves a proposed word after
-   * seeing how many existing names it would catch. Not a scope a moderator
-   * picks from the add form.
+   * Legacy approval metadata. It never widens deterministic matching beyond
+   * the chosen scope.
    */
   plain: boolean
 }
 
 export const DEFAULT_RULES: TermRules = {
   scope: 'whole',
-  leet: true,
   digitExpand: false,
   repeats: false,
   plain: false,
@@ -79,7 +68,7 @@ export function judgesEmbeddings(word: string, category: string | null | undefin
 /** Characters the namespace allows between parts of a name. */
 const SEPARATORS = '[-_.]*'
 
-/** Letter to the digits that imitate it. Digits only, by design; see TermRules.leet. */
+/** Letter-to-digit substitution is always enabled, without folding letters together. */
 const LEET: Record<string, string> = {
   a: '4', b: '8', e: '3', g: '9', i: '1', l: '1', o: '0', s: '5', t: '7', z: '2',
 }
@@ -107,7 +96,7 @@ function escapeRegex(char: string): string {
 function acceptedCharacters(char: string, rules: TermRules): string[] {
   const accepted = new Set<string>([char])
 
-  if (rules.leet && !/[0-9]/.test(char)) {
+  if (!/[0-9]/.test(char)) {
     for (const digit of LEET[char] ?? '') accepted.add(digit)
   }
   if (rules.digitExpand && /[0-9]/.test(char)) {
@@ -299,7 +288,6 @@ export function matchesTerm(
   if (isPunycode(canonicalName) || isPunycode(term)) return canonicalName === term
 
   const pattern = compiled ?? compileTerm(term, rules)
-  if (rules.plain && pattern.test(canonicalName)) return true
 
   const anchored = anchoredPattern(pattern)
   switch (rules.scope) {
@@ -313,7 +301,7 @@ export function matchesTerm(
 export type TermSignal = 'blocked' | 'ambiguous' | 'clear'
 
 /**
- * `blocked` when the term matches at its scope (or as a plain substring).
+ * `blocked` when the term matches at its scope.
  * `ambiguous` when a judged term's letters sit inside a longer name but do not
  * match at that scope. `clear` otherwise. Punycode is never ambiguous.
  */

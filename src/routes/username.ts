@@ -94,9 +94,9 @@ username.get('/check/:name', async (c) => {
     // me" from "taken by someone else".
     const heldByOwner = existing?.status === 'active' && !!existing.pubkey
     if (!heldByOwner) {
-      // Availability checks are public and may be called on every keystroke.
-      // Do not let them spend the shared paid-judgment budget.
-      const block = await resolveUsernameBlock(c.env.DB, usernameData.canonical, c.env, fetch, undefined, false)
+      // Availability and reservation share the versioned verdict cache and
+      // the database's global judgment-call budget, not a per-IP allowance.
+      const block = await resolveUsernameBlock(c.env.DB, usernameData.canonical, c.env)
       if (block.kind === 'reserved') {
         return c.json({
           ok: true,
@@ -314,7 +314,7 @@ username.post('/reserve', async (c) => {
     // paid judgment call from this public endpoint.
     let reservedBlock: Awaited<ReturnType<typeof resolveUsernameBlock>> | null = null
     if (invite_code) {
-      reservedBlock = await resolveUsernameBlock(c.env.DB, nameCanonical, c.env, fetch, undefined, false)
+      reservedBlock = await resolveUsernameBlock(c.env.DB, nameCanonical, c.env, undefined, false)
       if (reservedBlock.kind === 'reserved') {
         return c.json({ ok: false, error: 'Username is reserved' }, 403, { 'Access-Control-Allow-Origin': '*' })
       }

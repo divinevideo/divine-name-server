@@ -64,10 +64,10 @@ describeSqlite('isReservedWord with per-term rules', () => {
   })
 
   it('reads a leetspelled term back to its plain spelling only when told to', async () => {
-    reserve('h1tler', { match_plain: 1 })
+    reserve('h1tler', { match_scope: 'token' })
     expect(await isReservedWord(db, 'zzz-hitler')).toBe(false)
 
-    reserve('h1tler', { match_plain: 1, match_digit_expand: 1 })
+    reserve('h1tler', { match_scope: 'token', match_digit_expand: 1 })
     expect(await isReservedWord(db, 'zzz-hitler')).toBe(true)
   })
 
@@ -110,13 +110,13 @@ describeSqlite('isReservedWord with per-term rules', () => {
   it('picks up a moderator edit without a restart', async () => {
     reserve('admin')
     expect(await isReservedWord(db, 'myadmin')).toBe(false)
-    reserve('admin', { match_plain: 1 })
-    expect(await isReservedWord(db, 'myadmin')).toBe(true)
+    reserve('admin', { match_scope: 'token' })
+    expect(await isReservedWord(db, 'my-admin')).toBe(true)
   })
 
-  it('clears approved substring behavior when a moderator re-adds a word in the form', async () => {
+  it('keeps approved words at separate-word scope when a moderator re-adds them', async () => {
     reserve('zxqword', { match_scope: 'token', match_plain: 1 })
-    expect(await isReservedWord(db, 'myzxqword')).toBe(true)
+    expect(await isReservedWord(db, 'myzxqword')).toBe(false)
 
     await addReservedWord(db, 'zxqword', 'offensive', 'reviewed', 'token')
     expect(await isReservedWord(db, 'myzxqword')).toBe(false)

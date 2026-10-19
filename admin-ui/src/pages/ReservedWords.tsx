@@ -22,7 +22,7 @@ function scopeBadgeClass(scope: MatchScope | undefined): string {
 
 function matchLabel(word: ReservedWord): string {
   return word.match_plain === 1
-    ? 'substring (approved)'
+    ? 'separate word (approved)'
     : SCOPE_LABEL[word.match_scope ?? 'whole']
 }
 
@@ -159,7 +159,7 @@ export default function ReservedWords() {
         <div className="bg-white shadow rounded-lg p-6">
           <h3 className="text-lg font-medium text-gray-900">Proposed words</h3>
           <p className="mt-1 text-sm text-gray-600">
-            Approving adds the word as a plain match. The count is existing names that contain it, not a judgment.
+            Approving blocks the word on its own or as a separate word. The count uses those same rules, including digit substitutions. Hidden uses still need judgment.
           </p>
           <ul className="mt-4 divide-y divide-gray-200">
             {proposals.map((proposal) => (
@@ -285,14 +285,14 @@ export default function ReservedWords() {
                   <>Also blocks names where <code>{newWord || 'word'}</code> stands on its own, like <code>xx-{newWord || 'word'}-xx</code>. A word inside a longer name is not blocked by this setting.</>
                 )}
               </p>
-              {['offensive', 'child_safety'].includes(newCategory.toLowerCase()) && (
+              {!['system', 'app', 'subdomain', 'protocol', 'brand'].includes(newCategory.trim().toLowerCase()) && (
                 <p className="mt-2 text-sm text-gray-500">
-                  For these categories, a word inside a longer name is sent for judgment.
+                  Words of at least four characters inside a longer name are sent for judgment when the AI layer is configured. Separators do not count toward that length.
                 </p>
               )}
               {existingWord?.match_plain === 1 && (
                 <p className="mt-2 text-sm text-amber-700">
-                  Saving this word replaces its approved substring match with the selected scope.
+                  Saving this word replaces its approved separate-word setting with the selected scope.
                 </p>
               )}
             </div>
