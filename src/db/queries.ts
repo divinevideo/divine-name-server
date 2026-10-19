@@ -1235,20 +1235,32 @@ export async function findSpentProofs(
   return spentSecrets
 }
 
-// Store proof secrets as spent to prevent replay attacks
+// Commit all validated proof records together, or leave all of them unchanged.
 export async function storeSpentProofs(
   db: D1Database,
   proofs: CashuProofRecord[],
   tokenHash: string,
   usernameCanonical: string
-): Promise<void> {
+): Promise<boolean> {
+  const secrets = proofs.map(proof => proof.secret)
+  if (secrets.length === 0 || new Set(secrets).size !== secrets.length) return false
   const now = Math.floor(Date.now() / 1000)
-  for (const proof of proofs) {
-    await db.prepare(
-      `INSERT OR IGNORE INTO spent_cashu_proofs
-       (proof_secret, cashu_token_hash, username_canonical, amount, created_at)
+  try {
+    // D1 batch is transactional: a conflicting record rolls back the entire set.
+    const results = await db.batch(proofs.map(proof => db.prepare(
+      `INSERT INTO spent_cashu_proofs
+         (proof_secret, cashu_token_hash, username_canonical, amount, created_at)
        VALUES (?, ?, ?, ?, ?)`
-    ).bind(proof.secret, tokenHash, usernameCanonical, proof.amount, now).run()
+    ).bind(proof.secret, tokenHash, usernameCanonical, proof.amount, now)))
+    if (results.length !== proofs.length || results.some(result => !result.success || result.meta.changes !== 1)) {
+      throw new Error('Payment proof records were not committed')
+    }
+    return true
+  } catch (error) {
+    // Inspect persisted state instead of depending on provider error wording.
+    // A database failure with no conflicting records must remain a failure.
+    if ((await findSpentProofs(db, secrets)).length > 0) return false
+    throw error
   }
 }
 

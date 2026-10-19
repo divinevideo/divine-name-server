@@ -98,6 +98,7 @@ function isRead(sql: string): boolean {
  * later statement observes an earlier one's writes.
  */
 export function asD1(db: SqliteDb): D1Database {
+  let batchTail = Promise.resolve()
   function execute(sql: string, params: unknown[]) {
     const statement = db.prepare(sql)
     if (isRead(sql)) return { rows: statement.all(...params), meta: { changes: 0, last_row_id: 0 } }
@@ -136,15 +137,24 @@ export function asD1(db: SqliteDb): D1Database {
     // the stand-in must too, or that call passes every test and fails in production.
     async batch(this: unknown, statements: D1PreparedStatement[]) {
       if (this !== binding) throw new TypeError('D1 batch must be called on the database binding')
-      db.exec('BEGIN')
+      // Whole batches, not individual statements, serialize across requests.
+      const previous = batchTail
+      let release!: () => void
+      batchTail = new Promise<void>(resolve => { release = resolve })
+      await previous
+      let began = false
       try {
+        db.exec('BEGIN')
+        began = true
         const results = []
         for (const statement of statements) results.push(await statement.run())
         db.exec('COMMIT')
         return results
       } catch (error) {
-        db.exec('ROLLBACK')
+        if (began) db.exec('ROLLBACK')
         throw error
+      } finally {
+        release()
       }
     },
   }

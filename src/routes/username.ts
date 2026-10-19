@@ -403,7 +403,10 @@ username.post('/reserve', async (c) => {
 
     // Consume validated proofs only after the block check succeeds.
     if (cashuProofData && cashuTokenHash) {
-      await storeSpentProofs(c.env.DB, cashuProofData, cashuTokenHash, nameCanonical)
+      const committed = await storeSpentProofs(c.env.DB, cashuProofData, cashuTokenHash, nameCanonical)
+      if (!committed) {
+        return c.json({ ok: false, error: 'Cashu proof has already been used' }, 409, { 'Access-Control-Allow-Origin': '*' })
+      }
     }
 
     // Generate confirmation token and set expiry (48 hours)
