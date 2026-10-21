@@ -7,7 +7,7 @@ import { bech32 } from '@scure/base'
 import { getSession } from '../auth/keycast-oauth'
 import { reserveUsername, revokeUsername, restoreUsername, assignUsername, getUsernameByName, searchUsernames, getReservedWords, addReservedWord, deleteReservedWord, exportUsernamesByStatus, getActiveUsernamesPaginated, countActiveUsernames, addTag, removeTag, getTagDetailsForUsername, getTagsForUsername, getTagsForUsernames, getAllTags, getUsernameStats, updateAdminNotes, releaseHeldNameEarly, getUsernameReleaseHistory, enqueueFastlySyncTask, getQueuedFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, getLatestReleaseAttemptByPubkey, listReleaseAttempts, type ReleaseAttemptState, type SearchSort } from '../db/queries'
 import { validateUsername, UsernameValidationError, validateAndNormalizePubkey, PubkeyValidationError } from '../utils/validation'
-import { approveProposal, listPendingProposals, rejectProposal } from '../db/block-verdicts'
+import { approveProposal, getJudgmentStats, listPendingProposals, rejectProposal } from '../db/block-verdicts'
 import type { MatchScope } from '../utils/blocklist-match'
 
 function isMatchScope(value: unknown): value is MatchScope {
@@ -451,6 +451,16 @@ admin.delete('/reserved-words/:word', async (c) => {
     return c.json({ ok: true, deleted: canonical ?? word.toLowerCase() })
   } catch (error) {
     console.error('Delete reserved word error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+admin.get('/judgment-stats', async (c) => {
+  try {
+    const stats = await getJudgmentStats(c.env.DB)
+    return c.json({ ok: true, ...stats }, 200, { 'Cache-Control': 'no-store' })
+  } catch (error) {
+    console.error('Judgment stats error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
   }
 })

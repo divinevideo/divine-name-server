@@ -120,6 +120,7 @@ export async function resolveUsernameBlock(
   const listed = new Set(terms.map((term) => term.word))
   const cap = parseCap(env.JUDGMENT_MAX_CALLS_PER_MINUTE)
   let blocked = false
+  let score: number | null = null
   let guilty: { word: string; reading: Reading | null } | null = null
 
   const embedded = classification.embedded
@@ -137,6 +138,10 @@ export async function resolveUsernameBlock(
         formatReading(pair.withWord),
         formatReading(pair.withoutWord)
       )
+      // A name is blocked if any completed intent call reaches the threshold.
+      // Retain the highest observed score, including the triggering score when
+      // a block stops further calls. Clear verdicts include every embedded term.
+      score = Math.max(score ?? 0, answer.noul)
       if (answer.noul >= threshold) {
         blocked = true
         guilty = { word, reading: pair.withWord }
@@ -149,7 +154,8 @@ export async function resolveUsernameBlock(
   }
 
   // Reaching this point without a block means every embedded word was judged.
-  await putBlockVerdict(db, canonical, version, policyKey, blocked ? 'blocked' : 'clear', clock())
+  if (score === null) return { kind: 'unavailable' }
+  await putBlockVerdict(db, canonical, version, policyKey, blocked ? 'blocked' : 'clear', clock(), score)
   if (blocked && guilty) {
     await maybePropose(db, env, env.AI, guilty.reading, guilty.word, listed, clock)
   }

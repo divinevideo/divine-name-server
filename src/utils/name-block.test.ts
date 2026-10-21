@@ -59,10 +59,11 @@ describe.skipIf(!sqliteAvailable())('resolveUsernameBlock', () => {
     expect(AI.run).toHaveBeenCalledTimes(1)
   })
 
-  it.each([0.1, 0.9])('caches the complete verdict at score %s until the blocklist changes', async (score) => {
-    const { db } = setup(); const AI = ai(score); const config = env(AI)
+  it.each([0, 0.1, 0.9])('caches the complete verdict at score %s until the blocklist changes', async (score) => {
+    const { db, sqlite } = setup(); const AI = ai(score); const config = env(AI)
     const first = await resolveUsernameBlock(db, 'zxqwordextra', config)
     expect(first).toEqual({ kind: score >= 0.5 ? 'reserved' : 'clear' })
+    expect(sqlite.prepare('SELECT score FROM block_verdicts').get()).toEqual({ score })
     expect(await resolveUsernameBlock(db, 'zxqwordextra', config)).toEqual(first)
     expect(AI.run).toHaveBeenCalledTimes(1)
     await bumpBlocklistVersion(db)
@@ -72,10 +73,43 @@ describe.skipIf(!sqliteAvailable())('resolveUsernameBlock', () => {
 
   it('does not reuse another provider or threshold verdict', async () => {
     const { db, sqlite } = setup(); const AI = ai(0.2)
-    sqlite.prepare("INSERT INTO block_verdicts VALUES ('zxqwordextra', 1, '0.5', 'blocked', 1)").run()
+    sqlite.prepare("INSERT INTO block_verdicts (canonical, blocklist_version, threshold, verdict, created_at) VALUES ('zxqwordextra', 1, '0.5', 'blocked', 1)").run()
     expect(await resolveUsernameBlock(db, 'zxqwordextra', env(AI))).toEqual({ kind: 'clear' })
     expect(await resolveUsernameBlock(db, 'zxqwordextra', env(AI, { JUDGMENT_BLOCK_MIN: '0.1' }))).toEqual({ kind: 'reserved' })
     expect(AI.run).toHaveBeenCalledTimes(2)
+  })
+
+  it('retains a legacy null-score verdict without inventing a score or making a call', async () => {
+    const { db, sqlite } = setup(); const AI = ai(0.9)
+    sqlite.prepare("INSERT INTO block_verdicts (canonical, blocklist_version, threshold, verdict, created_at) VALUES ('zxqwordextra', 1, 'clef-intent-v1:0.6', 'clear', 1)").run()
+    expect(await resolveUsernameBlock(db, 'zxqwordextra', env(AI, { JUDGMENT_BLOCK_MIN: '0.60' }))).toEqual({ kind: 'clear' })
+    expect(AI.run).not.toHaveBeenCalled()
+    expect(sqlite.prepare('SELECT score FROM block_verdicts').get()).toEqual({ score: null })
+  })
+
+  it.each([[0.59, 'clear'], [0.60, 'reserved']] as const)('enforces the starting threshold at score %s and retains it', async (score, kind) => {
+    const { db, sqlite } = setup(); const AI = ai(score)
+    expect(await resolveUsernameBlock(db, 'zxqwordextra', env(AI, { JUDGMENT_BLOCK_MIN: '0.60' }))).toEqual({ kind })
+    expect(sqlite.prepare('SELECT score FROM block_verdicts').get()).toEqual({ score })
+  })
+
+  it.each([false, true])('retains the maximum completed intent score for a multi-term verdict (blocked=%s)', async (blocked) => {
+    const { db, sqlite } = setup('zxqw')
+    for (const word of ['xqwo', 'qwor', 'word']) {
+      sqlite.prepare("INSERT INTO reserved_words (word, category, created_at) VALUES (?, 'slur', 1)").run(word)
+    }
+    const scores: Record<string, number> = { zxqw: 0.1, xqwo: blocked ? 0.75 : 0.4, qwor: 0.2, word: 0.3 }
+    const run = vi.fn(async (_model: string, input: unknown) => {
+      const word = (input as { state: { flagged_word: string } }).state.flagged_word
+      return { model: 'clef', answers: { meant: { type: 'noul', noul: scores[word] } } }
+    })
+    expect(await resolveUsernameBlock(db, 'zxqwordextra', env({ run }, { JUDGMENT_BLOCK_MIN: '0.60' }))).toEqual({ kind: blocked ? 'reserved' : 'clear' })
+    expect(sqlite.prepare('SELECT score FROM block_verdicts').get()).toEqual({ score: blocked ? 0.75 : 0.4 })
+    if (blocked) {
+      expect((run.mock.lastCall?.[1] as { state: { flagged_word: string } }).state.flagged_word).toBe('xqwo')
+    } else {
+      expect(run).toHaveBeenCalledTimes(4)
+    }
   })
 
   it('does not cache older term data under a concurrently bumped version', async () => {
@@ -116,6 +150,19 @@ describe.skipIf(!sqliteAvailable())('resolveUsernameBlock', () => {
     const AI = ai(0.1)
     expect(await resolveUsernameBlock(db, 'zxqwordextra', env(AI))).toEqual({ kind: 'clear' })
     expect(AI.run).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not retain a partial score when a later intent call fails', async () => {
+    const { db, sqlite } = setup('zxqw')
+    sqlite.prepare("INSERT INTO reserved_words (word, category, created_at) VALUES ('xqwo', 'slur', 1)").run()
+    let calls = 0
+    const run = vi.fn(async () => {
+      if (++calls === 2) throw new Error('synthetic service failure')
+      return { model: 'clef', answers: { meant: { type: 'noul', noul: 0.1 } } }
+    })
+    expect(await resolveUsernameBlock(db, 'zxqwordextra', env({ run }))).toEqual({ kind: 'unavailable' })
+    expect(run).toHaveBeenCalledTimes(2)
+    expect(sqlite.prepare('SELECT COUNT(*) AS n FROM block_verdicts').get()).toEqual({ n: 0 })
   })
 
   it('uses one global per-minute budget and never caches a partial clear', async () => {

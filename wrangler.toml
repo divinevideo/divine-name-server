@@ -21,17 +21,21 @@ routes = [
 # NAME_PRICE_SATS: minimum sat amount required to reserve a name (default: 1000)
 # INVITE_FAUCET_URL: base URL of the invite code faucet service (e.g. "https://faucet.example.com")
 # Set via wrangler secret put SENDGRID_API_KEY
-# Optional judgment: see docs/username-judgment.md. No AI binding is provisioned here.
+# Judgment enforcement: see docs/username-judgment.md. The prepared binding and
+# starting threshold below enforce immediately when this configuration is deployed.
 # Without AI or JUDGMENT_BLOCK_MIN, ambiguous names are clear (feature disabled).
-# A configured judgment failure refuses the name. Thresholds must be measured.
+# A configured judgment failure refuses the name. There is no observe-only mode.
+# The initial threshold is a deliberate, unvalidated starting policy, not a
+# deployed-traffic accuracy claim; retained scores support later correction.
 # JUDGMENT_PROPOSE_MIN separately controls word-only proposals; unset proposes nothing.
 # The deployment owner must separately authorize binding/configuration changes.
-# Set threshold/budget values via secrets in that rollout: keep_vars is off,
-# so dashboard variables are removed by deploy. Global budget defaults to 30 calls/minute.
+# Nonsecret threshold configuration belongs here: keep_vars is off, so dashboard
+# variables are removed by deploy. Global budget defaults to 30 calls/minute.
 # Recoverable username-release finalization: wrangler secret put DELETION_COORDINATOR_TOKEN
 [vars]
 KEYCAST_URL = "https://login.divine.video"
 KEYCAST_CLIENT_ID = "divine-name-server"
+JUDGMENT_BLOCK_MIN = "0.60"
 # Comma-separated hex pubkeys authorized for Keycast OAuth admin access.
 # CF Access users are authorized by the Access policy; this only applies to Keycast sessions.
 ADMIN_PUBKEYS = "81549bc0b5153b4b970fe4a3892ad185698b8b8b26ec69321a527d0644cd2898"
@@ -44,6 +48,9 @@ ACCESS_AUD = "2d9f10ee33db581d94ddeb903bb588c4484414f90632c7c7469e4ac30e8c09ce"
 # ALLOWED_MINTS = "https://8333.space:3338,https://mint.minibits.cash/Bitcoin"
 # NAME_PRICE_SATS = "1000"
 # INVITE_FAUCET_URL = "https://faucet.divine.video"
+
+[ai]
+binding = "AI"
 
 [[kv_namespaces]]
 binding = "SESSION_KV"

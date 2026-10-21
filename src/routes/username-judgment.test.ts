@@ -22,7 +22,11 @@ describe.skipIf(!sqliteAvailable())('public availability judgments', () => {
     const request = () => new Request('https://names.example.test/api/username/check/zxqwordextra')
     const response = await app.fetch(request(), bindings, createExecutionContext())
     expect(response.status).toBe(200)
-    expect((await response.json() as { available: boolean }).available).toBe(noul < 0.5)
+    const body = await response.json() as Record<string, unknown>
+    expect(body.available).toBe(noul < 0.5)
+    expect(body).not.toHaveProperty('score')
+    expect(body).not.toHaveProperty('model_score')
+    expect(handle.sqlite.prepare('SELECT score FROM block_verdicts').get()).toEqual({ score: noul })
     await app.fetch(request(), bindings, createExecutionContext())
     expect(await resolveUsernameBlock(handle.db, 'zxqwordextra', bindings)).toEqual({ kind: noul < 0.5 ? 'clear' : 'reserved' })
     expect(run).toHaveBeenCalledTimes(1)

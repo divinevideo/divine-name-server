@@ -73,14 +73,82 @@ export async function putBlockVerdict(
   version: number,
   threshold: number | string,
   verdict: 'blocked' | 'clear',
-  now: number
+  now: number,
+  score: number
 ): Promise<void> {
+  if (!Number.isFinite(score) || score < 0 || score > 1) throw new Error('Invalid judgment score')
   await db.prepare(
-    `INSERT INTO block_verdicts (canonical, blocklist_version, threshold, verdict, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5)
+    `INSERT INTO block_verdicts (canonical, blocklist_version, threshold, verdict, created_at, score)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
      ON CONFLICT(canonical, blocklist_version, threshold) DO UPDATE SET
-       verdict = excluded.verdict, created_at = excluded.created_at`
-  ).bind(canonical, version, String(threshold), verdict, now).run()
+       verdict = excluded.verdict, created_at = excluded.created_at, score = excluded.score`
+  ).bind(canonical, version, String(threshold), verdict, now, score).run()
+}
+
+export interface JudgmentScoreBucket {
+  policy: string
+  verdict: 'blocked' | 'clear'
+  lower: number | null
+  upper: number | null
+  upper_inclusive: boolean
+  cached_verdicts: number
+}
+
+export interface JudgmentStats {
+  blocklist_version: number
+  cached_verdicts: number
+  unscored_verdicts: number
+  score_distribution: JudgmentScoreBucket[]
+  call_volume: {
+    start_minute: number
+    end_minute: number
+    reserved_calls: number
+    buckets: Array<{ minute_bucket: number; reserved_calls: number }>
+  }
+}
+
+/** Aggregate cache entries and reserved call attempts; never return names/scores. */
+export async function getJudgmentStats(
+  db: D1Database,
+  now = Math.floor(Date.now() / 1000)
+): Promise<JudgmentStats> {
+  const version = await getBlocklistVersion(db)
+  const distribution = await db.prepare(
+    `SELECT threshold AS policy, verdict,
+       CASE WHEN score IS NULL THEN NULL
+            WHEN score = 1 THEN 9 ELSE CAST(score * 10 AS INTEGER) END AS score_bucket,
+       COUNT(*) AS cached_verdicts
+     FROM block_verdicts WHERE blocklist_version = ?
+     GROUP BY threshold, verdict, score_bucket
+     ORDER BY threshold, verdict, score_bucket`
+  ).bind(version).all<{
+    policy: string; verdict: 'blocked' | 'clear'; score_bucket: number | null; cached_verdicts: number
+  }>()
+  const minute = Math.floor(now / 60)
+  const calls = await db.prepare(
+    `SELECT minute_bucket, calls AS reserved_calls FROM jev_call_buckets
+     WHERE minute_bucket >= ? AND minute_bucket <= ? ORDER BY minute_bucket`
+  ).bind(minute - 59, minute).all<{ minute_bucket: number; reserved_calls: number }>()
+  return {
+    blocklist_version: version,
+    cached_verdicts: distribution.results.reduce((sum, row) => sum + row.cached_verdicts, 0),
+    unscored_verdicts: distribution.results.reduce((sum, row) =>
+      sum + (row.score_bucket === null ? row.cached_verdicts : 0), 0),
+    score_distribution: distribution.results.map(row => ({
+      policy: row.policy,
+      verdict: row.verdict,
+      lower: row.score_bucket === null ? null : row.score_bucket / 10,
+      upper: row.score_bucket === null ? null : (row.score_bucket + 1) / 10,
+      upper_inclusive: row.score_bucket === 9,
+      cached_verdicts: row.cached_verdicts,
+    })),
+    call_volume: {
+      start_minute: minute - 59,
+      end_minute: minute,
+      reserved_calls: calls.results.reduce((sum, row) => sum + row.reserved_calls, 0),
+      buckets: calls.results,
+    },
+  }
 }
 
 /** Drop verdicts for a replaced blocklist, and bound the rolling call buckets. */
