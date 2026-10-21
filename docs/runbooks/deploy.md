@@ -17,9 +17,42 @@ deploys first, the affected routes fail in production until someone runs the
 migration by hand. There is no red check and no alert. It looks like a working
 deploy.
 
-Applying first is normally safe, because a migration that only adds columns with
-defaults, adds tables, or inserts rows is invisible to the code already running.
-Confirm that is true of the specific migration before relying on it.
+Applying first is normally safe, because a migration that adds columns with
+defaults or adds tables is invisible to the code already running. That is a claim
+to check, not an assumption. The check is below.
+
+### Confirming a migration is invisible to the running code
+
+Adding columns and tables is safe. Writing rows is not automatically safe, because
+the code already in production may read that table.
+
+List what each pending migration actually does:
+
+```bash
+rg -o '^(ALTER TABLE|INSERT OR IGNORE INTO|INSERT INTO|UPDATE|CREATE TABLE|CREATE INDEX|DELETE)' migrations/00XX_*.sql | sort | uniq -c
+```
+
+`ALTER TABLE` adding a column, `CREATE TABLE` and `CREATE INDEX` are invisible to
+the running code. For anything that writes rows, work out which table and whether
+the live code reads it.
+
+For an insert into a table the live code reads, check whether the rows are already
+there. An `INSERT OR IGNORE` whose keys all exist is a no-op and safe; one that
+adds a genuinely new row changes behaviour immediately, before the code that was
+meant to accompany it. Pull the keys out of the migration and compare them against
+production:
+
+```bash
+npx wrangler d1 execute divine-name-server-db --remote --json \
+  --command "SELECT word FROM reserved_words" > /tmp/prod-rows.json
+```
+
+Then diff the two sets. Zero new rows means the insert is inert and the ordering
+does not matter for it. Any new rows mean you are changing production behaviour at
+the moment you apply, so decide whether that is acceptable on its own.
+
+An `UPDATE` that only writes columns the same migration just added is invisible.
+An `UPDATE` touching an existing column is not.
 
 ## Before you merge
 
@@ -36,6 +69,9 @@ applied.
    Expect exactly the migrations your change adds. If anything else appears, stop
    and find out why before continuing.
 
+   The list prints newest first, which is not the order they will be applied in.
+   Seeing `0017` above `0016` is normal. Wrangler applies them in numeric order.
+
 2. Record the state you are changing, so you can tell afterwards whether it did
    what you expected.
 
@@ -50,9 +86,22 @@ applied.
    npx wrangler d1 migrations apply divine-name-server-db --remote
    ```
 
+   While it runs, the status table may show a clock against a migration that has
+   not finished yet. That is progress, not a failure. Read the final table.
+
 4. Verify against the database rather than trusting the command's output. Query
-   the thing the migration was supposed to change: a row count, a new column, a
-   recategorized set.
+   the things the migration was supposed to change, in one statement, so you get
+   a single row you can compare against what you recorded in step 2.
+
+   ```bash
+   npx wrangler d1 execute divine-name-server-db --remote --json --command "
+     SELECT (SELECT name FROM d1_migrations ORDER BY id DESC LIMIT 1) AS last_migration,
+            (SELECT COUNT(*) FROM reserved_words) AS words"
+   ```
+
+   Extend the select with whatever the migration touched: a new column's
+   distribution, a new table's row count, a version counter. Check the numbers
+   you predicted, including the ones you predicted would not move.
 
 ## Merge
 
