@@ -32,11 +32,13 @@ There is no observe-only mode.
 | `JUDGMENT_MAX_CALLS_PER_MINUTE` | Global database-enforced call budget; default 30; zero disables new calls |
 
 Nonsecret threshold values belong in `wrangler.toml`, not dashboard variables:
-`keep_vars` is off, so deploy overwrites dashboard variables. An existing secret
-with the same name can shadow a variable; the operator must verify effective
-configuration during the separately authorized rollout, without displaying or
-copying credentials. This change does not alter secrets or add a proposal
-threshold; proposal generation remains separately configured.
+`keep_vars` is off, so deploy overwrites dashboard variables. Before merge, an
+authorized operator should check binding names for an existing same-name
+`JUDGMENT_BLOCK_MIN` secret and reconcile any conflict under separate rollout
+authorization. Do not assume a checked-in variable overrides a retained secret;
+verify effective configuration without displaying or copying credential values.
+This preparation does not inspect or alter secrets or add a proposal threshold;
+proposal generation remains separately configured.
 
 ## Deliberate starting-threshold trade
 
