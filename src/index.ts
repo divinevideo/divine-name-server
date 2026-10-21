@@ -16,6 +16,7 @@ import { sweepFastlyNames } from './utils/fastly-sweep'
 import { desiredUsernameSyncItem } from './utils/username-fastly-reconcile'
 import { getUsernameSyncStates, getUsernamesUpdatedSince, expireStaleReservations, expireHolds, getQueuedFastlySyncTasks, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, getStaleReleaseAttempts, rollbackReleaseAttempt } from './db/queries'
 import { syncBatch, parseRelayHints, type UsernameKVData } from './utils/fastly-sync'
+import { pruneBlocklistData } from './db/block-verdicts'
 
 type Bindings = {
   DB: D1Database
@@ -112,6 +113,8 @@ app.get('*', async (c) => {
 export default {
   fetch: app.fetch,
   async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) {
+    await pruneBlocklistData(env.DB, Math.floor(Date.now() / 1000))
+
     // Expire unconfirmed reservations older than 48 hours
     const expired = await expireStaleReservations(env.DB)
     if (expired > 0) {

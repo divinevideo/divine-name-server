@@ -3,7 +3,7 @@ import type { Username } from '../src/db/queries'
 import { sweepFastlyNames } from '../src/utils/fastly-sweep'
 vi.mock('../src/utils/fastly-sweep', () => ({ sweepFastlyNames: vi.fn() }))
 
-const { getUsernameSyncStates, getUsernamesUpdatedSince, expireStaleReservations, expireHolds, getStaleReleaseAttempts, rollbackReleaseAttempt, getQueuedFastlySyncTasks, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, syncBatch } = vi.hoisted(() => ({
+const { getUsernameSyncStates, getUsernamesUpdatedSince, expireStaleReservations, expireHolds, getStaleReleaseAttempts, rollbackReleaseAttempt, getQueuedFastlySyncTasks, enqueueFastlySyncTask, clearFastlySyncTasks, markFastlySyncTaskFailures, syncBatch, pruneBlocklistData } = vi.hoisted(() => ({
   getUsernameSyncStates: vi.fn(),
   getUsernamesUpdatedSince: vi.fn<() => Promise<Username[]>>(),
   expireStaleReservations: vi.fn<() => Promise<number>>(),
@@ -15,7 +15,13 @@ const { getUsernameSyncStates, getUsernamesUpdatedSince, expireStaleReservations
   clearFastlySyncTasks: vi.fn<() => Promise<void>>(),
   markFastlySyncTaskFailures: vi.fn<() => Promise<void>>(),
   syncBatch: vi.fn(),
+  pruneBlocklistData: vi.fn(),
 }))
+
+vi.mock('../src/db/block-verdicts', async () => {
+  const actual = await vi.importActual<typeof import('../src/db/block-verdicts')>('../src/db/block-verdicts')
+  return { ...actual, pruneBlocklistData }
+})
 
 vi.mock('../src/db/queries', async () => {
   const actual = await vi.importActual<typeof import('../src/db/queries')>('../src/db/queries')
@@ -53,6 +59,7 @@ describe('ATProto cron sync payloads', () => {
     getQueuedFastlySyncTasks.mockResolvedValue([])
     getUsernameSyncStates.mockResolvedValue(new Map())
     syncBatch.mockResolvedValue({ synced: 1, deleted: 0, failed: 0, errors: [], successes: [], failures: [] })
+    pruneBlocklistData.mockResolvedValue(undefined)
   })
 
   it('includes atproto_did and atproto_state in the hourly Fastly reconciliation payload', async () => {
@@ -115,6 +122,7 @@ describe('ATProto cron sync payloads', () => {
       ],
       { concurrency: 10 }
     )
+    expect(pruneBlocklistData).toHaveBeenCalledWith(expect.anything(), expect.any(Number))
   })
 
   it('maps revoked usernames to delete action', async () => {

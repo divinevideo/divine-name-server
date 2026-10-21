@@ -9,6 +9,7 @@
   "scripts": {
     "test": "vitest",
     "test:once": "vitest run",
+    "generate:freq50k": "node scripts/generate-freq50k.mjs",
     "typecheck": "tsc --noEmit",
     "build:admin": "cd admin-ui && npm run build",
     "dev": "wrangler dev",
