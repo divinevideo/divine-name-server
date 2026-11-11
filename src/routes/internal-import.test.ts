@@ -100,7 +100,8 @@ describe.skipIf(!sqliteAvailable())('ownership-checked import', () => {
         if (sql.includes('INSERT INTO usernames')) reserve('zxqracer', 'whole')
         return db.prepare(sql)
       }
-      const res = await request({ name: 'zxqracer', pubkey }, 'import-test', true, {}, racing)
+      // Mixed case: the lookup has to use the canonical form, not the display.
+      const res = await request({ name: 'ZxqRacer', pubkey }, 'import-test', true, {}, racing)
       expect(res.status).toBe(409)
       expect(await res.json()).toMatchObject({ ok: false, code: 'reserved' })
       expect(rowCount()).toBe(0)
@@ -116,14 +117,27 @@ describe.skipIf(!sqliteAvailable())('ownership-checked import', () => {
       expect(res.status).toBe(409)
       expect(await res.json()).toMatchObject({ ok: false, code: 'taken' })
     })
-    it('skips the reserved-word check rather than overriding its answer', async () => {
+    it('reports taken where the check would answer unavailable', async () => {
       expect((await importAs('zxqwordextra')).status).toBe(201)
       reserve('zxqword', 'token')
-      const { run, ...env } = judgment()
+      const { run: _run, ...env } = judgment()
       const res = await importAs('zxqwordextra', env)
       expect(res.status).toBe(409)
       expect(await res.json()).toMatchObject({ ok: false, code: 'taken' })
-      expect(run).not.toHaveBeenCalled()
+    })
+    // A seeded row, not one this import created: any claim source, a stored
+    // pubkey in another case, and no blocklist read at all on the exempt path.
+    it('exempts an owner row from any source without reading the blocklist', async () => {
+      seedUsername(sqlite, { name: 'aa-zxqword', pubkey: pubkey.toUpperCase() })
+      reserve('zxqword', 'token')
+      const guarded: D1Database = Object.create(db)
+      guarded.prepare = (sql: string) => {
+        if (sql.includes('blocklist_meta') || sql.includes('FROM reserved_words')) throw new Error('blocklist read on exempt path')
+        return db.prepare(sql)
+      }
+      const res = await request({ name: 'aa-zxqword', pubkey }, 'import-test', true, {}, guarded)
+      expect(res.status).toBe(409)
+      expect(await res.json()).toMatchObject({ ok: false, code: 'taken' })
     })
     it('still reports reserved to another pubkey', async () => {
       expect((await importAs('zxqword')).status).toBe(201)
@@ -132,10 +146,12 @@ describe.skipIf(!sqliteAvailable())('ownership-checked import', () => {
       expect(res.status).toBe(409)
       expect(await res.json()).toMatchObject({ ok: false, code: 'reserved' })
     })
+    // A token term, so the insert's exact-match lookup cannot answer reserved
+    // on the classification's behalf.
     it('does not exempt the same pubkey on a row that is no longer active', async () => {
-      seedUsername(sqlite, { name: 'zxqword', pubkey, status: 'revoked' })
-      reserve('zxqword', 'whole')
-      const res = await importAs('zxqword')
+      seedUsername(sqlite, { name: 'aa-zxqword', pubkey, status: 'revoked' })
+      reserve('zxqword', 'token')
+      const res = await importAs('aa-zxqword')
       expect(res.status).toBe(409)
       expect(await res.json()).toMatchObject({ ok: false, code: 'reserved' })
     })
@@ -188,7 +204,9 @@ describe.skipIf(!sqliteAvailable())('ownership-checked import', () => {
   })
   it.each(['active', 'reserved', 'held', 'burned', 'revoked', 'pending-release'])('cannot replace %s ownership', async status => {
     seedUsername(sqlite, { name: 'alice', pubkey: 'b'.repeat(64), status })
-    expect((await request({ name: 'alice', pubkey })).status).toBe(409)
+    const res = await request({ name: 'alice', pubkey })
+    expect(res.status).toBe(409)
+    expect(await res.json()).toMatchObject({ ok: false, code: 'taken' })
     expect(sqlite.prepare('SELECT status, pubkey FROM usernames').get()).toEqual({ status, pubkey: 'b'.repeat(64) })
     expect(reconcileUsernameFastly).not.toHaveBeenCalled()
   })

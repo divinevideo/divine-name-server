@@ -31,7 +31,9 @@ syncs a skipped assignment, and its JSON body carries a `code`:
   paid or admin reservation row that a claim refuses as reserved; or the pubkey
   cannot receive an imported name, because it already owns a name or its owner
   has completed an account deletion (an import never rebuilds a public identity
-  that deletion removed).
+  that deletion removed). `reserved` and `unavailable` take precedence: a name
+  that already has a row but that the list blocks comes back `reserved`, except
+  for a replay by its active owner (below).
 
 `taken` does not say which of those applied, so a caller cannot tell a name
 collision from a pubkey that is already settled: treat every 409 as a skipped
