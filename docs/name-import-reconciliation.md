@@ -16,23 +16,29 @@ Example request (synthetic public key):
 and failures remain queued for cron retry. A 409 never updates an existing row or
 syncs a skipped assignment, and its JSON body carries a `code`:
 
-- `reserved`: the self-service claim rules refuse the name. The import runs the
-  same reserved-word check as a claim (each term's whole or token scope and
-  digit-for-letter respellings, plus a cached judgment verdict), so a name a
-  claim would refuse as reserved is refused here too.
+- `reserved`: the reserved-word list blocks the name. The import runs the same
+  reserved-word check as a claim (each term's whole or token scope and
+  digit-for-letter respellings, plus a cached judgment verdict).
 - `unavailable`: the name contains an embedded word that needs the judgment
   check, and no verdict is cached. The import never calls the judgment model,
   because bulk imports would spend the per-minute budget live sign-ups share.
-- `taken`: the name is held, the pubkey already owns a name, or the pubkey's
-  owner has completed an account deletion (an import never rebuilds a public
-  identity that deletion removed).
+  This is not permanent: once a verdict is cached for that exact name (by a live
+  availability check or claim of it), a re-import follows that verdict until the
+  blocklist next changes. A malformed `JUDGMENT_BLOCK_MIN` makes every ambiguous
+  name `unavailable`, even one with a cached verdict; once it is fixed, a
+  re-import follows any verdict cached under the corrected threshold.
+- `taken`: the name already has a `usernames` row in any status, including a
+  paid or admin reservation row that a claim refuses as reserved; or the pubkey
+  cannot receive an imported name, because it already owns a name or its owner
+  has completed an account deletion (an import never rebuilds a public identity
+  that deletion removed).
 
 `taken` does not say which of those applied, so a caller cannot tell a name
 collision from a pubkey that is already settled: treat every 409 as a skipped
 assignment and do not retry it with a suffix. Replaying a successful import also
 returns 409 `taken` and leaves ownership unchanged. Current DNS-label validation
-applies to new imports; legacy names with dots or underscores need separate operator review, not silent
-backfill conversion.
+applies to new imports; legacy names with dots or underscores need separate
+operator review, not silent backfill conversion.
 
 `scripts/import-vine-users.ts` now calls that endpoint for each assignment. It
 has no direct Fastly or Wrangler write path. Inject PostgreSQL credentials and,
