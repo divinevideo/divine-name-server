@@ -106,6 +106,40 @@ describe.skipIf(!sqliteAvailable())('ownership-checked import', () => {
       expect(rowCount()).toBe(0)
     })
   })
+  // Same rule as claims: blocking a name stops new people taking it, not the
+  // active owner. Their replay is the ordinary replay refusal.
+  describe('active owner replaying a name blocked since', () => {
+    it('reports the replay as taken, not reserved', async () => {
+      expect((await importAs('zxqword')).status).toBe(201)
+      reserve('zxqword', 'whole')
+      const res = await importAs('zxqword')
+      expect(res.status).toBe(409)
+      expect(await res.json()).toMatchObject({ ok: false, code: 'taken' })
+    })
+    it('skips the reserved-word check rather than overriding its answer', async () => {
+      expect((await importAs('zxqwordextra')).status).toBe(201)
+      reserve('zxqword', 'token')
+      const { run, ...env } = judgment()
+      const res = await importAs('zxqwordextra', env)
+      expect(res.status).toBe(409)
+      expect(await res.json()).toMatchObject({ ok: false, code: 'taken' })
+      expect(run).not.toHaveBeenCalled()
+    })
+    it('still reports reserved to another pubkey', async () => {
+      expect((await importAs('zxqword')).status).toBe(201)
+      reserve('zxqword', 'whole')
+      const res = await request({ name: 'zxqword', pubkey: 'b'.repeat(64) })
+      expect(res.status).toBe(409)
+      expect(await res.json()).toMatchObject({ ok: false, code: 'reserved' })
+    })
+    it('does not exempt the same pubkey on a row that is no longer active', async () => {
+      seedUsername(sqlite, { name: 'zxqword', pubkey, status: 'revoked' })
+      reserve('zxqword', 'whole')
+      const res = await importAs('zxqword')
+      expect(res.status).toBe(409)
+      expect(await res.json()).toMatchObject({ ok: false, code: 'reserved' })
+    })
+  })
   it('reports a name held by another pubkey as taken', async () => {
     seedUsername(sqlite, { name: 'alice', pubkey: 'b'.repeat(64) })
     const res = await importAs('alice')

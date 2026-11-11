@@ -6,6 +6,10 @@ import { validateUsername, validateAndNormalizePubkey, validateRelays, UsernameV
 import { reconcileUsernameFastly } from '../utils/username-fastly-reconcile'
 import type { FastlyEnv } from '../utils/fastly-sync'
 import { resolveUsernameBlock, type BlockEnv } from '../utils/name-block'
+import { getUsernameByName } from '../db/queries'
+
+const RESERVED = { ok: false, code: 'reserved', error: 'Name is reserved' } as const
+const TAKEN = { ok: false, code: 'taken', error: 'Name is taken, or the pubkey cannot receive an imported name' } as const
 
 const internalImport = new Hono<{ Bindings: FastlyEnv & BlockEnv & { DB: D1Database; USERNAME_IMPORT_TOKEN?: string } }>()
 internalImport.use('/username/import', requireServiceToken('USERNAME_IMPORT_TOKEN', 'Username import'))
@@ -20,13 +24,21 @@ internalImport.post('/username/import', async (c) => {
     const pubkey = validateAndNormalizePubkey(body.pubkey)
     validateRelays(body.relays)
     const now = Math.floor(Date.now() / 1000)
+    // Blocking a name stops new people taking it; it does not take it off whoever
+    // already holds one. Same definition as claims' ownedByClaimant. The active
+    // owner's replay is the ordinary replay refusal, answered here so neither the
+    // reserved-word check nor the insert's exact-match lookup relabels it.
+    const existing = await getUsernameByName(c.env.DB, canonical)
+    if (existing?.status === 'active' && existing.pubkey?.toLowerCase() === pubkey) {
+      return c.json(TAKEN, 409)
+    }
     // Hold imports to the same reserved-word rules as self-service claims. The
     // judgment model is never called here: imports arrive in bulk and would spend
     // the per-minute budget live sign-ups share. An ambiguous name with no cached
     // verdict comes back unavailable and is refused; the importer skips it.
     const block = await resolveUsernameBlock(c.env.DB, canonical, c.env, now, false)
     if (block.kind === 'reserved') {
-      return c.json({ ok: false, code: 'reserved', error: 'Name is reserved' }, 409)
+      return c.json(RESERVED, 409)
     }
     if (block.kind === 'unavailable') {
       return c.json({ ok: false, code: 'unavailable', error: 'Name cannot be confirmed clear without a judgment check' }, 409)
@@ -52,9 +64,9 @@ internalImport.post('/username/import', async (c) => {
       // still a reserved refusal; every other refusal is taken.
       const reserved = await c.env.DB.prepare('SELECT 1 FROM reserved_words WHERE word = ?').bind(canonical).first()
       if (reserved) {
-        return c.json({ ok: false, code: 'reserved', error: 'Name is reserved' }, 409)
+        return c.json(RESERVED, 409)
       }
-      return c.json({ ok: false, code: 'taken', error: 'Name is taken, or the pubkey cannot receive an imported name' }, 409)
+      return c.json(TAKEN, 409)
     }
     try {
       await reconcileUsernameFastly(c.env, canonical)

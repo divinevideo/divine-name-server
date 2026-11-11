@@ -35,10 +35,12 @@ syncs a skipped assignment, and its JSON body carries a `code`:
 
 `taken` does not say which of those applied, so a caller cannot tell a name
 collision from a pubkey that is already settled: treat every 409 as a skipped
-assignment and do not retry it with a suffix. Replaying a successful import also
-returns 409 `taken` and leaves ownership unchanged. Current DNS-label validation
-applies to new imports; legacy names with dots or underscores need separate
-operator review, not silent backfill conversion.
+assignment and do not retry it with a suffix. A replay by the name's active
+owner returns 409 `taken` and leaves ownership unchanged, even if the name has
+since been blocked: as with claims, blocking a name stops new people taking it
+but does not take it off whoever holds it. Current DNS-label validation applies
+to new imports; legacy names with dots or underscores need separate operator
+review, not silent backfill conversion.
 
 `scripts/import-vine-users.ts` now calls that endpoint for each assignment. It
 has no direct Fastly or Wrangler write path. Inject PostgreSQL credentials and,
