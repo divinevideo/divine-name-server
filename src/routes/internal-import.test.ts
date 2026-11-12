@@ -46,6 +46,14 @@ describe.skipIf(!sqliteAvailable())('ownership-checked import', () => {
       expect(rowCount()).toBe(0)
       expect(reconcileUsernameFastly).not.toHaveBeenCalled()
     })
+    // Mixed case: classification has to read the canonical form, not the display.
+    it('classifies the canonical form of a mixed-case name', async () => {
+      reserve('zxqword', 'token')
+      const res = await importAs('AA-ZxqWord')
+      expect(res.status).toBe(409)
+      expect(await res.json()).toMatchObject({ ok: false, code: 'reserved' })
+      expect(rowCount()).toBe(0)
+    })
     it('refuses a digit-for-letter respelling of a reserved word', async () => {
       reserve('zxqword', 'whole')
       const res = await importAs('zxqw0rd')
@@ -67,6 +75,22 @@ describe.skipIf(!sqliteAvailable())('ownership-checked import', () => {
       expect(await res.json()).toMatchObject({ ok: false, code: 'unavailable' })
       expect(run).not.toHaveBeenCalled()
       expect(rowCount()).toBe(0)
+    })
+    // Another pubkey's row would make the insert answer taken; the check has
+    // to refuse first, and the insert must not run.
+    it('reports unavailable ahead of taken for a name another pubkey holds', async () => {
+      seedUsername(sqlite, { name: 'zxqwordextra', pubkey: 'b'.repeat(64) })
+      reserve('zxqword', 'token')
+      const { run, ...env } = judgment()
+      const guarded: D1Database = Object.create(db)
+      guarded.prepare = (sql: string) => {
+        if (sql.includes('INSERT INTO usernames')) throw new Error('insert ran after an unavailable verdict')
+        return db.prepare(sql)
+      }
+      const res = await request({ name: 'zxqwordextra', pubkey }, 'import-test', true, env, guarded)
+      expect(res.status).toBe(409)
+      expect(await res.json()).toMatchObject({ ok: false, code: 'unavailable' })
+      expect(run).not.toHaveBeenCalled()
     })
     it('follows a cached verdict for an ambiguous name', async () => {
       reserve('zxqword', 'token')
@@ -139,6 +163,17 @@ describe.skipIf(!sqliteAvailable())('ownership-checked import', () => {
       expect(res.status).toBe(409)
       expect(await res.json()).toMatchObject({ ok: false, code: 'taken' })
     })
+    // The owner lookup has to use the canonical form: a Unicode name's display
+    // and canonical (punycode) spellings share no lowercase form.
+    it('finds the owner row by the canonical form of a Unicode name', async () => {
+      expect((await importAs('Café')).status).toBe(201)
+      const canonical = (sqlite.prepare('SELECT username_canonical AS c FROM usernames').get() as { c: string }).c
+      expect(canonical).toMatch(/^xn--/)
+      reserve(canonical, 'whole')
+      const res = await importAs('Café')
+      expect(res.status).toBe(409)
+      expect(await res.json()).toMatchObject({ ok: false, code: 'taken' })
+    })
     it('still reports reserved to another pubkey', async () => {
       expect((await importAs('zxqword')).status).toBe(201)
       reserve('zxqword', 'whole')
@@ -148,8 +183,8 @@ describe.skipIf(!sqliteAvailable())('ownership-checked import', () => {
     })
     // A token term, so the insert's exact-match lookup cannot answer reserved
     // on the classification's behalf.
-    it('does not exempt the same pubkey on a row that is no longer active', async () => {
-      seedUsername(sqlite, { name: 'aa-zxqword', pubkey, status: 'revoked' })
+    it.each(['revoked', 'pending-release', 'reserved', 'burned'])('does not exempt the same pubkey on a %s row', async status => {
+      seedUsername(sqlite, { name: 'aa-zxqword', pubkey, status })
       reserve('zxqword', 'token')
       const res = await importAs('aa-zxqword')
       expect(res.status).toBe(409)
@@ -233,7 +268,14 @@ describe.skipIf(!sqliteAvailable())('ownership-checked import', () => {
   })
   it('preserves the one-owned-name-per-pubkey constraint and reserved words', async () => {
     seedUsername(sqlite, { name: 'alice', pubkey })
-    expect((await request({ name: 'bob', pubkey: pubkey.toUpperCase() })).status).toBe(409)
+    const second = await request({ name: 'bob', pubkey: pubkey.toUpperCase() })
+    expect(second.status).toBe(409)
+    expect(await second.json()).toMatchObject({ ok: false, code: 'taken' })
+    // Owning another active name does not exempt the pubkey from the blocklist.
+    reserve('zxqword', 'whole')
+    const blocked = await importAs('zxqword')
+    expect(blocked.status).toBe(409)
+    expect(await blocked.json()).toMatchObject({ ok: false, code: 'reserved' })
     expect((await request({ name: 'admin', pubkey: 'b'.repeat(64) })).status).toBe(409)
     expect(reconcileUsernameFastly).not.toHaveBeenCalled()
   })
