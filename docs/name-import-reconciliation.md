@@ -20,13 +20,15 @@ syncs a skipped assignment, and its JSON body carries a `code`:
   reserved-word check as a claim (each term's whole or token scope and
   digit-for-letter respellings, plus a cached judgment verdict).
 - `unavailable`: the name contains an embedded word that needs the judgment
-  check, and no verdict is cached. The import never calls the judgment model,
-  because bulk imports would spend the per-minute budget live sign-ups share.
-  This is not permanent: once a verdict is cached for that exact name (by a live
-  availability check or claim of it), a re-import follows that verdict until the
-  blocklist next changes. A malformed `JUDGMENT_BLOCK_MIN` makes every ambiguous
-  name `unavailable`, even one with a cached verdict; once it is fixed, a
-  re-import follows any verdict cached under the corrected threshold.
+  check, and no verdict is cached for the current blocklist and judgment
+  settings. The import never calls the judgment model, because bulk imports
+  would spend the per-minute budget live sign-ups share. This is not permanent:
+  once any live request completes the judgment check for that exact name, its
+  verdict is cached, and a re-import follows it until the blocklist, the
+  judgment threshold or the judgment policy next changes. A malformed
+  `JUDGMENT_BLOCK_MIN` makes every ambiguous name `unavailable`, even one with a
+  cached verdict; once it is fixed, a re-import follows any verdict cached under
+  the corrected threshold.
 - `taken`: the name already has a `usernames` row in any status, including a
   paid or admin reservation row that a claim refuses as reserved; or the pubkey
   cannot receive an imported name, because it already owns a name or its owner
