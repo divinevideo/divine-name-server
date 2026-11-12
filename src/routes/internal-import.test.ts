@@ -5,9 +5,14 @@ import { createSqliteD1, seedUsername, sqliteAvailable, type SqliteDb } from '..
 import { reconcileUsernameFastly } from '../utils/username-fastly-reconcile'
 import { putBlockVerdict } from '../db/block-verdicts'
 import { JUDGMENT_POLICY } from '../utils/judgment'
-import type { BlockEnv } from '../utils/name-block'
+import { resolveUsernameBlock, type BlockEnv } from '../utils/name-block'
 
 vi.mock('../utils/username-fastly-reconcile', () => ({ reconcileUsernameFastly: vi.fn().mockResolvedValue(undefined) }))
+// Pass-through, so a test can see which spelling of the name gets classified.
+vi.mock('../utils/name-block', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/name-block')>()
+  return { ...actual, resolveUsernameBlock: vi.fn(actual.resolveUsernameBlock) }
+})
 
 describe.skipIf(!sqliteAvailable())('ownership-checked import', () => {
   let db: D1Database
@@ -53,6 +58,14 @@ describe.skipIf(!sqliteAvailable())('ownership-checked import', () => {
       expect(res.status).toBe(409)
       expect(await res.json()).toMatchObject({ ok: false, code: 'reserved' })
       expect(rowCount()).toBe(0)
+    })
+    // Lowercasing the display matches canonical for ASCII only. A Unicode name's
+    // canonical is punycode, and that is the spelling a claim classifies.
+    it('classifies the punycode canonical of a Unicode name', async () => {
+      expect((await importAs('Café')).status).toBe(201)
+      const canonical = (sqlite.prepare('SELECT username_canonical AS c FROM usernames').get() as { c: string }).c
+      expect(canonical).toMatch(/^xn--/)
+      expect(resolveUsernameBlock).toHaveBeenCalledWith(expect.anything(), canonical, expect.anything(), expect.anything(), false)
     })
     it('refuses a digit-for-letter respelling of a reserved word', async () => {
       reserve('zxqword', 'whole')
