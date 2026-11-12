@@ -25,10 +25,10 @@ syncs a skipped assignment, and its JSON body carries a `code`:
   would spend the per-minute budget live sign-ups share. This is not permanent:
   once any live request completes the judgment check for that exact name, its
   verdict is cached, and a re-import follows it until the blocklist, the
-  judgment threshold or the judgment policy next changes. A malformed
-  `JUDGMENT_BLOCK_MIN` makes every ambiguous name `unavailable`, even one with a
-  cached verdict; once it is fixed, a re-import follows any verdict cached under
-  the corrected threshold.
+  judgment threshold or the judgment policy next changes. With the judgment
+  binding present, a malformed `JUDGMENT_BLOCK_MIN` makes every ambiguous name
+  `unavailable`, even one with a cached verdict; once it is fixed, a re-import
+  follows any verdict cached under the corrected threshold.
 - `taken`: the name already has a `usernames` row in any status, including a
   paid or admin reservation row that a claim refuses as reserved; or the pubkey
   cannot receive an imported name, because it already owns a name or its owner

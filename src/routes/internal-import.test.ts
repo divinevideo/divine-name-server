@@ -116,6 +116,17 @@ describe.skipIf(!sqliteAvailable())('ownership-checked import', () => {
       expect((await importAs('zxqwordother', env)).status).toBe(201)
       expect(run).not.toHaveBeenCalled()
     })
+    // The verdict is keyed by threshold, so a malformed one has no key to read.
+    it('refuses an ambiguous name as unavailable under a malformed threshold, even with a cached clear verdict', async () => {
+      reserve('zxqword', 'token')
+      const { run, ...env } = judgment()
+      await putBlockVerdict(db, 'zxqwordother', 1, `${JUDGMENT_POLICY}:0.5`, 'clear', 1, 0.1)
+      const res = await importAs('zxqwordother', { ...env, JUDGMENT_BLOCK_MIN: 'oops' })
+      expect(res.status).toBe(409)
+      expect(await res.json()).toMatchObject({ ok: false, code: 'unavailable' })
+      expect(rowCount()).toBe(0)
+      expect(run).not.toHaveBeenCalled()
+    })
     // Same as claims: with no judgment configured, only scoped hits block.
     it('imports an ambiguous name when judgment is not configured', async () => {
       reserve('zxqword', 'token')
