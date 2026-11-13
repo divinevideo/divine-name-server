@@ -13,16 +13,38 @@ Example request (synthetic public key):
 ```
 
 201 means D1 inserted an active `vine-import` row. KV synchronization is attempted
-and failures remain queued for cron retry. 409 means a name is taken/reserved, the
-pubkey already owns a name, or the pubkey's owner has completed an account
-deletion (an import never rebuilds a public identity that deletion removed); it
-never updates an existing row or syncs a skipped assignment. The response does
-not say which of these applied, so a caller cannot tell a name collision from a
-pubkey that is already settled: treat every 409 as a skipped assignment and do
-not retry it with a suffix. Replaying a successful import also returns 409 and
-leaves ownership unchanged. Current DNS-label validation applies to new imports;
-legacy names with dots or underscores need separate operator review, not silent
-backfill conversion.
+and failures remain queued for cron retry. A 409 never updates an existing row or
+syncs a skipped assignment, and its JSON body carries a `code`:
+
+- `reserved`: the reserved-word list blocks the name. The import runs the same
+  reserved-word check as a claim (each term's whole or token scope and
+  digit-for-letter respellings, plus a cached judgment verdict).
+- `unavailable`: the name contains an embedded word that needs the judgment
+  check, and no verdict is cached for the current blocklist and judgment
+  settings. The import never calls the judgment model, because bulk imports
+  would spend the per-minute budget live sign-ups share. This is not permanent:
+  once any live request completes the judgment check for that exact name, its
+  verdict is cached, and a re-import follows it until the blocklist, the
+  judgment threshold or the judgment policy next changes. With the judgment
+  binding present, a malformed `JUDGMENT_BLOCK_MIN` makes every ambiguous name
+  `unavailable`, even one with a cached verdict; once it is fixed, a re-import
+  follows any verdict cached under the corrected threshold.
+- `taken`: the name already has a `usernames` row in any status, including a
+  paid or admin reservation row that a claim refuses as reserved; or the pubkey
+  cannot receive an imported name, because it already owns a name or its owner
+  has completed an account deletion (an import never rebuilds a public identity
+  that deletion removed). `reserved` and `unavailable` take precedence: a name
+  that already has a row but that the list blocks comes back `reserved`, except
+  for a replay by its active owner (below).
+
+`taken` does not say which of those applied, so a caller cannot tell a name
+collision from a pubkey that is already settled: treat every 409 as a skipped
+assignment and do not retry it with a suffix. A replay by the name's active
+owner returns 409 `taken` and leaves ownership unchanged, even if the name has
+since been blocked: as with claims, blocking a name stops new people taking it
+but does not take it off whoever holds it. Current DNS-label validation applies
+to new imports; legacy names with dots or underscores need separate operator
+review, not silent backfill conversion.
 
 `scripts/import-vine-users.ts` now calls that endpoint for each assignment. It
 has no direct Fastly or Wrangler write path. Inject PostgreSQL credentials and,
