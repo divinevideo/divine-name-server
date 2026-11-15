@@ -46,6 +46,31 @@ but does not take it off whoever holds it. Current DNS-label validation applies
 to new imports; legacy names with dots or underscores need separate operator
 review, not silent backfill conversion.
 
+### Restored-name allocation
+
+Callers that consume the returned `name` can opt in by adding `"allocate":true`
+to the request. Without it, the import retains the behavior above so older
+publishers cannot accidentally advertise a requested name instead of an assigned
+alternative. A 201 response's `name` is authoritative and must be persisted and
+used for both the profile handle and its NIP-05 address.
+
+In allocation mode, an unassigned `reserved` row can become active only when
+both its pubkey and reservation email are null. Email-backed reservations and
+every other owner's row remain unchanged. Collisions try up to eight stable
+alternatives: the canonical name plus the first twelve pubkey hex characters,
+then a numeric suffix if needed. Long labels are shortened to the DNS limit;
+encoded international names use a neutral `vine` stem for alternatives. An
+account that already owns an active valid name receives that name again, so
+retries do not accumulate aliases.
+
+The requested name and every alternative still pass the reserved-word policy.
+Hate-related terms remain blocked, including when a `reserved` row already
+exists; adding a suffix never rescues a prohibited requested name. Unavailable
+judgments refuse new assignments without calling the model. Pending account
+release and completed deletion still prevent allocation. A 409 reports
+`unavailable` when all alternatives are occupied or cannot be confirmed clear.
+The public claim API and legacy import requests keep their existing rules.
+
 `scripts/import-vine-users.ts` now calls that endpoint for each assignment. It
 has no direct Fastly or Wrangler write path. Inject PostgreSQL credentials and,
 for `--apply`, `NAME_SERVER_URL` plus `USERNAME_IMPORT_TOKEN` using the credential

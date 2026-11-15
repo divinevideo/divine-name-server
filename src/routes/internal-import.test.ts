@@ -40,6 +40,172 @@ describe.skipIf(!sqliteAvailable())('ownership-checked import', () => {
   }
   const rowCount = () => (sqlite.prepare('SELECT COUNT(*) AS n FROM usernames').get() as { n: number }).n
 
+  it('allocates an unassigned reservation to the restored creator', async () => {
+    seedUsername(sqlite, { name: 'alice', status: 'reserved' })
+    const response = await request({ name: 'alice', pubkey, allocate: true })
+    expect(response.status).toBe(201)
+    expect(await response.json()).toMatchObject({ ok: true, name: 'alice' })
+    expect(sqlite.prepare('SELECT status,pubkey,claim_source FROM usernames').get())
+      .toEqual({ status: 'active', pubkey, claim_source: 'vine-import' })
+  })
+
+  it('allocates a stable alternative when another creator owns the requested name', async () => {
+    const previous = 'b'.repeat(64)
+    seedUsername(sqlite, { name: 'alice', pubkey: previous })
+    const first = await request({ name: 'alice', pubkey, allocate: true })
+    expect(first.status).toBe(201)
+    expect(await first.json()).toMatchObject({ ok: true, name: 'alice-aaaaaaaaaaaa' })
+    expect(sqlite.prepare("SELECT pubkey FROM usernames WHERE name='alice'").get()).toEqual({ pubkey: previous })
+    const replay = await request({ name: 'alice', pubkey, allocate: true })
+    expect(replay.status).toBe(201)
+    expect(await replay.json()).toMatchObject({ name: 'alice-aaaaaaaaaaaa' })
+    expect(rowCount()).toBe(2)
+  })
+
+  it('returns the name this pubkey already owns rather than allocating another', async () => {
+    seedUsername(sqlite, { name: 'already-owned', pubkey })
+    const response = await request({ name: 'alice', pubkey, allocate: true })
+    expect(response.status).toBe(201)
+    expect(await response.json()).toMatchObject({ name: 'already-owned' })
+    expect(rowCount()).toBe(1)
+  })
+
+  it('does not consume an email-backed reservation when allocating an alternative', async () => {
+    seedUsername(sqlite, { name: 'alice', status: 'reserved' })
+    sqlite.prepare("UPDATE usernames SET reservation_email='synthetic@example.test' WHERE name='alice'").run()
+    const response = await request({ name: 'alice', pubkey, allocate: true })
+    expect(response.status).toBe(201)
+    expect(await response.json()).toMatchObject({ name: 'alice-aaaaaaaaaaaa' })
+    expect(sqlite.prepare("SELECT status,pubkey,reservation_email FROM usernames WHERE name='alice'").get())
+      .toEqual({ status: 'reserved', pubkey: null, reservation_email: 'synthetic@example.test' })
+  })
+
+  describe('opt-in allocation safeguards', () => {
+    const allocate = (name: string, env: BlockEnv = {}) => request({ name, pubkey, allocate: true }, 'import-test', true, env)
+
+    it.each([undefined, 'reserved', 'active'])('blocks hate-related terms even with an existing %s row', async status => {
+      if (status) seedUsername(sqlite, { name: 'kkk', status, pubkey: status === 'active' ? pubkey : null })
+      const before = sqlite.prepare('SELECT * FROM usernames').all()
+      const { run, ...env } = judgment()
+      for (const name of ['kkk', 'KKK', 'my-kkk']) {
+        const response = await allocate(name, env)
+        expect(response.status).toBe(409)
+        expect(await response.json()).toMatchObject({ code: 'reserved' })
+      }
+      expect(sqlite.prepare('SELECT * FROM usernames').all()).toEqual(before)
+      expect(run).not.toHaveBeenCalled()
+      expect(reconcileUsernameFastly).not.toHaveBeenCalled()
+    })
+
+    it.each(['active', 'reserved', 'held', 'burned', 'revoked', 'pending-release'])('preserves another pubkey on a %s row', async status => {
+      seedUsername(sqlite, { name: 'alice', status, pubkey: 'b'.repeat(64) })
+      const before = sqlite.prepare("SELECT * FROM usernames WHERE name='alice'").get()
+      const response = await allocate('alice')
+      expect(response.status).toBe(201)
+      expect(await response.json()).toMatchObject({ name: 'alice-aaaaaaaaaaaa' })
+      expect(sqlite.prepare("SELECT * FROM usernames WHERE name='alice'").get()).toEqual(before)
+    })
+
+    it('keeps deleted and pending-release identities out of allocation', async () => {
+      seedUsername(sqlite, { name: 'alice', pubkey })
+      const attemptId = 'allocation-delete-attempt'
+      await prepareReleaseAttempt(db, pubkey, 'alice', attemptId, Math.floor(Date.now() / 1000) + 3600)
+      expect((await allocate('new-name')).status).toBe(409)
+      await finalizeReleaseAttempt(db, attemptId, 'deletion-coordinator')
+      const response = await allocate('new-name')
+      expect(response.status).toBe(409)
+      expect(await response.json()).toMatchObject({ code: 'taken' })
+      expect(rowCount()).toBe(1)
+      expect(reconcileUsernameFastly).not.toHaveBeenCalled()
+    })
+
+    it('checks policy on a previously assigned alternative', async () => {
+      seedUsername(sqlite, { name: 'already-owned', pubkey })
+      reserve('already-owned', 'whole')
+      const response = await allocate('alice')
+      expect(response.status).toBe(409)
+      expect(await response.json()).toMatchObject({ code: 'reserved' })
+      expect(rowCount()).toBe(1)
+    })
+
+    it('never spends the judgment budget to allocate an ambiguous name', async () => {
+      reserve('zxqword', 'token')
+      seedUsername(sqlite, { name: 'zxqwordextra', status: 'reserved' })
+      const { run, ...env } = judgment()
+      const response = await allocate('zxqwordextra', env)
+      expect(response.status).toBe(409)
+      expect(await response.json()).toMatchObject({ code: 'unavailable' })
+      expect(sqlite.prepare('SELECT status,pubkey FROM usernames').get()).toEqual({ status: 'reserved', pubkey: null })
+      expect(run).not.toHaveBeenCalled()
+    })
+
+    it('uses the next alternative on collision and bounds exhaustion', async () => {
+      seedUsername(sqlite, { name: 'alice', pubkey: 'b'.repeat(64) })
+      seedUsername(sqlite, { name: 'alice-aaaaaaaaaaaa', status: 'held' })
+      const response = await allocate('alice')
+      expect(response.status).toBe(201)
+      expect(await response.json()).toMatchObject({ name: 'alice-aaaaaaaaaaaa-2' })
+    })
+
+    it('returns unavailable when all bounded alternatives are occupied', async () => {
+      seedUsername(sqlite, { name: 'alice', status: 'held' })
+      for (let i = 0; i < 8; i++) seedUsername(sqlite, { name: `alice-aaaaaaaaaaaa${i ? `-${i + 1}` : ''}`, status: 'held' })
+      const before = sqlite.prepare('SELECT * FROM usernames').all()
+      const response = await allocate('alice')
+      expect(response.status).toBe(409)
+      expect(await response.json()).toMatchObject({ code: 'unavailable' })
+      expect(sqlite.prepare('SELECT * FROM usernames').all()).toEqual(before)
+    })
+
+    it('does not assign a generated alternative blocked by policy', async () => {
+      seedUsername(sqlite, { name: 'alice', status: 'held' })
+      reserve('alice-aaaaaaaaaaaa', 'whole')
+      const response = await allocate('alice')
+      expect(response.status).toBe(201)
+      expect(await response.json()).toMatchObject({ name: 'alice-aaaaaaaaaaaa-2' })
+    })
+
+    it.each(['a'.repeat(63), 'Café'])('uses a valid DNS label for a collision on %s', async name => {
+      const { canonical } = (await import('../utils/validation')).validateUsername(name)
+      seedUsername(sqlite, { name: canonical, status: 'held' })
+      const response = await allocate(name)
+      expect(response.status).toBe(201)
+      const answer = await response.json() as { name: string }
+      expect(answer.name.length).toBeLessThanOrEqual(63)
+      expect(new URL(`https://${answer.name}.test`).hostname).toBe(`${answer.name}.test`)
+      expect(answer.name).toMatch(/-aaaaaaaaaaaa$/)
+    })
+
+    it('reuses a concurrent assignment for the same pubkey without another name', async () => {
+      const results = await Promise.all(['alice', 'bob'].map(name => allocate(name)))
+      expect(results.map(response => response.status)).toEqual([201, 201])
+      expect((await results[0].json() as { name: string }).name).toBe((await results[1].json() as { name: string }).name)
+      expect(rowCount()).toBe(1)
+    })
+
+    it('serializes two reservation activations for one pubkey without a constraint error', async () => {
+      seedUsername(sqlite, { name: 'alice', status: 'reserved' })
+      seedUsername(sqlite, { name: 'bob', status: 'reserved' })
+      const results = await Promise.all(['alice', 'bob'].map(name => allocate(name)))
+      expect(results.map(response => response.status)).toEqual([201, 201])
+      expect((await results[0].json() as { name: string }).name).toBe((await results[1].json() as { name: string }).name)
+      expect(sqlite.prepare("SELECT COUNT(*) AS n FROM usernames WHERE status='active'").get()).toEqual({ n: 1 })
+      expect(sqlite.prepare("SELECT COUNT(*) AS n FROM usernames WHERE status='reserved'").get()).toEqual({ n: 1 })
+    })
+
+    it('honors an exact policy block added after the allocation policy read', async () => {
+      const racing: D1Database = Object.create(db)
+      racing.prepare = (sql: string) => {
+        if (sql.includes('INSERT INTO usernames')) reserve('zxqracer', 'whole')
+        return db.prepare(sql)
+      }
+      const response = await request({ name: 'zxqracer', pubkey, allocate: true }, 'import-test', true, {}, racing)
+      expect(response.status).toBe(409)
+      expect(await response.json()).toMatchObject({ code: 'reserved' })
+      expect(rowCount()).toBe(0)
+    })
+  })
+
   // The import has to refuse whatever a self-service claim refuses as reserved,
   // without spending the judgment budget that live sign-ups share.
   describe('reserved-word rules', () => {
