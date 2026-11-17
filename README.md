@@ -64,7 +64,7 @@ A scheduled handler runs hourly (`0 * * * *`):
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 22.12+ (the locked `wrangler` refuses to start on anything older)
 - A Cloudflare account with Workers and D1 enabled
 - (Optional) [Bun](https://bun.sh) for the Vine import scripts
 
