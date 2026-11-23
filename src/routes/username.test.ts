@@ -1527,7 +1527,7 @@ describe('GET /api/username/lookup/:name', () => {
       { name: 'name_', username_canonical: 'name_', pubkey: fixturePubkey, status: 'active' },
     ])
 
-    for (const target of ['unknownuser', 'revokeduser', 'reserveduser', 'nokeyuser', 'bad--name!!', 'a..b', 'name_.', '.alice.', '..alice']) {
+    for (const target of ['unknownuser', 'revokeduser', 'reserveduser', 'nokeyuser', 'bad--name!!', 'a..b', 'name_.', '.alice', '.alice.', '..alice']) {
       const res = await app.fetch(new Request(`http://localhost/api/username/lookup/${encodeURIComponent(target)}`), { DB: db })
       expect(res.status, target).toBe(404)
       expect(res.headers.get('cache-control'), target).toBe('no-store')
