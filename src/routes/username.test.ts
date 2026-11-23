@@ -1562,13 +1562,17 @@ describe('GET /api/username/lookup/:name', () => {
 
   it('rejects IDNA full stops before accessing the database', async () => {
     const app = createLookupApp()
-    const db = createMockDB()
+    const db = createMockDB([{ name: 'alice', username_canonical: 'alice', pubkey: fixturePubkey, status: 'active' }])
     const prepare = vi.spyOn(db, 'prepare')
 
-    for (const name of ['\u3002', '\uff0e', '\uff61']) {
-      const res = await app.request(`/api/username/lookup/${encodeURIComponent(name)}`, {}, { DB: db })
-      expect(res.status, name).toBe(404)
-      expect(res.headers.get('cache-control'), name).toBe('no-store')
+    // IDNA maps each of these to '.', and the canonical form keeps only the first
+    // label, so without the guard 'alice' + separator + 'evil' would resolve as alice.
+    for (const separator of ['\u3002', '\uff0e', '\uff61']) {
+      for (const name of [separator, `alice${separator}evil`]) {
+        const res = await app.request(`/api/username/lookup/${encodeURIComponent(name)}`, {}, { DB: db })
+        expect(res.status, name).toBe(404)
+        expect(res.headers.get('cache-control'), name).toBe('no-store')
+      }
     }
     expect(prepare).not.toHaveBeenCalled()
   })
