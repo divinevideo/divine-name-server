@@ -23,7 +23,7 @@ import {
   prepareReleaseAttempt,
   rollbackReleaseAttempt,
 } from '../db/queries'
-import { syncAndVerifyUsername, deleteUsernameFromFastly } from '../utils/fastly-sync'
+import { syncAndVerifyUsername, deleteUsernameFromFastly, parseRelayHints } from '../utils/fastly-sync'
 import { sendReservationConfirmationEmail } from '../utils/email'
 import {
   parseCashuToken,
@@ -189,73 +189,37 @@ username.get('/check/:name', async (c) => {
 })
 
 // Public endpoint: look up active edge-routing metadata for a username (no auth required)
-// Returns only public identity fields already exposed by /.well-known/nostr.json and /.well-known/atproto-did.
+// Single labels use the username validator; legacy ASCII aliases have separate lookup rules.
 username.get('/lookup/:name', async (c) => {
   try {
     const rawName = c.req.param('name').trim()
-    if (!rawName || rawName.length > 253 || /[\s\x00-\x1f\x7f]/.test(rawName)) {
-      return c.json(
-        { ok: false, error: 'Not found' },
-        404,
-        { 'Cache-Control': 'no-store' }
-      )
+    const notFound = () => c.json({ ok: false, error: 'Not found' }, 404, { 'Cache-Control': 'no-store' })
+    // IDNA maps these separators to dots. Reject them before single-label conversion.
+    if (!rawName || rawName.length > 253 || /[\s\x00-\x1f\x7f\u3002\uff0e\uff61]/.test(rawName)) {
+      return notFound()
     }
 
-    // Use validateUsername for Unicode -> punycode canonicalization when valid,
-    // but fall back to lowercase lookup so legacy grandfathered names (e.g. underscores) still resolve.
-    let primaryKey = rawName.toLowerCase()
-    try {
-      primaryKey = validateUsername(rawName).canonical
-    } catch (error) {
-      if (!(error instanceof UsernameValidationError)) {
+    let primaryKey: string
+    if (/[._]/.test(rawName)) {
+      if (!/^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/.test(rawName)) return notFound()
+      primaryKey = rawName.toLowerCase()
+    } else {
+      try {
+        primaryKey = validateUsername(rawName).canonical
+      } catch (error) {
+        if (error instanceof UsernameValidationError) return notFound()
         throw error
       }
     }
 
     let existing = await getUsernameByName(c.env.DB, primaryKey)
 
-    // Defensive dotless fallback only when the exact name has no DB row at all
-    // and dots are strictly internal (never leading, trailing, or consecutive).
-    if (
-      !existing &&
-      primaryKey.includes('.') &&
-      !primaryKey.startsWith('.') &&
-      !primaryKey.endsWith('.') &&
-      !primaryKey.includes('..')
-    ) {
-      const dotlessRaw = primaryKey.replace(/\./g, '')
-      let dotlessKey = dotlessRaw
-      try {
-        dotlessKey = validateUsername(dotlessRaw).canonical
-      } catch (error) {
-        if (!(error instanceof UsernameValidationError)) {
-          throw error
-        }
-      }
-      if (dotlessKey && dotlessKey !== primaryKey) {
-        existing = await getUsernameByName(c.env.DB, dotlessKey)
-      }
+    // Even a non-active exact match takes precedence over a dotless alias.
+    if (!existing && primaryKey.includes('.')) {
+      existing = await getUsernameByName(c.env.DB, primaryKey.replace(/\./g, ''))
     }
 
-    if (!existing || existing.status !== 'active' || !existing.pubkey) {
-      return c.json(
-        { ok: false, error: 'Not found' },
-        404,
-        { 'Cache-Control': 'no-store' }
-      )
-    }
-
-    let relays: string[] = []
-    if (existing.relays) {
-      try {
-        const parsed = JSON.parse(existing.relays)
-        if (Array.isArray(parsed)) {
-          relays = parsed.filter((value): value is string => typeof value === 'string')
-        }
-      } catch {
-        relays = []
-      }
-    }
+    if (!existing || existing.status !== 'active' || !existing.pubkey) return notFound()
 
     // Only expose ATProto DID when state is 'ready' (matches /.well-known/atproto-did);
     // never leak pending, failed, or disabled provisioning state/DIDs.
@@ -264,7 +228,7 @@ username.get('/lookup/:name', async (c) => {
     return c.json(
       {
         pubkey: existing.pubkey.toLowerCase(),
-        relays,
+        relays: parseRelayHints(existing.relays),
         status: 'active',
         atproto_did: atprotoReady ? existing.atproto_did : null,
         atproto_state: atprotoReady ? 'ready' : null,

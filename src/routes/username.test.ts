@@ -17,7 +17,8 @@ vi.mock('../utils/email', () => ({
 }))
 
 // Mock Fastly sync utilities
-vi.mock('../utils/fastly-sync', () => ({
+vi.mock('../utils/fastly-sync', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../utils/fastly-sync')>(),
   syncUsernameToFastly: vi.fn().mockResolvedValue({ success: true }),
   syncAndVerifyUsername: vi.fn().mockResolvedValue({ success: true, verified: true }),
   deleteUsernameFromFastly: vi.fn().mockResolvedValue({ success: true }),
@@ -1440,6 +1441,7 @@ describe('POST /release - burn own username', () => {
 })
 
 describe('GET /api/username/lookup/:name', () => {
+  const fixturePubkey = 'ab'.repeat(32)
   const createLookupApp = () => {
     const app = new Hono()
     app.route('/api/username', username)
@@ -1475,20 +1477,20 @@ describe('GET /api/username/lookup/:name', () => {
   it('falls back to dotless username when dotted name is not found', async () => {
     const app = createLookupApp()
     const db = createMockDB([{
-      name: 'lelepons',
-      username_display: 'lelepons',
-      username_canonical: 'lelepons',
-      pubkey: '156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b',
+      name: 'samplecreator',
+      username_display: 'samplecreator',
+      username_canonical: 'samplecreator',
+      pubkey: fixturePubkey,
       relays: null,
       status: 'active',
       atproto_did: null,
       atproto_state: null,
     }])
 
-    const res = await app.fetch(new Request('http://localhost/api/username/lookup/lele.pons'), { DB: db })
+    const res = await app.fetch(new Request('http://localhost/api/username/lookup/sample.creator'), { DB: db })
     expect(res.status).toBe(200)
     const body = await res.json() as any
-    expect(body.pubkey).toBe('156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b')
+    expect(body.pubkey).toBe(fixturePubkey)
     expect(body.relays).toEqual([])
     expect(body.atproto_did).toBeNull()
   })
@@ -1499,7 +1501,7 @@ describe('GET /api/username/lookup/:name', () => {
       {
         name: 'revokeduser',
         username_canonical: 'revokeduser',
-        pubkey: '156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b',
+        pubkey: fixturePubkey,
         status: 'revoked',
       },
       {
@@ -1517,13 +1519,38 @@ describe('GET /api/username/lookup/:name', () => {
     }
   })
 
+  it('rejects invalid alias syntax before accessing the database', async () => {
+    const app = createLookupApp()
+    const db = createMockDB()
+    const prepare = vi.spyOn(db, 'prepare')
+
+    for (const name of ['a..b', 'name_.', '-invalid', 'bad!name', '\u3002', '\uff0e', '\uff61']) {
+      const res = await app.request(`/api/username/lookup/${encodeURIComponent(name)}`, {}, { DB: db })
+      expect(res.status, name).toBe(404)
+      expect(res.headers.get('cache-control'), name).toBe('no-store')
+    }
+    expect(prepare).not.toHaveBeenCalled()
+  })
+
+  it('resolves a single Unicode label by its canonical username', async () => {
+    const app = createLookupApp()
+    const db = createMockDB([{
+      username_canonical: 'xn--caf-dma',
+      pubkey: fixturePubkey,
+      status: 'active',
+    }])
+    const res = await app.request(`/api/username/lookup/${encodeURIComponent('Café')}`, {}, { DB: db })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ pubkey: fixturePubkey })
+  })
+
   it('resolves legacy underscore usernames and withholds non-ready atproto state/DID', async () => {
     const app = createLookupApp()
     const db = createMockDB([{
       name: 'legacy_user',
       username_display: 'legacy_user',
       username_canonical: 'legacy_user',
-      pubkey: '156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b',
+      pubkey: fixturePubkey,
       relays: '{malformed json',
       status: 'active',
       atproto_did: 'did:plc:pending123',
@@ -1533,7 +1560,7 @@ describe('GET /api/username/lookup/:name', () => {
     const res = await app.fetch(new Request('http://localhost/api/username/lookup/legacy_user'), { DB: db })
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({
-      pubkey: '156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b',
+      pubkey: fixturePubkey,
       relays: [],
       status: 'active',
       atproto_did: null,

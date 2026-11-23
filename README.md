@@ -157,6 +157,7 @@ All endpoints send permissive CORS headers so the Divine web and Flutter clients
 |--------|------|-------------|
 | `GET` | `/api/username/check/:name` | Check availability and validate format. No auth. |
 | `GET` | `/api/username/by-pubkey/:pubkey` | Look up the active username for a pubkey. No auth. |
+| `GET` | `/api/username/lookup/:name` | Look up public routing metadata for an active username. No auth. |
 | `POST` | `/api/username/reserve` | Reserve a name with email + Cashu payment or invite code. |
 | `GET` | `/api/username/confirm` | JSON email-confirmation callback for a reservation token. |
 | `POST` | `/api/username/claim` | Claim a name with NIP-98 auth. |
