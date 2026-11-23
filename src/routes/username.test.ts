@@ -1602,6 +1602,19 @@ describe('GET /api/username/lookup/:name', () => {
     expect(prepare).not.toHaveBeenCalled()
   })
 
+  it('rejects empty, overlong, and malformed names before accessing the database', async () => {
+    const app = createLookupApp()
+    const db = createMockDB()
+    const prepare = vi.spyOn(db, 'prepare')
+
+    for (const name of [' ', 'a'.repeat(254), 'sample name', 'sample\x00name']) {
+      const res = await app.request(`/api/username/lookup/${encodeURIComponent(name)}`, {}, { DB: db })
+      expect(res.status, name).toBe(404)
+      expect(res.headers.get('cache-control'), name).toBe('no-store')
+    }
+    expect(prepare).not.toHaveBeenCalled()
+  })
+
   it('resolves a single Unicode label by its canonical username', async () => {
     const app = createLookupApp()
     const db = createMockDB([{
