@@ -1643,7 +1643,10 @@ describe('GET /api/username/lookup/:name', () => {
     expect(revoked.status).toBe(404)
   })
 
-  it('resolves legacy underscore usernames and withholds non-ready atproto state/DID', async () => {
+  it.each([
+    { atproto_state: 'pending', atproto_did: 'did:plc:pending123' },
+    { atproto_state: 'ready', atproto_did: null },
+  ])('resolves legacy underscore usernames and withholds incomplete ATProto data ($atproto_state)', async (atproto) => {
     const app = createLookupApp()
     const db = createMockDB([{
       name: 'legacy_user',
@@ -1652,8 +1655,7 @@ describe('GET /api/username/lookup/:name', () => {
       pubkey: fixturePubkey,
       relays: '{malformed json',
       status: 'active',
-      atproto_did: 'did:plc:pending123',
-      atproto_state: 'pending',
+      ...atproto,
     }])
 
     const res = await app.fetch(new Request('http://localhost/api/username/lookup/legacy_user'), { DB: db })
