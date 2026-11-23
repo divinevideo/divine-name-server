@@ -1485,6 +1485,11 @@ describe('GET /api/username/lookup/:name', () => {
       status: 'active',
       atproto_did: null,
       atproto_state: null,
+    }, {
+      name: 'cool_dudethe-artist',
+      username_canonical: 'cool_dudethe-artist',
+      pubkey: 'cd'.repeat(32),
+      status: 'active',
     }])
 
     const res = await app.fetch(new Request('http://localhost/api/username/lookup/sample.creator'), { DB: db })
@@ -1493,6 +1498,11 @@ describe('GET /api/username/lookup/:name', () => {
     expect(body.pubkey).toBe(fixturePubkey)
     expect(body.relays).toEqual([])
     expect(body.atproto_did).toBeNull()
+
+    // Alias segments can hold underscores and hyphens, as legacy names do.
+    const segmented = await app.request('/api/username/lookup/cool_dude.the-artist', {}, { DB: db })
+    expect(segmented.status).toBe(200)
+    expect(await segmented.json()).toMatchObject({ pubkey: 'cd'.repeat(32) })
   })
 
   it('returns 404 with no-store for unknown, inactive, or invalid usernames', async () => {
@@ -1510,9 +1520,14 @@ describe('GET /api/username/lookup/:name', () => {
         pubkey: null,
         status: 'reserved',
       },
+      { name: 'nokeyuser', username_canonical: 'nokeyuser', pubkey: null, status: 'active' },
+      // Active rows the malformed dotted targets would reach if they got a dotless alias.
+      { name: 'alice', username_canonical: 'alice', pubkey: fixturePubkey, status: 'active' },
+      { name: 'ab', username_canonical: 'ab', pubkey: fixturePubkey, status: 'active' },
+      { name: 'name_', username_canonical: 'name_', pubkey: fixturePubkey, status: 'active' },
     ])
 
-    for (const target of ['unknownuser', 'revokeduser', 'reserveduser', 'bad--name!!', '-invalid', 'bad!name', 'a..b', 'name_.', '.alice.', '..alice']) {
+    for (const target of ['unknownuser', 'revokeduser', 'reserveduser', 'nokeyuser', 'bad--name!!', 'a..b', 'name_.', '.alice.', '..alice']) {
       const res = await app.fetch(new Request(`http://localhost/api/username/lookup/${encodeURIComponent(target)}`), { DB: db })
       expect(res.status, target).toBe(404)
       expect(res.headers.get('cache-control'), target).toBe('no-store')
@@ -1546,14 +1561,14 @@ describe('GET /api/username/lookup/:name', () => {
     const app = createLookupApp()
     const db = createMockDB([
       { name: 'first..last', username_canonical: 'first..last', pubkey: fixturePubkey, status: 'active' },
-      { name: 'trailing.', username_canonical: 'trailing.', pubkey: fixturePubkey, status: 'active' },
+      { name: 'trailing.', username_canonical: 'trailing.', pubkey: 'ef'.repeat(32), status: 'active' },
       { name: 'otherlast', username_canonical: 'otherlast', pubkey: 'cd'.repeat(32), status: 'active' },
     ])
 
-    for (const name of ['first..last', 'trailing.']) {
+    for (const [name, pubkey] of [['first..last', fixturePubkey], ['trailing.', 'ef'.repeat(32)]] as const) {
       const res = await app.request(`/api/username/lookup/${encodeURIComponent(name)}`, {}, { DB: db })
       expect(res.status, name).toBe(200)
-      expect(await res.json(), name).toMatchObject({ pubkey: fixturePubkey })
+      expect(await res.json(), name).toMatchObject({ pubkey })
     }
 
     const noAlias = await app.request(`/api/username/lookup/${encodeURIComponent('other..last')}`, {}, { DB: db })
@@ -1600,6 +1615,24 @@ describe('GET /api/username/lookup/:name', () => {
     expect(await res.json()).toMatchObject({ pubkey: fixturePubkey })
   })
 
+  // The canonical form is tried first, and a non-active canonical match ends the
+  // search rather than falling through to a row stored under the name as typed.
+  it('prefers the canonical match and stops at a non-active one', async () => {
+    const app = createLookupApp()
+    const asTyped = { name: 'crème', username_canonical: 'crème', pubkey: 'cd'.repeat(32), status: 'active' }
+    const canonicalRow = (status: string) =>
+      ({ name: 'xn--crme-6oa', username_canonical: 'xn--crme-6oa', pubkey: fixturePubkey, status })
+    const lookup = (rows: any[]) =>
+      app.request(`/api/username/lookup/${encodeURIComponent('crème')}`, {}, { DB: createMockDB(rows) })
+
+    const active = await lookup([canonicalRow('active'), asTyped])
+    expect(active.status).toBe(200)
+    expect(await active.json()).toMatchObject({ pubkey: fixturePubkey })
+
+    const revoked = await lookup([canonicalRow('revoked'), asTyped])
+    expect(revoked.status).toBe(404)
+  })
+
   it('resolves legacy underscore usernames and withholds non-ready atproto state/DID', async () => {
     const app = createLookupApp()
     const db = createMockDB([{
@@ -1643,6 +1676,17 @@ describe('GET /api/username/lookup/:name', () => {
 
     const res = await app.fetch(new Request('http://localhost/api/username/lookup/john.doe'), { DB: db })
     expect(res.status).toBe(404)
+    expect(res.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('answers a database failure with an uncached 500', async () => {
+    const app = createLookupApp()
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const db = { prepare: () => { throw new Error('D1 unavailable') } }
+
+    const res = await app.request('/api/username/lookup/alice', {}, { DB: db })
+    consoleError.mockRestore()
+    expect(res.status).toBe(500)
     expect(res.headers.get('cache-control')).toBe('no-store')
   })
 })
