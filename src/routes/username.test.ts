@@ -1585,6 +1585,17 @@ describe('GET /api/username/lookup/:name', () => {
     expect(await res.json()).toMatchObject({ pubkey: fixturePubkey })
   })
 
+  // A canonical lookup misses a stored name it does not cover, such as a Unicode
+  // name held as typed; /.well-known/webfinger also retries the name as given.
+  it('retries the name as given when its canonical form is not stored', async () => {
+    const app = createLookupApp()
+    const db = createMockDB([{ name: 'crème', username_canonical: 'crème', pubkey: fixturePubkey, status: 'active' }])
+
+    const res = await app.request(`/api/username/lookup/${encodeURIComponent('crème')}`, {}, { DB: db })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ pubkey: fixturePubkey })
+  })
+
   it('resolves legacy underscore usernames and withholds non-ready atproto state/DID', async () => {
     const app = createLookupApp()
     const db = createMockDB([{

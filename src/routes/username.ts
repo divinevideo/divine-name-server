@@ -189,7 +189,7 @@ username.get('/check/:name', async (c) => {
 })
 
 // Public endpoint: look up active edge-routing metadata for a username (no auth required)
-// Single labels try their canonical form; legacy ASCII aliases have separate lookup rules.
+// Tries the canonical form, then the name as given, then a dotless alias for dotted names.
 username.get('/lookup/:name', async (c) => {
   try {
     const rawName = c.req.param('name').trim()
@@ -199,22 +199,20 @@ username.get('/lookup/:name', async (c) => {
       return notFound()
     }
 
-    let primaryKey: string
-    if (/[._]/.test(rawName)) {
-      primaryKey = rawName.toLowerCase()
-    } else {
-      // Claim rules describe new names, not every stored row: older rules and
-      // imports allowed names such as 'ab--cd', so look up a rejected name as given.
-      primaryKey = canonicalizeUsernameOrNull(rawName) ?? rawName
+    // Claim rules describe new names, not every stored row: older rules and
+    // imports allowed names such as 'ab--cd' or 'cool_dude'. Try the canonical
+    // form first, then the name as given, as /.well-known/webfinger does.
+    const canonical = canonicalizeUsernameOrNull(rawName)
+    let existing = canonical ? await getUsernameByName(c.env.DB, canonical) : null
+    if (!existing && canonical !== rawName) {
+      existing = await getUsernameByName(c.env.DB, rawName)
     }
-
-    let existing = await getUsernameByName(c.env.DB, primaryKey)
 
     // Even a non-active exact match takes precedence over a dotless alias. Only
     // well-formed dotted names get one: imports also stored names such as
     // 'first..last' or a name cut off at a dot, which match exactly or not at all.
-    if (!existing && primaryKey.includes('.') && /^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/.test(rawName)) {
-      existing = await getUsernameByName(c.env.DB, primaryKey.replace(/\./g, ''))
+    if (!existing && rawName.includes('.') && /^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/.test(rawName)) {
+      existing = await getUsernameByName(c.env.DB, rawName.toLowerCase().replace(/\./g, ''))
     }
 
     if (!existing || existing.status !== 'active' || !existing.pubkey) return notFound()
