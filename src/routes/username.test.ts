@@ -1512,10 +1512,30 @@ describe('GET /api/username/lookup/:name', () => {
       },
     ])
 
-    for (const target of ['unknownuser', 'revokeduser', 'reserveduser', 'bad--name!!', '.alice.', '..alice']) {
+    for (const target of ['unknownuser', 'revokeduser', 'reserveduser', 'bad--name!!', '-invalid', 'bad!name', '.alice.', '..alice']) {
       const res = await app.fetch(new Request(`http://localhost/api/username/lookup/${encodeURIComponent(target)}`), { DB: db })
       expect(res.status, target).toBe(404)
       expect(res.headers.get('cache-control'), target).toBe('no-store')
+    }
+  })
+
+  // Claim rules describe new names, not every stored row: older rules, imports
+  // and IDNA mapping at /claim have all stored active names shaped like these.
+  it('finds active names whose stored form breaks the current claim rules', async () => {
+    const app = createLookupApp()
+    const names = ['-samplename', 'ab--cd', 'legacyname-']
+    const db = createMockDB(names.map((name, i) => ({
+      name,
+      username_canonical: name,
+      pubkey: String(i + 1).repeat(64),
+      status: 'active',
+    })))
+
+    for (const [i, name] of names.entries()) {
+      const res = await app.request(`/api/username/lookup/${encodeURIComponent(name)}`, {}, { DB: db })
+      expect(res.status, name).toBe(200)
+      expect(res.headers.get('cache-control'), name).toBe('public, max-age=60')
+      expect(await res.json(), name).toMatchObject({ pubkey: String(i + 1).repeat(64) })
     }
   })
 
@@ -1524,7 +1544,7 @@ describe('GET /api/username/lookup/:name', () => {
     const db = createMockDB()
     const prepare = vi.spyOn(db, 'prepare')
 
-    for (const name of ['a..b', 'name_.', '-invalid', 'bad!name', '\u3002', '\uff0e', '\uff61']) {
+    for (const name of ['a..b', 'name_.', '\u3002', '\uff0e', '\uff61']) {
       const res = await app.request(`/api/username/lookup/${encodeURIComponent(name)}`, {}, { DB: db })
       expect(res.status, name).toBe(404)
       expect(res.headers.get('cache-control'), name).toBe('no-store')

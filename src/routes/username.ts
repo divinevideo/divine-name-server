@@ -5,7 +5,7 @@
 import { Hono, type Context } from 'hono'
 import { cors } from 'hono/cors'
 import { verifyNip98Event } from '../middleware/nip98'
-import { validateUsername, validateRelays, UsernameValidationError, RelayValidationError } from '../utils/validation'
+import { validateUsername, canonicalizeUsernameOrNull, validateRelays, UsernameValidationError, RelayValidationError } from '../utils/validation'
 import {
   getUsernameByName,
   getUsernameByPubkey,
@@ -189,7 +189,7 @@ username.get('/check/:name', async (c) => {
 })
 
 // Public endpoint: look up active edge-routing metadata for a username (no auth required)
-// Single labels use the username validator; legacy ASCII aliases have separate lookup rules.
+// Single labels try their canonical form; legacy ASCII aliases have separate lookup rules.
 username.get('/lookup/:name', async (c) => {
   try {
     const rawName = c.req.param('name').trim()
@@ -204,12 +204,9 @@ username.get('/lookup/:name', async (c) => {
       if (!/^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/.test(rawName)) return notFound()
       primaryKey = rawName.toLowerCase()
     } else {
-      try {
-        primaryKey = validateUsername(rawName).canonical
-      } catch (error) {
-        if (error instanceof UsernameValidationError) return notFound()
-        throw error
-      }
+      // Claim rules describe new names, not every stored row: older rules and
+      // imports allowed names such as 'ab--cd', so look up a rejected name as given.
+      primaryKey = canonicalizeUsernameOrNull(rawName) ?? rawName
     }
 
     let existing = await getUsernameByName(c.env.DB, primaryKey)
