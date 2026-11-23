@@ -1512,7 +1512,7 @@ describe('GET /api/username/lookup/:name', () => {
       },
     ])
 
-    for (const target of ['unknownuser', 'revokeduser', 'reserveduser', 'bad--name!!', '-invalid', 'bad!name', '.alice.', '..alice']) {
+    for (const target of ['unknownuser', 'revokeduser', 'reserveduser', 'bad--name!!', '-invalid', 'bad!name', 'a..b', 'name_.', '.alice.', '..alice']) {
       const res = await app.fetch(new Request(`http://localhost/api/username/lookup/${encodeURIComponent(target)}`), { DB: db })
       expect(res.status, target).toBe(404)
       expect(res.headers.get('cache-control'), target).toBe('no-store')
@@ -1539,12 +1539,33 @@ describe('GET /api/username/lookup/:name', () => {
     }
   })
 
-  it('rejects invalid alias syntax before accessing the database', async () => {
+  // The old importer deleted characters in place and cut names at 63 characters,
+  // so it could store consecutive dots or a trailing dot. Those rows match exactly;
+  // only well-formed dotted names fall back to a dotless alias.
+  it('finds active dotted names outside the alias grammar by exact match only', async () => {
+    const app = createLookupApp()
+    const db = createMockDB([
+      { name: 'first..last', username_canonical: 'first..last', pubkey: fixturePubkey, status: 'active' },
+      { name: 'trailing.', username_canonical: 'trailing.', pubkey: fixturePubkey, status: 'active' },
+      { name: 'otherlast', username_canonical: 'otherlast', pubkey: 'cd'.repeat(32), status: 'active' },
+    ])
+
+    for (const name of ['first..last', 'trailing.']) {
+      const res = await app.request(`/api/username/lookup/${encodeURIComponent(name)}`, {}, { DB: db })
+      expect(res.status, name).toBe(200)
+      expect(await res.json(), name).toMatchObject({ pubkey: fixturePubkey })
+    }
+
+    const noAlias = await app.request(`/api/username/lookup/${encodeURIComponent('other..last')}`, {}, { DB: db })
+    expect(noAlias.status).toBe(404)
+  })
+
+  it('rejects IDNA full stops before accessing the database', async () => {
     const app = createLookupApp()
     const db = createMockDB()
     const prepare = vi.spyOn(db, 'prepare')
 
-    for (const name of ['a..b', 'name_.', '\u3002', '\uff0e', '\uff61']) {
+    for (const name of ['\u3002', '\uff0e', '\uff61']) {
       const res = await app.request(`/api/username/lookup/${encodeURIComponent(name)}`, {}, { DB: db })
       expect(res.status, name).toBe(404)
       expect(res.headers.get('cache-control'), name).toBe('no-store')

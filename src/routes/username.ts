@@ -201,7 +201,6 @@ username.get('/lookup/:name', async (c) => {
 
     let primaryKey: string
     if (/[._]/.test(rawName)) {
-      if (!/^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/.test(rawName)) return notFound()
       primaryKey = rawName.toLowerCase()
     } else {
       // Claim rules describe new names, not every stored row: older rules and
@@ -211,8 +210,10 @@ username.get('/lookup/:name', async (c) => {
 
     let existing = await getUsernameByName(c.env.DB, primaryKey)
 
-    // Even a non-active exact match takes precedence over a dotless alias.
-    if (!existing && primaryKey.includes('.')) {
+    // Even a non-active exact match takes precedence over a dotless alias. Only
+    // well-formed dotted names get one: imports also stored names such as
+    // 'first..last' or a name cut off at a dot, which match exactly or not at all.
+    if (!existing && primaryKey.includes('.') && /^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/.test(rawName)) {
       existing = await getUsernameByName(c.env.DB, primaryKey.replace(/\./g, ''))
     }
 
