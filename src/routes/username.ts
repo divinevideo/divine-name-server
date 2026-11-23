@@ -1,5 +1,5 @@
-// ABOUTME: Username API endpoints for claiming, checking, and reserving usernames
-// ABOUTME: Public endpoints: GET /check/:name, GET /by-pubkey/:pubkey, POST /reserve, GET /confirm
+// ABOUTME: Username API endpoints for claiming, checking, looking up, and reserving usernames
+// ABOUTME: Public endpoints: GET /check/:name, GET /lookup/:name, GET /by-pubkey/:pubkey, POST /reserve, GET /confirm
 // ABOUTME: Authenticated: POST /claim, POST /release (NIP-98 auth - works for both custodial and non-custodial users)
 
 import { Hono, type Context } from 'hono'
@@ -184,6 +184,89 @@ username.get('/check/:name', async (c) => {
 
   } catch (error) {
     console.error('Check error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+// Public endpoint: look up active edge-routing metadata for a username (no auth required)
+// Returns only public identity fields already exposed by /.well-known/nostr.json and /.well-known/atproto-did.
+username.get('/lookup/:name', async (c) => {
+  try {
+    const rawName = c.req.param('name').trim()
+    const candidates: string[] = []
+    try {
+      candidates.push(validateUsername(rawName).canonical)
+    } catch (error) {
+      if (!(error instanceof UsernameValidationError)) {
+        throw error
+      }
+    }
+    if (rawName.includes('.')) {
+      try {
+        const dotless = validateUsername(rawName.replace(/\./g, '')).canonical
+        if (!candidates.includes(dotless)) {
+          candidates.push(dotless)
+        }
+      } catch (error) {
+        if (!(error instanceof UsernameValidationError)) {
+          throw error
+        }
+      }
+    }
+
+    if (candidates.length === 0) {
+      return c.json(
+        { ok: false, error: 'Not found' },
+        404,
+        { 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' }
+      )
+    }
+
+    let existing = null
+    for (const candidate of candidates) {
+      const found = await getUsernameByName(c.env.DB, candidate)
+      if (found && found.status === 'active' && found.pubkey) {
+        existing = found
+        break
+      }
+    }
+
+    if (!existing || existing.status !== 'active' || !existing.pubkey) {
+      return c.json(
+        { ok: false, error: 'Not found' },
+        404,
+        { 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' }
+      )
+    }
+
+    let relays: string[] = []
+    if (existing.relays) {
+      try {
+        const parsed = JSON.parse(existing.relays)
+        if (Array.isArray(parsed)) {
+          relays = parsed.filter((value): value is string => typeof value === 'string')
+        }
+      } catch {
+        relays = []
+      }
+    }
+
+    return c.json(
+      {
+        pubkey: existing.pubkey.toLowerCase(),
+        relays,
+        status: 'active',
+        atproto_did: existing.atproto_did ?? null,
+        atproto_state: existing.atproto_state ?? null,
+      },
+      200,
+      {
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'public, max-age=60',
+      }
+    )
+  } catch (error) {
+    console.error('Lookup error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
   }
 })

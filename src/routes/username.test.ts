@@ -1438,3 +1438,82 @@ describe('POST /release - burn own username', () => {
     expect(json.error).toContain('permanently unavailable')
   })
 })
+
+describe('GET /api/username/lookup/:name', () => {
+  const createLookupApp = () => {
+    const app = new Hono()
+    app.route('/api/username', username)
+    return app
+  }
+
+  it('returns active username routing metadata including relays and atproto fields', async () => {
+    const app = createLookupApp()
+    const db = createMockDB([{
+      name: 'Alice',
+      username_display: 'Alice',
+      username_canonical: 'alice',
+      pubkey: 'ABCDEF1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+      relays: JSON.stringify(['wss://relay.divine.video']),
+      status: 'active',
+      atproto_did: 'did:plc:alice123',
+      atproto_state: 'ready',
+    }])
+
+    const res = await app.fetch(new Request('http://localhost/api/username/lookup/Alice'), { DB: db })
+    expect(res.status).toBe(200)
+    expect(res.headers.get('cache-control')).toBe('public, max-age=60')
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
+    expect(await res.json()).toEqual({
+      pubkey: 'abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+      relays: ['wss://relay.divine.video'],
+      status: 'active',
+      atproto_did: 'did:plc:alice123',
+      atproto_state: 'ready',
+    })
+  })
+
+  it('falls back to dotless username when dotted name is not found', async () => {
+    const app = createLookupApp()
+    const db = createMockDB([{
+      name: 'lelepons',
+      username_display: 'lelepons',
+      username_canonical: 'lelepons',
+      pubkey: '156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b',
+      relays: null,
+      status: 'active',
+      atproto_did: null,
+      atproto_state: null,
+    }])
+
+    const res = await app.fetch(new Request('http://localhost/api/username/lookup/lele.pons'), { DB: db })
+    expect(res.status).toBe(200)
+    const body = await res.json() as any
+    expect(body.pubkey).toBe('156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b')
+    expect(body.relays).toEqual([])
+    expect(body.atproto_did).toBeNull()
+  })
+
+  it('returns 404 with no-store for unknown, inactive, or invalid usernames', async () => {
+    const app = createLookupApp()
+    const db = createMockDB([
+      {
+        name: 'revokeduser',
+        username_canonical: 'revokeduser',
+        pubkey: '156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b',
+        status: 'revoked',
+      },
+      {
+        name: 'reserveduser',
+        username_canonical: 'reserveduser',
+        pubkey: null,
+        status: 'reserved',
+      },
+    ])
+
+    for (const target of ['unknownuser', 'revokeduser', 'reserveduser', 'bad--name!!']) {
+      const res = await app.fetch(new Request(`http://localhost/api/username/lookup/${encodeURIComponent(target)}`), { DB: db })
+      expect(res.status, target).toBe(404)
+      expect(res.headers.get('cache-control'), target).toBe('no-store')
+    }
+  })
+})
