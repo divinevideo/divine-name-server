@@ -1490,6 +1490,11 @@ describe('GET /api/username/lookup/:name', () => {
       username_canonical: 'cool_dudethe-artist',
       pubkey: 'cd'.repeat(32),
       status: 'active',
+    }, {
+      name: 'threepartname',
+      username_canonical: 'threepartname',
+      pubkey: 'ef'.repeat(32),
+      status: 'active',
     }])
 
     const res = await app.fetch(new Request('http://localhost/api/username/lookup/sample.creator'), { DB: db })
@@ -1503,6 +1508,11 @@ describe('GET /api/username/lookup/:name', () => {
     const segmented = await app.request('/api/username/lookup/cool_dude.the-artist', {}, { DB: db })
     expect(segmented.status).toBe(200)
     expect(await segmented.json()).toMatchObject({ pubkey: 'cd'.repeat(32) })
+
+    // Every dot is stripped, not only the first.
+    const multiDot = await app.request('/api/username/lookup/three.part.name', {}, { DB: db })
+    expect(multiDot.status).toBe(200)
+    expect(await multiDot.json()).toMatchObject({ pubkey: 'ef'.repeat(32) })
   })
 
   it('returns 404 with no-store for unknown, inactive, or invalid usernames', async () => {
