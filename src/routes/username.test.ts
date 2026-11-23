@@ -17,7 +17,8 @@ vi.mock('../utils/email', () => ({
 }))
 
 // Mock Fastly sync utilities
-vi.mock('../utils/fastly-sync', () => ({
+vi.mock('../utils/fastly-sync', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../utils/fastly-sync')>(),
   syncUsernameToFastly: vi.fn().mockResolvedValue({ success: true }),
   syncAndVerifyUsername: vi.fn().mockResolvedValue({ success: true, verified: true }),
   deleteUsernameFromFastly: vi.fn().mockResolvedValue({ success: true }),
@@ -1436,5 +1437,281 @@ describe('POST /release - burn own username', () => {
     expect(claim.status).toBe(403)
     const json = await claim.json() as any
     expect(json.error).toContain('permanently unavailable')
+  })
+})
+
+describe('GET /api/username/lookup/:name', () => {
+  const fixturePubkey = 'ab'.repeat(32)
+  const createLookupApp = () => {
+    const app = new Hono()
+    app.route('/api/username', username)
+    return app
+  }
+
+  it('returns active username routing metadata including relays and atproto fields', async () => {
+    const app = createLookupApp()
+    const db = createMockDB([{
+      name: 'Alice',
+      username_display: 'Alice',
+      username_canonical: 'alice',
+      pubkey: 'ABCDEF1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+      relays: JSON.stringify(['wss://relay.divine.video']),
+      status: 'active',
+      atproto_did: 'did:plc:alice123',
+      atproto_state: 'ready',
+    }])
+
+    const res = await app.fetch(new Request('http://localhost/api/username/lookup/Alice'), { DB: db })
+    expect(res.status).toBe(200)
+    expect(res.headers.get('cache-control')).toBe('public, max-age=60')
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
+    expect(await res.json()).toEqual({
+      pubkey: 'abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+      relays: ['wss://relay.divine.video'],
+      status: 'active',
+      atproto_did: 'did:plc:alice123',
+      atproto_state: 'ready',
+    })
+  })
+
+  it('falls back to dotless username when dotted name is not found', async () => {
+    const app = createLookupApp()
+    const db = createMockDB([{
+      name: 'samplecreator',
+      username_display: 'samplecreator',
+      username_canonical: 'samplecreator',
+      pubkey: fixturePubkey,
+      relays: null,
+      status: 'active',
+      atproto_did: null,
+      atproto_state: null,
+    }, {
+      name: 'cool_dudethe-artist',
+      username_canonical: 'cool_dudethe-artist',
+      pubkey: 'cd'.repeat(32),
+      status: 'active',
+    }, {
+      name: 'threepartname',
+      username_canonical: 'threepartname',
+      pubkey: 'ef'.repeat(32),
+      status: 'active',
+    }])
+
+    const res = await app.fetch(new Request('http://localhost/api/username/lookup/sample.creator'), { DB: db })
+    expect(res.status).toBe(200)
+    const body = await res.json() as any
+    expect(body.pubkey).toBe(fixturePubkey)
+    expect(body.relays).toEqual([])
+    expect(body.atproto_did).toBeNull()
+
+    // Alias segments can hold underscores and hyphens, as legacy names do.
+    const segmented = await app.request('/api/username/lookup/cool_dude.the-artist', {}, { DB: db })
+    expect(segmented.status).toBe(200)
+    expect(await segmented.json()).toMatchObject({ pubkey: 'cd'.repeat(32) })
+
+    // Every dot is stripped, not only the first.
+    const multiDot = await app.request('/api/username/lookup/three.part.name', {}, { DB: db })
+    expect(multiDot.status).toBe(200)
+    expect(await multiDot.json()).toMatchObject({ pubkey: 'ef'.repeat(32) })
+  })
+
+  it('returns 404 with no-store for unknown, inactive, or invalid usernames', async () => {
+    const app = createLookupApp()
+    const db = createMockDB([
+      {
+        name: 'revokeduser',
+        username_canonical: 'revokeduser',
+        pubkey: fixturePubkey,
+        status: 'revoked',
+      },
+      {
+        name: 'reserveduser',
+        username_canonical: 'reserveduser',
+        pubkey: null,
+        status: 'reserved',
+      },
+      { name: 'nokeyuser', username_canonical: 'nokeyuser', pubkey: null, status: 'active' },
+      // Active rows the malformed dotted targets would reach if they got a dotless alias.
+      { name: 'alice', username_canonical: 'alice', pubkey: fixturePubkey, status: 'active' },
+      { name: 'ab', username_canonical: 'ab', pubkey: fixturePubkey, status: 'active' },
+      { name: 'name_', username_canonical: 'name_', pubkey: fixturePubkey, status: 'active' },
+    ])
+
+    for (const target of ['unknownuser', 'revokeduser', 'reserveduser', 'nokeyuser', 'bad--name!!', 'a..b', 'name_.', '.alice', '.alice.', '..alice']) {
+      const res = await app.fetch(new Request(`http://localhost/api/username/lookup/${encodeURIComponent(target)}`), { DB: db })
+      expect(res.status, target).toBe(404)
+      expect(res.headers.get('cache-control'), target).toBe('no-store')
+    }
+  })
+
+  // Claim rules describe new names, not every stored row: older rules, imports
+  // and IDNA mapping at /claim have all stored active names shaped like these.
+  it('finds active names whose stored form breaks the current claim rules', async () => {
+    const app = createLookupApp()
+    const names = ['-samplename', 'ab--cd', 'legacyname-']
+    const db = createMockDB(names.map((name, i) => ({
+      name,
+      username_canonical: name,
+      pubkey: String(i + 1).repeat(64),
+      status: 'active',
+    })))
+
+    for (const [i, name] of names.entries()) {
+      const res = await app.request(`/api/username/lookup/${encodeURIComponent(name)}`, {}, { DB: db })
+      expect(res.status, name).toBe(200)
+      expect(res.headers.get('cache-control'), name).toBe('public, max-age=60')
+      expect(await res.json(), name).toMatchObject({ pubkey: String(i + 1).repeat(64) })
+    }
+  })
+
+  // The old importer deleted characters in place and cut names at 63 characters,
+  // so it could store consecutive dots or a trailing dot. Those rows match exactly;
+  // only well-formed dotted names fall back to a dotless alias.
+  it('finds active dotted names outside the alias grammar by exact match only', async () => {
+    const app = createLookupApp()
+    const db = createMockDB([
+      { name: 'first..last', username_canonical: 'first..last', pubkey: fixturePubkey, status: 'active' },
+      { name: 'trailing.', username_canonical: 'trailing.', pubkey: 'ef'.repeat(32), status: 'active' },
+      { name: 'otherlast', username_canonical: 'otherlast', pubkey: 'cd'.repeat(32), status: 'active' },
+    ])
+
+    for (const [name, pubkey] of [['first..last', fixturePubkey], ['trailing.', 'ef'.repeat(32)]] as const) {
+      const res = await app.request(`/api/username/lookup/${encodeURIComponent(name)}`, {}, { DB: db })
+      expect(res.status, name).toBe(200)
+      expect(await res.json(), name).toMatchObject({ pubkey })
+    }
+
+    const noAlias = await app.request(`/api/username/lookup/${encodeURIComponent('other..last')}`, {}, { DB: db })
+    expect(noAlias.status).toBe(404)
+  })
+
+  it('rejects IDNA full stops before accessing the database', async () => {
+    const app = createLookupApp()
+    const db = createMockDB([{ name: 'alice', username_canonical: 'alice', pubkey: fixturePubkey, status: 'active' }])
+    const prepare = vi.spyOn(db, 'prepare')
+
+    // IDNA maps each of these to '.', and the canonical form keeps only the first
+    // label, so without the guard 'alice' + separator + 'evil' would resolve as alice.
+    for (const separator of ['\u3002', '\uff0e', '\uff61']) {
+      for (const name of [separator, `alice${separator}evil`]) {
+        const res = await app.request(`/api/username/lookup/${encodeURIComponent(name)}`, {}, { DB: db })
+        expect(res.status, name).toBe(404)
+        expect(res.headers.get('cache-control'), name).toBe('no-store')
+      }
+    }
+    expect(prepare).not.toHaveBeenCalled()
+  })
+
+  it('rejects empty, overlong, and malformed names before accessing the database', async () => {
+    const app = createLookupApp()
+    const db = createMockDB()
+    const prepare = vi.spyOn(db, 'prepare')
+
+    for (const name of [' ', 'a'.repeat(254), 'sample name', 'sample\x00name']) {
+      const res = await app.request(`/api/username/lookup/${encodeURIComponent(name)}`, {}, { DB: db })
+      expect(res.status, name).toBe(404)
+      expect(res.headers.get('cache-control'), name).toBe('no-store')
+    }
+    expect(prepare).not.toHaveBeenCalled()
+  })
+
+  it('resolves a single Unicode label by its canonical username', async () => {
+    const app = createLookupApp()
+    const db = createMockDB([{
+      username_canonical: 'xn--caf-dma',
+      pubkey: fixturePubkey,
+      status: 'active',
+    }])
+    const res = await app.request(`/api/username/lookup/${encodeURIComponent('Café')}`, {}, { DB: db })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ pubkey: fixturePubkey })
+  })
+
+  // A canonical lookup misses a stored name it does not cover, such as a Unicode
+  // name held as typed; /.well-known/webfinger also retries the name as given.
+  it('retries the name as given when its canonical form is not stored', async () => {
+    const app = createLookupApp()
+    const db = createMockDB([{ name: 'crème', username_canonical: 'crème', pubkey: fixturePubkey, status: 'active' }])
+
+    const res = await app.request(`/api/username/lookup/${encodeURIComponent('crème')}`, {}, { DB: db })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ pubkey: fixturePubkey })
+  })
+
+  // The canonical form is tried first, and a non-active canonical match ends the
+  // search rather than falling through to a row stored under the name as typed.
+  it('prefers the canonical match and stops at a non-active one', async () => {
+    const app = createLookupApp()
+    const asTyped = { name: 'crème', username_canonical: 'crème', pubkey: 'cd'.repeat(32), status: 'active' }
+    const canonicalRow = (status: string) =>
+      ({ name: 'xn--crme-6oa', username_canonical: 'xn--crme-6oa', pubkey: fixturePubkey, status })
+    const lookup = (rows: any[]) =>
+      app.request(`/api/username/lookup/${encodeURIComponent('crème')}`, {}, { DB: createMockDB(rows) })
+
+    const active = await lookup([canonicalRow('active'), asTyped])
+    expect(active.status).toBe(200)
+    expect(await active.json()).toMatchObject({ pubkey: fixturePubkey })
+
+    const revoked = await lookup([canonicalRow('revoked'), asTyped])
+    expect(revoked.status).toBe(404)
+  })
+
+  it.each([
+    { atproto_state: 'pending', atproto_did: 'did:plc:pending123' },
+    { atproto_state: 'ready', atproto_did: null },
+  ])('resolves legacy underscore usernames and withholds incomplete ATProto data ($atproto_state)', async (atproto) => {
+    const app = createLookupApp()
+    const db = createMockDB([{
+      name: 'legacy_user',
+      username_display: 'legacy_user',
+      username_canonical: 'legacy_user',
+      pubkey: fixturePubkey,
+      relays: '{malformed json',
+      status: 'active',
+      ...atproto,
+    }])
+
+    const res = await app.fetch(new Request('http://localhost/api/username/lookup/legacy_user'), { DB: db })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({
+      pubkey: fixturePubkey,
+      relays: [],
+      status: 'active',
+      atproto_did: null,
+      atproto_state: null,
+    })
+  })
+
+  it('does not fall back to active dotless user when dotted name exists as non-active', async () => {
+    const app = createLookupApp()
+    const db = createMockDB([
+      {
+        name: 'john.doe',
+        username_canonical: 'john.doe',
+        pubkey: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        status: 'revoked',
+      },
+      {
+        name: 'johndoe',
+        username_canonical: 'johndoe',
+        pubkey: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        status: 'active',
+      },
+    ])
+
+    const res = await app.fetch(new Request('http://localhost/api/username/lookup/john.doe'), { DB: db })
+    expect(res.status).toBe(404)
+    expect(res.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('answers a database failure with an uncached 500', async () => {
+    const app = createLookupApp()
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const db = { prepare: () => { throw new Error('D1 unavailable') } }
+
+    const res = await app.request('/api/username/lookup/alice', {}, { DB: db })
+    consoleError.mockRestore()
+    expect(res.status).toBe(500)
+    expect(res.headers.get('cache-control')).toBe('no-store')
   })
 })

@@ -1,11 +1,11 @@
-// ABOUTME: Username API endpoints for claiming, checking, and reserving usernames
-// ABOUTME: Public endpoints: GET /check/:name, GET /by-pubkey/:pubkey, POST /reserve, GET /confirm
+// ABOUTME: Username API endpoints for claiming, checking, looking up, and reserving usernames
+// ABOUTME: Public endpoints: GET /check/:name, GET /lookup/:name, GET /by-pubkey/:pubkey, POST /reserve, GET /confirm
 // ABOUTME: Authenticated: POST /claim, POST /release (NIP-98 auth - works for both custodial and non-custodial users)
 
 import { Hono, type Context } from 'hono'
 import { cors } from 'hono/cors'
 import { verifyNip98Event } from '../middleware/nip98'
-import { validateUsername, validateRelays, UsernameValidationError, RelayValidationError } from '../utils/validation'
+import { validateUsername, canonicalizeUsernameOrNull, validateRelays, UsernameValidationError, RelayValidationError } from '../utils/validation'
 import {
   getUsernameByName,
   getUsernameByPubkey,
@@ -23,7 +23,7 @@ import {
   prepareReleaseAttempt,
   rollbackReleaseAttempt,
 } from '../db/queries'
-import { syncAndVerifyUsername, deleteUsernameFromFastly } from '../utils/fastly-sync'
+import { syncAndVerifyUsername, deleteUsernameFromFastly, parseRelayHints } from '../utils/fastly-sync'
 import { sendReservationConfirmationEmail } from '../utils/email'
 import {
   parseCashuToken,
@@ -185,6 +185,58 @@ username.get('/check/:name', async (c) => {
   } catch (error) {
     console.error('Check error:', error)
     return c.json({ ok: false, error: 'Internal server error' }, 500)
+  }
+})
+
+// Public endpoint: look up active edge-routing metadata for a username (no auth required)
+// Tries the canonical form, then the name as given, then a dotless alias for dotted names.
+username.get('/lookup/:name', async (c) => {
+  try {
+    const rawName = c.req.param('name').trim()
+    const notFound = () => c.json({ ok: false, error: 'Not found' }, 404, { 'Cache-Control': 'no-store' })
+    // IDNA maps these separators to dots. Reject them before single-label conversion.
+    if (!rawName || rawName.length > 253 || /[\s\x00-\x1f\x7f\u3002\uff0e\uff61]/.test(rawName)) {
+      return notFound()
+    }
+
+    // Claim rules describe new names, not every stored row: older rules and
+    // imports allowed names such as 'ab--cd' or 'cool_dude'. Try the canonical
+    // form first, then the name as given, as /.well-known/webfinger does.
+    const canonical = canonicalizeUsernameOrNull(rawName)
+    let existing = canonical ? await getUsernameByName(c.env.DB, canonical) : null
+    if (!existing && canonical !== rawName) {
+      existing = await getUsernameByName(c.env.DB, rawName)
+    }
+
+    // Even a non-active exact match takes precedence over a dotless alias. Only
+    // well-formed dotted names get one: imports also stored names such as
+    // 'first..last' or a name cut off at a dot, which match exactly or not at all.
+    if (!existing && rawName.includes('.') && /^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/.test(rawName)) {
+      existing = await getUsernameByName(c.env.DB, rawName.toLowerCase().replace(/\./g, ''))
+    }
+
+    if (!existing || existing.status !== 'active' || !existing.pubkey) return notFound()
+
+    // Only expose ATProto DID when state is 'ready' (matches /.well-known/atproto-did);
+    // never leak pending, failed, or disabled provisioning state/DIDs.
+    const atprotoReady = existing.atproto_state === 'ready' && Boolean(existing.atproto_did)
+
+    return c.json(
+      {
+        pubkey: existing.pubkey.toLowerCase(),
+        relays: parseRelayHints(existing.relays),
+        status: 'active',
+        atproto_did: atprotoReady ? existing.atproto_did : null,
+        atproto_state: atprotoReady ? 'ready' : null,
+      },
+      200,
+      {
+        'Cache-Control': 'public, max-age=60',
+      }
+    )
+  } catch (error) {
+    console.error('Lookup error:', error)
+    return c.json({ ok: false, error: 'Internal server error' }, 500, { 'Cache-Control': 'no-store' })
   }
 })
 
