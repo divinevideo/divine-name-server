@@ -193,41 +193,47 @@ username.get('/check/:name', async (c) => {
 username.get('/lookup/:name', async (c) => {
   try {
     const rawName = c.req.param('name').trim()
-    const candidates: string[] = []
+    if (!rawName || rawName.length > 253 || /[\s\x00-\x1f\x7f]/.test(rawName)) {
+      return c.json(
+        { ok: false, error: 'Not found' },
+        404,
+        { 'Cache-Control': 'no-store' }
+      )
+    }
+
+    // Use validateUsername for Unicode -> punycode canonicalization when valid,
+    // but fall back to lowercase lookup so legacy grandfathered names (e.g. underscores) still resolve.
+    let primaryKey = rawName.toLowerCase()
     try {
-      candidates.push(validateUsername(rawName).canonical)
+      primaryKey = validateUsername(rawName).canonical
     } catch (error) {
       if (!(error instanceof UsernameValidationError)) {
         throw error
       }
     }
-    if (rawName.includes('.')) {
+
+    let existing = await getUsernameByName(c.env.DB, primaryKey)
+
+    // Defensive dotless fallback only when the exact name has no DB row at all
+    // and dots are strictly internal (never leading, trailing, or consecutive).
+    if (
+      !existing &&
+      primaryKey.includes('.') &&
+      !primaryKey.startsWith('.') &&
+      !primaryKey.endsWith('.') &&
+      !primaryKey.includes('..')
+    ) {
+      const dotlessRaw = primaryKey.replace(/\./g, '')
+      let dotlessKey = dotlessRaw
       try {
-        const dotless = validateUsername(rawName.replace(/\./g, '')).canonical
-        if (!candidates.includes(dotless)) {
-          candidates.push(dotless)
-        }
+        dotlessKey = validateUsername(dotlessRaw).canonical
       } catch (error) {
         if (!(error instanceof UsernameValidationError)) {
           throw error
         }
       }
-    }
-
-    if (candidates.length === 0) {
-      return c.json(
-        { ok: false, error: 'Not found' },
-        404,
-        { 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' }
-      )
-    }
-
-    let existing = null
-    for (const candidate of candidates) {
-      const found = await getUsernameByName(c.env.DB, candidate)
-      if (found && found.status === 'active' && found.pubkey) {
-        existing = found
-        break
+      if (dotlessKey && dotlessKey !== primaryKey) {
+        existing = await getUsernameByName(c.env.DB, dotlessKey)
       }
     }
 
@@ -235,7 +241,7 @@ username.get('/lookup/:name', async (c) => {
       return c.json(
         { ok: false, error: 'Not found' },
         404,
-        { 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' }
+        { 'Cache-Control': 'no-store' }
       )
     }
 
@@ -251,23 +257,26 @@ username.get('/lookup/:name', async (c) => {
       }
     }
 
+    // Only expose ATProto DID when state is 'ready' (matches /.well-known/atproto-did);
+    // never leak pending, failed, or disabled provisioning state/DIDs.
+    const atprotoReady = existing.atproto_state === 'ready' && Boolean(existing.atproto_did)
+
     return c.json(
       {
         pubkey: existing.pubkey.toLowerCase(),
         relays,
         status: 'active',
-        atproto_did: existing.atproto_did ?? null,
-        atproto_state: existing.atproto_state ?? null,
+        atproto_did: atprotoReady ? existing.atproto_did : null,
+        atproto_state: atprotoReady ? 'ready' : null,
       },
       200,
       {
-        'Access-Control-Allow-Origin': '*',
         'Cache-Control': 'public, max-age=60',
       }
     )
   } catch (error) {
     console.error('Lookup error:', error)
-    return c.json({ ok: false, error: 'Internal server error' }, 500)
+    return c.json({ ok: false, error: 'Internal server error' }, 500, { 'Cache-Control': 'no-store' })
   }
 })
 

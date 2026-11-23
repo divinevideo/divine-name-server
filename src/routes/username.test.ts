@@ -1510,10 +1510,56 @@ describe('GET /api/username/lookup/:name', () => {
       },
     ])
 
-    for (const target of ['unknownuser', 'revokeduser', 'reserveduser', 'bad--name!!']) {
+    for (const target of ['unknownuser', 'revokeduser', 'reserveduser', 'bad--name!!', '.alice.', '..alice']) {
       const res = await app.fetch(new Request(`http://localhost/api/username/lookup/${encodeURIComponent(target)}`), { DB: db })
       expect(res.status, target).toBe(404)
       expect(res.headers.get('cache-control'), target).toBe('no-store')
     }
+  })
+
+  it('resolves legacy underscore usernames and withholds non-ready atproto state/DID', async () => {
+    const app = createLookupApp()
+    const db = createMockDB([{
+      name: 'legacy_user',
+      username_display: 'legacy_user',
+      username_canonical: 'legacy_user',
+      pubkey: '156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b',
+      relays: '{malformed json',
+      status: 'active',
+      atproto_did: 'did:plc:pending123',
+      atproto_state: 'pending',
+    }])
+
+    const res = await app.fetch(new Request('http://localhost/api/username/lookup/legacy_user'), { DB: db })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({
+      pubkey: '156dd13a1f8a488037fa1b43ad934a5e58644a1d6e1ad6697a02c2e93b8b013b',
+      relays: [],
+      status: 'active',
+      atproto_did: null,
+      atproto_state: null,
+    })
+  })
+
+  it('does not fall back to active dotless user when dotted name exists as non-active', async () => {
+    const app = createLookupApp()
+    const db = createMockDB([
+      {
+        name: 'john.doe',
+        username_canonical: 'john.doe',
+        pubkey: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        status: 'revoked',
+      },
+      {
+        name: 'johndoe',
+        username_canonical: 'johndoe',
+        pubkey: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        status: 'active',
+      },
+    ])
+
+    const res = await app.fetch(new Request('http://localhost/api/username/lookup/john.doe'), { DB: db })
+    expect(res.status).toBe(404)
+    expect(res.headers.get('cache-control')).toBe('no-store')
   })
 })
